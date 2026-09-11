@@ -2,92 +2,113 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "ds/_utils.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/_borders.scss" as *;
+@use "ds/typography.scss" as *;
+@use "ds/mixins.scss" as *;
 
 .color-bullet {
   position: relative;
   display: flex;
   flex-direction: row;
-  width: var(--bullet-size, $s-24);
-  height: var(--bullet-size, $s-24);
-  min-width: var(--bullet-size, $s-24);
-  min-height: var(--bullet-size, $s-24);
-  border: $s-2 solid var(--color-bullet-border-color);
+  inline-size: var(--bullet-size, $sz-24);
+  block-size: var(--bullet-size, $sz-24);
+  min-inline-size: var(--bullet-size, $sz-24);
+  min-block-size: var(--bullet-size, $sz-24);
+  border: $b-2 solid var(--color-background-quaternary);
   border-radius: $br-circle;
-  &.grid-area {
-    grid-area: color;
-  }
-  &.mini {
-    width: var(--bullet-size, $s-16);
-    height: var(--bullet-size, $s-16);
-    min-width: var(--bullet-size, $s-16);
-    min-height: var(--bullet-size, $s-16);
-    margin-top: 0;
-    border: 1px solid var(--color-bullet-border-color);
-  }
+}
 
-  &.is-not-library-color {
-    overflow: hidden;
-    border-radius: $br-8;
-    & .color-bullet-wrapper {
-      clip-path: none;
-    }
-    &.mini {
-      border-radius: $br-4;
-    }
-  }
-  &.is-gradient {
-    background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAExJREFUSIljvHnz5n8GLEBNTQ2bMMOtW7ewiuNSz4RVlIpg1IKBt4Dx////WFMRqakFl/qhH0SjFhAELNRKLaNl0Qi2YLQsGrWAcgAA0gAgQPhT2rAAAAAASUVORK5CYII=")
-      left center;
-    background-color: var(--color-bullet-background-color);
-    transform: rotate(-90deg);
-  }
-  &.is-transparent {
-    background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAExJREFUSIljvHnz5n8GLEBNTQ2bMMOtW7ewiuNSz4RVlIpg1IKBt4Dx////WFMRqakFl/qhH0SjFhAELNRKLaNl0Qi2YLQsGrWAcgAA0gAgQPhT2rAAAAAASUVORK5CYII=")
-      left center;
-    background-color: var(--color-bullet-background-color);
-  }
-  .color-bullet-wrapper {
-    display: flex;
-    flex-direction: row;
-    height: 100%;
-    width: 100%;
-    clip-path: circle(50%);
-    background-size: contain;
-    background-repeat: no-repeat;
-    background-position: center;
-  }
-  .color-bullet-wrapper > * {
-    width: 100%;
-    height: 100%;
-    background-color: var(--color-bullet-background-color);
-  }
-  &:hover:not(.read-only) {
-    border: $s-2 solid var(--color-bullet-border-color-selected);
-  }
+.color-bullet-wrapper {
+  display: flex;
+  flex-direction: row;
+  block-size: 100%;
+  inline-size: 100%;
+  clip-path: circle(50%);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.grid-area {
+  grid-area: color;
+}
+
+.color-bullet.mini {
+  inline-size: var(--bullet-size, $sz-16);
+  block-size: var(--bullet-size, $sz-16);
+  min-inline-size: var(--bullet-size, $sz-16);
+  min-block-size: var(--bullet-size, $sz-16);
+  margin-block-start: 0;
+  border: $b-1 solid var(--color-background-quaternary);
+}
+
+.is-not-library-color {
+  overflow: hidden;
+  border-radius: $br-8;
+}
+
+.is-not-library-color .color-bullet-wrapper {
+  clip-path: none;
+}
+
+.is-not-library-color.mini {
+  border-radius: $br-4;
+}
+
+.is-gradient {
+  background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAExJREFUSIljvHnz5n8GLEBNTQ2bMMOtW7ewiuNSz4RVlIpg1IKBt4Dx////WFMRqakFl/qhH0SjFhAELNRKLaNl0Qi2YLQsGrWAcgAA0gAgQPhT2rAAAAAASUVORK5CYII=")
+    left center;
+  background-color: var(--color-static-white);
+  transform: rotate(-90deg);
+}
+
+.is-transparent {
+  background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAExJREFUSIljvHnz5n8GLEBNTQ2bMMOtW7ewiuNSz4RVlIpg1IKBt4Dx////WFMRqakFl/qhH0SjFhAELNRKLaNl0Qi2YLQsGrWAcgAA0gAgQPhT2rAAAAAASUVORK5CYII=")
+    left center;
+  background-color: var(--color-static-white);
+}
+
+.color-bullet .color-bullet-wrapper > * {
+  inline-size: 100%;
+  block-size: 100%;
+  background-color: var(--color-static-white);
+}
+
+.color-bullet:hover:not(.read-only) {
+  border: $b-2 solid var(--color-accent-primary);
 }
 
 .color-text {
-  @include twoLineTextEllipsis;
-  @include bodySmallTypography;
-  width: $s-80;
+  @include two-line-text-ellipsis;
+  @include use-typography("body-small");
+
+  inline-size: px2rem(80);
   text-align: center;
-  margin-top: $s-2;
-  max-height: $s-28;
-  color: var(--palette-text-color);
-  &.small-text {
-    @include textEllipsis;
-    max-height: $s-16;
-  }
+  margin-block-start: var(--sp-xxs);
+  max-block-size: px2rem(28);
+  color: var(--color-foreground-secondary);
+}
+
+.color-text.small-text {
+  @include text-ellipsis;
+
+  max-block-size: $sz-16;
 }
 
 .big-text {
-  @include inspectValue;
-  @include twoLineTextEllipsis;
+  @include use-typography("body-small");
+  @include two-line-text-ellipsis;
+
+  display: inline-block;
+  inline-size: fit-content;
+  padding: 0;
+  margin: 0;
   line-height: 1;
-  color: var(--palette-text-color);
+  color: var(--color-foreground-secondary);
   text-align: center;
 }
 
@@ -96,5 +117,5 @@
 }
 
 .color-row-name {
-  color: var(--menu-foreground-color);
+  color: var(--color-foreground-primary);
 }

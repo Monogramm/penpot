@@ -2,31 +2,31 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.shapes.attrs
   (:require
-   [app.common.colors :as clr]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.files.helpers :as cfh]
    [app.common.geom.shapes :as gsh]
    [app.common.json :as json]
    [app.common.svg :as csvg]
+   [app.common.types.color :as clr]
    [app.common.types.shape :refer [stroke-caps-line stroke-caps-marker]]
    [app.common.types.shape.radius :as ctsr]
    [app.util.object :as obj]
    [cuerdas.core :as str]))
 
 (defn- calculate-dasharray
-  [style width]
+  [style width dash gap]
   (let [w+5  (+ 5 width)
         w+1  (+ 1 width)
         w+10 (+ 10 width)]
     (case style
       :mixed  (str/concat "" w+5 "," w+5 "," w+1 "," w+5)
       :dotted (str/concat "0," w+5)
-      :dashed (str/concat "" w+10 "," w+10)
+      :dashed (str/concat "" (or dash w+10) "," (or gap w+10))
       "")))
 
 (defn get-border-props
@@ -97,24 +97,26 @@
   (let [style (:stroke-style data :solid)]
     (when-not (= style :none)
       (let [width       (:stroke-width data 1)
+            dash        (:stroke-dash data)
+            gap         (:stroke-gap data)
             gradient    (:stroke-color-gradient data)
             color       (:stroke-color data)
             opacity     (:stroke-opacity data)]
 
         (obj/set! attrs "strokeWidth" width)
 
-        (when (some? gradient)
+        (if (some? gradient)
           (let [gradient-id (dm/str "stroke-color-gradient-" render-id "-" index)]
-            (obj/set! attrs "stroke" (str/ffmt "url(#%)" gradient-id))))
+            (obj/set! attrs "stroke" (str/ffmt "url(#%)" gradient-id)))
 
-        (when-not (some? gradient)
           (when (some? color)
-            (obj/set! attrs "stroke" color))
-          (when (some? opacity)
-            (obj/set! attrs "strokeOpacity" opacity)))
+            (obj/set! attrs "stroke" color)))
+
+        (when (some? opacity)
+          (obj/set! attrs "strokeOpacity" opacity))
 
         (when (not= style :svg)
-          (obj/set! attrs "strokeDasharray" (calculate-dasharray style width)))
+          (obj/set! attrs "strokeDasharray" (calculate-dasharray style width dash gap)))
 
         ;; For simple line caps we use svg stroke-line-cap attribute. This
         ;; only works if all caps are the same and we are not using the tricks
@@ -181,6 +183,7 @@
   ([props shape position render-id]
    (let [shape-fills  (get shape :fills)
          shape-shadow (get shape :shadow)
+
          shape-blur   (get shape :blur)
 
          svg-attrs    (get-svg-props shape render-id)

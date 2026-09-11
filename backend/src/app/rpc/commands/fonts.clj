@@ -2,32 +2,49 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.fonts
   (:require
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
+   [app.common.logging :as l]
+   [app.common.media :as cm]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
+   [app.common.types.font :as types.font]
    [app.common.uuid :as uuid]
    [app.db :as db]
    [app.db.sql :as-alias sql]
+   [app.features.logical-deletion :as ldel]
+   [app.http :as-alias http]
    [app.loggers.audit :as-alias audit]
    [app.loggers.webhooks :as-alias webhooks]
    [app.media :as media]
+   [app.media.validation :as media.v]
    [app.rpc :as-alias rpc]
    [app.rpc.climit :as-alias climit]
    [app.rpc.commands.files :as files]
+   [app.rpc.commands.media :refer [assemble-chunks]]
    [app.rpc.commands.projects :as projects]
    [app.rpc.commands.teams :as teams]
    [app.rpc.doc :as-alias doc]
    [app.rpc.helpers :as rph]
+   [app.rpc.permissions :as perms]
    [app.rpc.quotes :as quotes]
    [app.storage :as sto]
+   [app.storage.tmp :as tmp]
    [app.util.services :as sv]
-   [app.util.time :as dt]
-   [app.worker :as-alias wrk]
-   [promesa.exec :as px]))
+   [cuerdas.core :as str]
+   [datoteka.fs :as fs]
+   [datoteka.io :as io])
+  (:import
+   java.io.OutputStream
+   java.util.zip.ZipEntry
+   java.util.zip.ZipOutputStream))
+
+(set! *warn-on-reflection* true)
+
 
 (def valid-weight #{100 200 300 400 500 600 700 800 900 950})
 (def valid-style #{"normal" "italic"})
@@ -36,14 +53,13 @@
 
 (def ^:private
   schema:get-font-variants
-  [:schema {:title "get-font-variants"}
-   [:and
-    [:map
-     [:team-id {:optional true} ::sm/uuid]
-     [:file-id {:optional true} ::sm/uuid]
-     [:project-id {:optional true} ::sm/uuid]
-     [:share-id {:optional true} ::sm/uuid]]
-    [::sm/contains-any #{:team-id :file-id :project-id}]]])
+  [:and
+   [:map {:title "get-font-variants"}
+    [:team-id {:optional true} ::sm/uuid]
+    [:file-id {:optional true} ::sm/uuid]
+    [:project-id {:optional true} ::sm/uuid]
+    [:share-id {:optional true} ::sm/uuid]]
+   [::sm/contains-any #{:team-id :file-id :project-id}]])
 
 (sv/defmethod ::get-font-variants
   {::doc/added "1.18"
@@ -53,14 +69,14 @@
     (cond
       (uuid? team-id)
       (do
-        (teams/check-read-permissions! conn profile-id team-id)
+        (teams/check-read-permissions! cfg profile-id team-id)
         (db/query conn :team-font-variant
                   {:team-id team-id
                    :deleted-at nil}))
 
       (uuid? project-id)
       (let [project (db/get-by-id conn :project project-id {:columns [:id :team-id]})]
-        (projects/check-read-permissions! conn profile-id project-id)
+        (projects/check-read-permissions! cfg profile-id project-id)
         (db/query conn :team-font-variant
                   {:team-id (:team-id project)
                    :deleted-at nil}))
@@ -68,7 +84,7 @@
       (uuid? file-id)
       (let [file    (db/get-by-id conn :file file-id {:columns [:id :project-id]})
             project (db/get-by-id conn :project (:project-id file) {:columns [:id :team-id]})
-            perms   (files/get-permissions conn profile-id file-id share-id)]
+            perms   (perms/get-file-read-permissions cfg profile-id file-id share-id)]
         (files/check-read-permissions! perms)
         (db/query conn :team-font-variant
                   {:team-id (:team-id project)
@@ -77,37 +93,70 @@
 
 (declare create-font-variant)
 
+(defn- check-font-team-ownership!
+  "When font-id already has variants belonging to a different team,
+  raises :not-found to prevent cross-team font injection."
+  [conn team-id font-id]
+  (let [row (db/get* conn :team-font-variant
+                     {:font-id font-id}
+                     {::db/columns [:team-id]})]
+    (when (and row (not= (:team-id row) team-id))
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "font does not belong to this team"))))
+
 (def ^:private schema:create-font-variant
   [:map {:title "create-font-variant"}
-   [:team-id ::sm/uuid]
-   [:data [:map-of :string :any]]
-   [:font-id ::sm/uuid]
-   [:font-family :string]
+   [:team-id    ::sm/uuid]
+   [:font-id    ::sm/uuid]
+   [:font-family types.font/schema:font-family]
    [:font-weight [::sm/one-of {:format "number"} valid-weight]]
-   [:font-style [::sm/one-of {:format "string"} valid-style]]])
+   [:font-style  [::sm/one-of {:format "string"} valid-style]]
+   [:uploads [:map-of ::sm/text ::sm/uuid]]])
 
-;; FIXME: IMPORTANT: refactor this, we should not hold a whole db
-;; connection around the font creation
+(defn- prepare-font-data-from-uploads
+  "Assembles each chunked-upload session in `uploads` (a `{mtype →
+  session-id}` map) into a temp file, validates the media type and
+  size of every entry, and returns a `{mtype → path}` data map."
+  [cfg {:keys [::rpc/profile-id uploads] :as params}]
+  (let [data (reduce-kv
+              (fn [acc mtype session-id]
+                (let [assembled (assemble-chunks cfg profile-id session-id)]
+                  (-> {:mtype mtype :size (:size assembled)}
+                      (media.v/validate-media-type! cm/font-types)
+                      (media.v/validate-font-size!))
+                  (assoc acc mtype (:path assembled))))
+              {}
+              uploads)]
+
+    (-> params
+        (assoc :data data)
+        (dissoc :uploads))))
 
 (sv/defmethod ::create-font-variant
+  "Upload a font variant. Font data must be provided as an `:uploads`
+  map (keyed by mime-type, values are upload-session UUIDs from the
+  chunked-upload API)."
   {::doc/added "1.18"
+   ::doc/changes [["2.16" "Add :uploads param for chunked upload support"]
+                  ["2.18" "Remove :data param, use :uploads exclusively"]]
    ::climit/id [[:process-font/by-profile ::rpc/profile-id]
                 [:process-font/global]]
    ::webhooks/event? true
    ::sm/params schema:create-font-variant}
-  [cfg {:keys [::rpc/profile-id team-id] :as params}]
-  (db/tx-run! cfg
-              (fn [{:keys [::db/conn] :as cfg}]
-                (teams/check-edition-permissions! conn profile-id team-id)
-                (quotes/check! cfg {::quotes/id ::quotes/font-variants-per-team
-                                    ::quotes/profile-id profile-id
-                                    ::quotes/team-id team-id})
-                (create-font-variant cfg (assoc params :profile-id profile-id)))))
+  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id font-id] :as params}]
+  (teams/check-edition-permissions! pool profile-id team-id)
+  (check-font-team-ownership! pool team-id font-id)
+  (quotes/check! cfg {::quotes/id ::quotes/font-variants-per-team
+                      ::quotes/profile-id profile-id
+                      ::quotes/team-id team-id})
+  (let [params (db/tx-run! cfg prepare-font-data-from-uploads params)]
+    (create-font-variant cfg (assoc params :profile-id profile-id))))
 
 (defn create-font-variant
-  [{:keys [::sto/storage ::db/conn ::wrk/executor]} {:keys [data] :as params}]
-  (letfn [(generate-missing! [data]
-            (let [data (media/run {:cmd :generate-fonts :input data})]
+  [{:keys [::sto/storage] :as cfg} {:keys [data] :as params}]
+  (letfn [(generate-missing [data]
+            (let [data (media/run cfg {:cmd :generate-fonts :input data})]
               (when (and (not (contains? data "font/otf"))
                          (not (contains? data "font/ttf"))
                          (not (contains? data "font/woff"))
@@ -119,32 +168,26 @@
 
           (prepare-font [data mtype]
             (when-let [resource (get data mtype)]
+
               (let [hash    (sto/calculate-hash resource)
                     content (-> (sto/content resource)
                                 (sto/wrap-with-hash hash))]
                 {::sto/content content
-                 ::sto/touched-at (dt/now)
+                 ::sto/touched-at (ct/now)
                  ::sto/deduplicate? true
                  :content-type mtype
                  :bucket "team-font-variant"})))
 
           (persist-fonts-files! [data]
-            (let [otf-params (prepare-font data "font/otf")
-                  ttf-params (prepare-font data "font/ttf")
-                  wf1-params (prepare-font data "font/woff")
-                  wf2-params (prepare-font data "font/woff2")]
+            (into {} (keep (fn [[kind mtype]]
+                             (when-let [params (prepare-font data mtype)]
+                               [kind (sto/put-object! storage params)])))
+                  [[:otf "font/otf"]
+                   [:ttf "font/ttf"]
+                   [:woff1 "font/woff"]
+                   [:woff2 "font/woff2"]]))
 
-              (cond-> {}
-                (some? otf-params)
-                (assoc :otf (sto/put-object! storage otf-params))
-                (some? ttf-params)
-                (assoc :ttf (sto/put-object! storage ttf-params))
-                (some? wf1-params)
-                (assoc :woff1 (sto/put-object! storage wf1-params))
-                (some? wf2-params)
-                (assoc :woff2 (sto/put-object! storage wf2-params)))))
-
-          (insert-font-variant! [{:keys [woff1 woff2 otf ttf]}]
+          (insert-font-variant! [conn {:keys [woff1 woff2 otf ttf]}]
             (db/insert! conn :team-font-variant
                         {:id (uuid/next)
                          :team-id (:team-id params)
@@ -152,15 +195,42 @@
                          :font-family (:font-family params)
                          :font-weight (:font-weight params)
                          :font-style (:font-style params)
+                         :variant-name (:variant-name params)
                          :woff1-file-id (:id woff1)
                          :woff2-file-id (:id woff2)
                          :otf-file-id (:id otf)
                          :ttf-file-id (:id ttf)}))]
 
-    (let [data   (px/invoke! executor (partial generate-missing! data))
-          assets (persist-fonts-files! data)
-          result (insert-font-variant! assets)]
-      (vary-meta result assoc ::audit/replace-props (update params :data (comp vec keys))))))
+    (let [tpoint     (ct/tpoint)
+          mtypes     (vec (keys data))
+          total-size (reduce-kv (fn [acc _ content]
+                                  (+ acc (fs/size content)))
+                                0
+                                data)]
+
+      (l/dbg :hint "create-font-variant"
+             :step "init"
+             :font-family (:font-family params)
+             :font-weight (:font-weight params)
+             :font-style  (:font-style params)
+             :mtypes      (str/join mtypes ",")
+             :size        total-size)
+
+      (let [data    (generate-missing data)
+            assets  (persist-fonts-files! data)
+            result  (db/tx-run! cfg #(insert-font-variant! (::db/conn %) assets))
+            elapsed (tpoint)]
+
+        (l/dbg :hint "create-font-variant"
+               :step "end"
+               :font-family (:font-family params)
+               :font-weight (:font-weight params)
+               :font-style  (:font-style params)
+               :mtypes      (str/join mtypes ",")
+               :size        total-size
+               :elapsed     (ct/format-duration elapsed))
+
+        (vary-meta result assoc ::audit/replace-props (update params :data (comp vec keys)))))))
 
 ;; --- UPDATE FONT FAMILY
 
@@ -169,7 +239,7 @@
   [:map {:title "update-font"}
    [:team-id ::sm/uuid]
    [:id ::sm/uuid]
-   [:name :string]])
+   [:name types.font/schema:font-family]])
 
 (sv/defmethod ::update-font
   {::doc/added "1.18"
@@ -202,32 +272,40 @@
 (sv/defmethod ::delete-font
   {::doc/added "1.18"
    ::webhooks/event? true
-   ::sm/params schema:delete-font}
-  [cfg {:keys [::rpc/profile-id id team-id]}]
-  (db/tx-run! cfg
-              (fn [{:keys [::db/conn] :as cfg}]
-                (teams/check-edition-permissions! conn profile-id team-id)
-                (let [fonts   (db/query conn :team-font-variant
-                                        {:team-id team-id
-                                         :font-id id
-                                         :deleted-at nil}
-                                        {::sql/for-update true})
-                      tnow    (dt/now)]
+   ::sm/params schema:delete-font
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id team-id]}]
+  (let [team  (teams/get-team conn
+                              :profile-id profile-id
+                              :team-id team-id)
 
-                  (when-not (seq fonts)
-                    (ex/raise :type :not-found
-                              :code :object-not-found))
+        fonts (db/query conn :team-font-variant
+                        {:team-id team-id
+                         :font-id id
+                         :deleted-at nil}
+                        {::sql/for-update true})
 
-                  (doseq [font fonts]
-                    (db/update! conn :team-font-variant
-                                {:deleted-at tnow}
-                                {:id (:id font)}))
+        delay (ldel/get-deletion-delay team)
+        tnow  (ct/in-future delay)]
 
-                  (rph/with-meta (rph/wrap)
-                    {::audit/props {:id id
-                                    :team-id team-id
-                                    :name (:font-family (peek fonts))
-                                    :profile-id profile-id}})))))
+    (teams/check-edition-permissions! (:permissions team))
+
+    (when-not (seq fonts)
+      (ex/raise :type :not-found
+                :code :object-not-found))
+
+
+    (doseq [font fonts]
+      (db/update! conn :team-font-variant
+                  {:deleted-at tnow}
+                  {:id (:id font)}
+                  {::db/return-keys false}))
+
+    (rph/with-meta (rph/wrap)
+      {::audit/props {:id id
+                      :team-id team-id
+                      :name (:font-family (peek fonts))
+                      :profile-id profile-id}})))
 
 ;; --- DELETE FONT VARIANT
 
@@ -239,19 +317,118 @@
 (sv/defmethod ::delete-font-variant
   {::doc/added "1.18"
    ::webhooks/event? true
-   ::sm/params schema:delete-font-variant}
-  [cfg {:keys [::rpc/profile-id id team-id]}]
-  (db/tx-run! cfg
-              (fn [{:keys [::db/conn] :as cfg}]
-                (teams/check-edition-permissions! conn profile-id team-id)
-                (let [variant (db/get conn :team-font-variant
-                                      {:id id :team-id team-id}
-                                      {::sql/for-update true})]
+   ::sm/params schema:delete-font-variant
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id team-id]}]
+  (let [team    (teams/get-team conn
+                                :profile-id profile-id
+                                :team-id team-id)
+        variant (db/get conn :team-font-variant
+                        {:id id :team-id team-id}
+                        {::sql/for-update true})
+        delay   (ldel/get-deletion-delay team)]
 
-                  (db/update! conn :team-font-variant
-                              {:deleted-at (dt/now)}
-                              {:id (:id variant)})
+    (teams/check-edition-permissions! (:permissions team))
+    (db/update! conn :team-font-variant
+                {:deleted-at (ct/in-future delay)}
+                {:id (:id variant)}
+                {::db/return-keys false})
 
-                  (rph/with-meta (rph/wrap)
-                    {::audit/props {:font-family (:font-family variant)
-                                    :font-id (:font-id variant)}})))))
+    (rph/with-meta (rph/wrap)
+      {::audit/props {:font-family (:font-family variant)
+                      :font-id (:font-id variant)}})))
+
+;; --- DOWNLOAD FONT
+
+(defn- make-temporal-storage-object
+  [cfg profile-id content]
+  (let [storage (sto/resolve cfg)
+        content (media.v/check-input content)
+        hash    (sto/calculate-hash (:path content))
+        data    (-> (sto/content (:path content))
+                    (sto/wrap-with-hash hash))
+        mtype   (:mtype content "application/octet-stream")
+        content {::sto/content data
+                 ::sto/deduplicate? true
+                 ::sto/touched-at (ct/in-future {:minutes 30})
+                 :profile-id profile-id
+                 :content-type mtype
+                 :bucket sto/tempfile-bucket}]
+
+    (sto/put-object! storage content)))
+
+(defn- make-variant-filename
+  [v mtype]
+  (str (:font-family v) "-" (:font-weight v)
+       (when-not (= "normal" (:font-style v)) (str "-" (:font-style v)))
+       (cm/mtype->extension mtype)))
+
+(def ^:private schema:download-font
+  [:map {:title "download-font"}
+   [:id ::sm/uuid]])
+
+(sv/defmethod ::download-font
+  "Download the font file. Returns a http redirect to the asset resource uri."
+  {::doc/added "2.15"
+   ::sm/params schema:download-font}
+  [{:keys [::sto/storage ::db/pool] :as cfg} {:keys [::rpc/profile-id id]}]
+  (let [variant (db/get pool :team-font-variant {:id id})]
+    (teams/check-read-permissions! cfg profile-id (:team-id variant))
+
+    ;; Try to get the best available font format (prefer TTF for broader compatibility).
+    (let [media-id (or (:ttf-file-id variant)
+                       (:otf-file-id variant)
+                       (:woff2-file-id variant)
+                       (:woff1-file-id variant))
+          sobj     (sto/get-object storage media-id)
+          mtype    (-> sobj meta :content-type)]
+
+      {:id (:id sobj)
+       :uri (files/resolve-public-uri (:id sobj))
+       :name (make-variant-filename variant mtype)})))
+
+(def ^:private schema:download-font-family
+  [:map {:title "download-font-family"}
+   [:font-id ::sm/uuid]])
+
+(sv/defmethod ::download-font-family
+  "Download the entire font family as a zip file. Returns the zip
+  bytes on the body, without encoding it on transit or json."
+  {::doc/added "2.15"
+   ::sm/params schema:download-font-family}
+  [{:keys [::sto/storage ::db/pool] :as cfg} {:keys [::rpc/profile-id font-id]}]
+  (let [variants (db/query pool :team-font-variant
+                           {:font-id font-id
+                            :deleted-at nil})]
+
+    (when-not (seq variants)
+      (ex/raise :type :not-found
+                :code :object-not-found))
+
+    (teams/check-read-permissions! cfg profile-id (:team-id (first variants)))
+
+    (let [tempfile (tmp/tempfile :suffix ".zip")
+          ffamily  (-> variants first :font-family)]
+
+      (with-open [^OutputStream output (io/output-stream tempfile)
+                  ^OutputStream output (ZipOutputStream. output)]
+        (doseq [v variants]
+          (let [media-id (or (:ttf-file-id v)
+                             (:otf-file-id v)
+                             (:woff2-file-id v)
+                             (:woff1-file-id v))
+                sobj     (sto/get-object storage media-id)
+                mtype    (-> sobj meta :content-type)
+                name     (make-variant-filename v mtype)]
+
+            (with-open [input (sto/get-object-data storage sobj)]
+              (.putNextEntry ^ZipOutputStream output (ZipEntry. ^String name))
+              (io/copy input output :size (:size sobj))
+              (.closeEntry ^ZipOutputStream output)))))
+
+      (let [{:keys [id] :as sobj} (make-temporal-storage-object cfg profile-id
+                                                                {:mtype "application/zip"
+                                                                 :path tempfile})]
+        {:id id
+         :uri (files/resolve-public-uri id)
+         :name (str ffamily ".zip")}))))

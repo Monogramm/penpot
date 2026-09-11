@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.logging
   "A lightweight and multiplaform (clj & cljs) asynchronous by default
@@ -43,12 +43,11 @@
   "
   #?(:cljs (:require-macros [app.common.logging :as l]))
   (:require
-   #?(:clj  [clojure.edn :as edn]
-      :cljs [cljs.reader :as edn])
    [app.common.data :as d]
    [app.common.exceptions :as ex]
    [app.common.pprint :as pp]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [cuerdas.core :as str]
    [promesa.exec :as px]
@@ -129,7 +128,9 @@
     :warn  "#f5871f"
     :info  "#4271ae"
     :debug "#969896"
-    :trace "#8e908c"))
+    :trace "#8e908c"
+    (let [hint (str "invalid level provided to `level->color` function: " (pr-str level))]
+      (throw (ex-info hint {:level level})))))
 
 (defn- level->name
   [level]
@@ -138,7 +139,9 @@
     :trace "TRC"
     :info  "INF"
     :warn   "WRN"
-    :error "ERR"))
+    :error "ERR"
+    (let [hint (str "invalid level provided to `level->name` function: " (pr-str level))]
+      (throw (ex-info hint {:level level})))))
 
 (defn level->int
   [level]
@@ -147,7 +150,9 @@
     :debug 20
     :info 30
     :warn 40
-    :error 50))
+    :error 50
+    (let [hint (str "invalid level provided to `level->int` function: " (pr-str level))]
+      (throw (ex-info hint {:level level})))))
 
 (defn build-message
   [props]
@@ -221,36 +226,42 @@
   #?(:clj (inst-ms (java.time.Instant/now))
      :cljs (js/Date.now)))
 
+(defn emit-log
+  [props cause context logger level sync?]
+  (let [props    (cond-> props sync? deref)
+        ts       (current-timestamp)
+        gcontext *context*
+        logfn    (fn []
+                   (let [props   (if sync? props (deref props))
+                         props   (into (d/ordered-map) props)
+                         context (if (and (empty? gcontext)
+                                          (empty? context))
+                                   {}
+                                   (d/without-nils (merge gcontext context)))
+
+                         lrecord {::id (uuid/next)
+                                  ::timestamp ts
+                                  ::message (delay (build-message props))
+                                  ::props props
+                                  ::context context
+                                  ::level level
+                                  ::logger logger}
+                         lrecord (cond-> lrecord
+                                   (some? cause)
+                                   (assoc ::cause cause
+                                          ::trace (delay (build-stack-trace cause))))]
+                     (swap! log-record (constantly lrecord))))]
+    (if sync?
+      (logfn)
+      (px/exec *default-executor* logfn))))
+
 (defmacro log!
   "Emit a new log record to the global log-record state (asynchronously). "
   [& props]
   (let [{:keys [::level ::logger ::context ::sync? cause] :or {sync? false}} props
         props (into [] msg-props-xf props)]
     `(when (enabled? ~logger ~level)
-       (let [props#   (cond-> (delay ~props) ~sync? deref)
-             ts#      (current-timestamp)
-             context# *context*
-             logfn#   (fn []
-                        (let [props#   (if ~sync? props# (deref props#))
-                              props#   (into (d/ordered-map) props#)
-                              cause#   ~cause
-                              context# (d/without-nils
-                                        (merge context# ~context))
-                              lrecord# {::id (uuid/next)
-                                        ::timestamp ts#
-                                        ::message (delay (build-message props#))
-                                        ::props props#
-                                        ::context context#
-                                        ::level ~level
-                                        ::logger ~logger}
-                              lrecord# (cond-> lrecord#
-                                         (some? cause#)
-                                         (assoc ::cause cause#
-                                                ::trace (delay (build-stack-trace cause#))))]
-                          (swap! log-record (constantly lrecord#))))]
-         (if ~sync?
-           (logfn#)
-           (px/exec! *default-executor* logfn#))))))
+       (emit-log (delay ~props) ~cause ~context ~logger ~level ~sync?))))
 
 #?(:clj
    (defn slf4j-log-handler
@@ -275,8 +286,9 @@
      [_ _ _ {:keys [::logger ::props ::level ::cause ::trace ::message]}]
      (when (enabled? logger level)
        (let [hstyles (str/ffmt "font-weight: 600; color: %" (level->color level))
-             mstyles (str/ffmt "font-weight: 300; color: %" "#282a2e")
-             header  (str/concat "%c" (level->name level) " [" logger "] ")
+             mstyles (str/ffmt "font-weight: 300; color: %" (level->color level))
+             ts      (ct/format-inst (ct/now) "kk:mm:ss.SSSS")
+             header  (str/concat "%c" (level->name level) " " ts  " [" logger "] ")
              message (str/concat header "%c" @message)]
 
          (js/console.group message hstyles mstyles)
@@ -320,8 +332,9 @@
    (defn setup!
      [{:as config}]
      (run! (fn [[logger level]]
-             (let [logger (if (keyword? logger) (name logger) logger)]
-               (l/set-level! logger level)))
+             (let [logger (if (keyword? logger) (name logger) logger)
+                   level  (level->int level)]
+               (.set ^js/Map loggers logger level)))
            config)))
 
 (defmacro raw!

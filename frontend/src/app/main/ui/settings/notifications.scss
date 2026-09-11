@@ -2,19 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "common/refactor/common-refactor.scss" as *;
+@use "refactor/common-refactor.scss" as deprecated;
 @use "./profile" as *;
 
 .update-btn {
-  margin-top: $s-16;
-  @extend .button-primary;
-  height: $s-36;
+  margin-top: deprecated.$s-16;
+
+  @extend %button-primary;
+
+  height: deprecated.$s-36;
 }
 
 .notifications-form {
-  width: $s-400;
+  width: deprecated.$s-400;
 }
 
 .notifications-page {
@@ -34,9 +36,9 @@
   }
 
   h4 {
-    font-size: $fs-11;
+    font-size: deprecated.$fs-11;
     color: var(--color-foreground-primary);
     text-transform: uppercase;
-    margin: $s-12;
+    margin: deprecated.$s-12;
   }
 }

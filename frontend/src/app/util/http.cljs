@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.http
   "A http client with rx streams interface."
@@ -13,7 +13,7 @@
    [app.config :as cfg]
    [app.util.cache :as c]
    [app.util.globals :as globals]
-   [app.util.time :as dt]
+   [app.util.perf :as perf]
    [app.util.webapi :as wapi]
    [beicon.v2.core :as rx]
    [cuerdas.core :as str]
@@ -50,8 +50,14 @@
   [headers]
   (into {} (map vec) (seq (.entries ^js headers))))
 
-(def default-headers
-  {"x-frontend-version" (:full cfg/version)})
+(defn default-headers
+  []
+  {"x-frontend-version" (:full cfg/version)
+   "x-client" (str "penpot-frontend/" (:full cfg/version))})
+
+;; Storage to save the average time of the requests
+(defonce network-averages
+  (atom {}))
 
 (defn fetch
   [{:keys [method uri query headers body mode omit-default-headers credentials]
@@ -74,7 +80,7 @@
 
            headers       (cond-> headers
                            (not omit-default-headers)
-                           (d/merge default-headers))
+                           (merge (default-headers)))
 
            headers       (-update-headers body headers)
 
@@ -87,20 +93,49 @@
                               :redirect "follow"
                               :credentials credentials
                               :referrerPolicy "no-referrer"
-                              :signal signal}]
+                              :signal signal}
+
+           start (perf/timestamp)]
 
        (-> (js/fetch (str uri) params)
-           (p/then (fn [response]
-                     (vreset! abortable? false)
-                     (.next ^js subscriber response)
-                     (.complete ^js subscriber)))
-           (p/catch (fn [err]
-                      (vreset! abortable? false)
-                      (when-not @unsubscribed?
-                        (.error ^js subscriber err)))))
+           (p/then
+            (fn [response]
+              (vreset! abortable? false)
+              (.next ^js subscriber response)
+              (.complete ^js subscriber)))
+           (p/catch
+            (fn [cause]
+              (vreset! abortable? false)
+              (when-not (or @unsubscribed? (= (.-name ^js cause) "AbortError"))
+                (let [error (ex-info (ex-message cause)
+                                     {:type :network
+                                      :hint "unable to perform fetch operation"
+                                      :uri uri
+                                      :headers headers}
+                                     cause)]
+                  (.error ^js subscriber error)))))
+           (p/finally
+             (fn []
+               (let [{:keys [count average] :or {count 0 average 0}} (get @network-averages (:path uri))
+                     current-time (- (perf/timestamp) start)
+                     average (+ (* average (/ count (inc count)))
+                                (/ current-time (inc count)))
+                     count (inc count)]
+                 (swap! network-averages assoc (:path uri) {:count count :average average})))))
+
        (fn []
          (vreset! unsubscribed? true)
          (when @abortable?
+           ;; Do NOT pass a custom reason to .abort(): browsers that support
+           ;; AbortController reason (Chrome 98+, Firefox 97+) would reject
+           ;; the fetch promise with the supplied value directly.  When that
+           ;; value is a ClojureScript ExceptionInfo its `.name` property is
+           ;; "Error", not "AbortError", which defeats every existing guard
+           ;; that checks `(= (.-name cause) "AbortError")`.  Calling .abort
+           ;; without a reason always produces a native DOMException whose
+           ;; `.name` is "AbortError", which is correctly recognised and
+           ;; suppressed by both the p/catch handler and the global
+           ;; unhandled-exception filter.
            (.abort ^js controller)))))))
 
 (defn response->map
@@ -172,6 +207,11 @@
   [{:keys [status]}]
   (<= 400 status 499))
 
+(defn blob?
+  [^js v]
+  (when (some? v)
+    (instance? js/Blob v)))
+
 (defn as-promise
   [observable]
   (p/create
@@ -197,7 +237,7 @@
               (rx/map :body)
               (rx/mapcat wapi/read-file-as-data-url)
               (rx/map #(hash-map uri %))
-              (c/with-cache {:key uri :max-age (dt/duration {:hours 4})}))]
+              (c/with-cache {:key uri :max-age (* 1000 60 60 4)}))]
 
      ;; We need to check `throw-err?` after the cache is resolved otherwise we cannot cache request
      ;; with different values of throw-err. By default we throw always the exception and then we just
@@ -214,4 +254,4 @@
          :uri url
          :response-type :text})
        (rx/map :body)
-       (c/with-cache {:key url :max-age (dt/duration {:hours 4})})))
+       (c/with-cache {:key url :max-age (* 1000 60 60 4)})))

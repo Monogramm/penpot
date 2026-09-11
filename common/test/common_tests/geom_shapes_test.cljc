@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns common-tests.geom-shapes-test
   (:require
@@ -14,6 +14,7 @@
    [app.common.geom.shapes.transforms :as gsht]
    [app.common.math :as mth :refer [close?]]
    [app.common.types.modifiers :as ctm]
+   [app.common.types.path :as path]
    [app.common.types.shape :as cts]
    [clojure.test :as t]))
 
@@ -30,7 +31,7 @@
    (if (= type :path)
      (cts/setup-shape
       (into {:type :path
-             :content (:content params default-path)}
+             :content (path/content (:content params default-path))}
             params))
      (cts/setup-shape
       (into {:type type
@@ -113,11 +114,8 @@
     (let [modifiers    (ctm/resize-modifiers (gpt/point 0 0) (gpt/point 0 0))
           shape-before (create-test-shape :rect {:modifiers modifiers})
           shape-after  (gsh/transform-shape shape-before)]
-
-      (t/is (close? (get-in shape-before [:selrect :width])
-                    (get-in shape-after  [:selrect :width])))
-      (t/is (close? (get-in shape-before [:selrect :height])
-                    (get-in shape-after  [:selrect :height])))))
+      (t/is (close? 0.01 (get-in shape-after  [:selrect :width])))
+      (t/is (close? 0.01 (get-in shape-after  [:selrect :height])))))
 
   (t/testing "Transform shape with rotation modifiers"
     (t/are [type]
@@ -170,7 +168,7 @@
                 (gpt/point 20 65.2)
                 (gpt/point 12 -10)]
         result (grc/points->rect points)
-        expect {:x -1, :y -10, :width 21, :height 75.2}]
+        expect {:x -1.0, :y -10.0, :width 21.0, :height 75.2}]
 
     (t/is (= (:x expect) (:x result)))
     (t/is (= (:y expect) (:y result)))
@@ -232,3 +230,44 @@
     (t/is (true? (gsin/slow-has-point? shape point1)))
     (t/is (false? (gsin/fast-has-point? shape point2)))
     (t/is (false? (gsin/fast-has-point? shape point2)))))
+
+;; ---- adjust-shape-flips (via apply-transform / transform-shape) ----
+
+(t/deftest flip-x-only-toggles-flip-x-and-negates-rotation
+  (t/testing "Flipping only X axis toggles flip-x and negates rotation"
+    ;; Build a rect with a known rotation, then apply a scale(-1, 1)
+    ;; from the left edge to simulate an X-axis flip.
+    (let [shape  (create-test-shape :rect {:rotation 30})
+          ;; Flip horizontally about x=0 (left edge of shape)
+          origin (gpt/point (get-in shape [:selrect :x]) (get-in shape [:selrect :y]))
+          mods   (ctm/resize-modifiers (gpt/point -1 1) origin)
+          result (gsh/transform-shape shape mods)]
+      ;; flip-x should have been toggled (from nil/false to true)
+      (t/is (true? (:flip-x result)))
+      ;; flip-y should NOT be set
+      (t/is (not (true? (:flip-y result))))
+      ;; rotation is negated then normalised into [0,360): -30 mod 360 = 330
+      (t/is (mth/close? 330 (:rotation result))))))
+
+(t/deftest flip-y-only-toggles-flip-y-and-negates-rotation
+  (t/testing "Flipping only Y axis toggles flip-y and negates rotation"
+    (let [shape  (create-test-shape :rect {:rotation 45})
+          origin (gpt/point (get-in shape [:selrect :x]) (get-in shape [:selrect :y]))
+          mods   (ctm/resize-modifiers (gpt/point 1 -1) origin)
+          result (gsh/transform-shape shape mods)]
+      (t/is (not (true? (:flip-x result))))
+      (t/is (true? (:flip-y result)))
+      ;; -45 mod 360 = 315
+      (t/is (mth/close? 315 (:rotation result))))))
+
+(t/deftest flip-both-axes-toggles-both-flags-but-preserves-rotation
+  (t/testing "Flipping both axes toggles flip-x and flip-y, but does NOT negate rotation"
+    ;; Two simultaneous axis flips = 180° rotation, so stored rotation is unchanged.
+    (let [shape  (create-test-shape :rect {:rotation 30})
+          origin (gpt/point (get-in shape [:selrect :x]) (get-in shape [:selrect :y]))
+          mods   (ctm/resize-modifiers (gpt/point -1 -1) origin)
+          result (gsh/transform-shape shape mods)]
+      (t/is (true? (:flip-x result)))
+      (t/is (true? (:flip-y result)))
+      ;; rotation must not be negated when both axes are flipped
+      (t/is (mth/close? 30 (:rotation result))))))

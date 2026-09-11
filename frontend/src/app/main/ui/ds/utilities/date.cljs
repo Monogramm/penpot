@@ -2,22 +2,20 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.ds.utilities.date
   (:require-macros
-   [app.common.data.macros :as dm]
    [app.main.style :as stl])
   (:require
-   [app.common.data :as d]
+   [app.common.time :as ct]
    [app.main.ui.ds.foundations.typography :as t]
    [app.main.ui.ds.foundations.typography.text :refer [text*]]
-   [app.util.time :as dt]
    [rumext.v2 :as mf]))
 
 (defn valid-date?
   [date]
-  (or (dt/datetime? date) (number? date)))
+  (or (ct/inst? date) (number? date)))
 
 (def ^:private schema:date
   [:map
@@ -28,15 +26,12 @@
    [:typography {:optional true} :string]])
 
 (mf/defc date*
-  {::mf/props :obj
-   ::mf/schema schema:date}
+  {::mf/schema schema:date}
   [{:keys [class date selected typography] :rest props}]
-  (let [class (d/append-class class (stl/css-case :date true :is-selected selected))
-        date (cond-> date (not (dt/datetime? date)) dt/datetime)
+  (let [date       (cond-> date (not (ct/inst? date)) ct/inst)
         typography (or typography t/body-medium)]
-    [:> text* {:as "time" :typography typography :class class :dateTime (dt/format date :iso)}
-     (dm/str
-      (dt/format date :date-full)
-      " . "
-      (dt/format date :time-24-simple)
-      "h")]))
+    [:> text* {:as "time"
+               :typography typography
+               :class [class (stl/css-case :date true :is-selected selected)]
+               :date-time (ct/format-inst date :iso)}
+     (ct/format-inst date :localized-date-time)]))

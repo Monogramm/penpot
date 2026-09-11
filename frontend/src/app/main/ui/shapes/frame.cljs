@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.shapes.frame
   (:require
@@ -67,6 +67,7 @@
 
         filter-id-blur     (dm/fmt "filter-blur-%" render-id)
         filter-id-shadows  (dm/fmt "filter-shadow-%" render-id)
+
         filter-str-blur    (filters/filter-str filter-id-blur (dissoc shape :shadow))
         filter-str-shadows (filters/filter-str filter-id-shadows (dissoc shape :blur))
 
@@ -94,33 +95,32 @@
     ;; We need to separate blur from shadows because the blur is applied to the strokes
     ;; while the shadows have to be placed *under* the stroke (for example, the inner shadows)
     ;; and the shadows needs to be applied only to the content (without the stroke)
-    [:g {:filter filter-str-blur}
-     [:defs
-      [:& filters/filters {:shape (dissoc shape :blur) :filter-id filter-id-shadows}]
-      [:& filters/filters {:shape (assoc shape :shadow []) :filter-id filter-id-blur}]]
+    [:g.frame-container-wrapper {:opacity opacity}
+     [:g.frame-container-blur {:filter filter-str-blur}
+      [:defs
+       [:> filters/filters* {:shape (dissoc shape :blur) :filter-id filter-id-shadows}]
+       [:> filters/filters* {:shape (assoc shape :shadow []) :filter-id filter-id-blur}]]
 
-     ;; This need to be separated in two layers so the clip doesn't affect the shadow filters
-     ;; otherwise the shadow will be clipped and not visible
-     [:g {:filter filter-str-shadows}
-      [:g {:clip-path (when-not ^boolean show-content? (frame-clip-url shape render-id))
-           ;; A frame sets back normal fill behavior (default
-           ;; transparent). It may have been changed to default black
-           ;; if a shape coming from an imported SVG file is
-           ;; rendered. See main.ui.shapes.attrs/add-style-attrs.
-           :fill "none"
-           :opacity opacity}
+      ;; This need to be separated in two layers so the clip doesn't affect the shadow filters
+      ;; otherwise the shadow will be clipped and not visible
+      [:g.frame-container-shadows {:filter filter-str-shadows}
+       [:g {:clip-path (when-not ^boolean show-content? (frame-clip-url shape render-id))
+            ;; A frame sets back normal fill behavior (default
+            ;; transparent). It may have been changed to default black
+            ;; if a shape coming from an imported SVG file is
+            ;; rendered. See main.ui.shapes.attrs/add-style-attrs.
+            :fill "none"}
 
-       [:& shape-fills {:shape shape}
-        (if ^boolean path?
-          [:> :path props]
-          [:> :rect props])]
+        [:& shape-fills {:shape shape}
+         (if ^boolean path?
+           [:> :path props]
+           [:> :rect props])]
+        children]]
 
-       children]]
-
-     [:& shape-strokes {:shape shape}
-      (if ^boolean path?
-        [:> :path props]
-        [:> :rect props])]]))
+      [:& shape-strokes {:shape shape}
+       (if ^boolean path?
+         [:> :path props]
+         [:> :rect props])]]]))
 
 (mf/defc frame-thumbnail-image
   {::mf/wrap-props false}

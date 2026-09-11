@@ -2,23 +2,23 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.menus.exports
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data :as d]
    [app.main.data.exports.assets :as de]
-   [app.main.data.helpers :as dsh]
    [app.main.data.workspace.shapes :as dwsh]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.select :refer [select]]
-   [app.main.ui.components.title-bar :refer [title-bar]]
+   [app.main.ui.components.title-bar :refer [title-bar*]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.foundations.assets.icon :as i]
    [app.main.ui.exports.assets]
    [app.util.dom :as dom]
-   [app.util.i18n :refer  [tr c]]
+   [app.util.i18n :refer [c tr]]
    [app.util.keyboard :as kbd]
    [rumext.v2 :as mf]))
 
@@ -26,34 +26,60 @@
   "Shape attrs that corresponds to exports. Used in other namespaces."
   [:exports])
 
-(mf/defc exports-menu
-  {::mf/wrap [#(mf/memo' % (mf/check-props ["ids" "values" "type" "page-id" "file-id"]))]}
-  [{:keys [ids type values page-id file-id] :as props}]
-  (let [exports            (:exports values [])
-        has-exports?       (or (= :multiple exports) (some? (seq exports)))
+(defn- check-exports-menu-props
+  [old-props new-props]
+  (and (identical? (unchecked-get old-props "ids")
+                   (unchecked-get new-props "ids"))
+       (identical? (unchecked-get old-props "type")
+                   (unchecked-get new-props "type"))
+       (identical? (unchecked-get old-props "pageId")
+                   (unchecked-get new-props "pageId"))
+       (identical? (unchecked-get old-props "fileId")
+                   (unchecked-get new-props "fileId"))
 
-        comp-state*        (mf/use-state true)
-        open?              (deref comp-state*)
+       ;; NOTE: we explicitly ignore "shapes" prop and use values for
+       ;; track if the "value" changes (checking by value equality);
+       ;; this prevents rerender the component when no real change is
+       ;; made to exports
+       (= (unchecked-get old-props "values")
+          (unchecked-get new-props "values"))))
 
-        toggle-content     (mf/use-fn #(swap! comp-state* not))
+(mf/defc exports-menu*
+  {::mf/wrap [#(mf/memo' % check-exports-menu-props)]}
+  [{:keys [ids type shapes values file-id page-id]}]
 
-        state              (mf/deref refs/export)
-        in-progress?       (:in-progress state)
+  (let [exports (get values :exports [])
+        open*   (mf/use-state true)
+        open?   (deref open*)
 
-        shapes-with-exports (->> (dsh/lookup-shapes @st/state ids)
-                                 (filter #(pos? (count (:exports %)))))
+        state   (mf/deref refs/export)
 
-        sname               (when (seqable? exports)
-                              (let [sname  (-> shapes-with-exports first :name)
-                                    suffix (-> exports first :suffix)]
-                                (cond-> sname
-                                  (and (= 1 (count exports)) (some? suffix))
-                                  (str suffix))))
+        in-progress?
+        (get state :in-progress)
+
+        has-exports?
+        (or (= :multiple exports)
+            (some? (seq exports)))
+
+        toggle-content
+        (mf/use-fn #(swap! open* not))
+
+        shapes-with-exports
+        (mf/with-memo [shapes]
+          (filter (comp seq :exports) shapes))
+
+        sname
+        (when (seqable? exports)
+          (let [sname  (-> shapes-with-exports first :name)
+                suffix (-> exports first :suffix)]
+            (cond-> sname
+              (and (= 1 (count exports)) (some? suffix))
+              (str suffix))))
 
         scale-enabled?
         (mf/use-fn
          (fn [export]
-           (#{:png :jpeg} (:type export))))
+           (#{:png :jpeg :webp} (:type export))))
 
         on-download
         (mf/use-fn
@@ -75,9 +101,8 @@
                                   :name sname
                                   :object-id (:id (first shapes-with-exports))}
                      full-export (merge export defaults)]
-                 (st/emit!
-                  (de/request-simple-export {:export full-export})
-                  (de/export-shapes-event [full-export] "workspace:sidebar")))
+                 (st/emit! (de/request-simple-export {:export full-export})
+                           (de/export-shapes-event [full-export] "workspace:sidebar")))
                (st/emit!
                 (de/show-workspace-export-dialog {:selected (reverse ids) :origin "workspace:sidebar"})))
 
@@ -173,20 +198,21 @@
 
         format-options [{:value "png" :label "PNG"}
                         {:value "jpeg" :label "JPG"}
+                        {:value "webp" :label "WEBP"}
                         {:value "svg" :label "SVG"}
                         {:value "pdf" :label "PDF"}]]
 
     [:div {:class (stl/css :element-set)}
      [:div {:class (stl/css :element-title)}
-      [:& title-bar {:collapsable  has-exports?
-                     :collapsed    (not open?)
-                     :on-collapsed toggle-content
-                     :title        (tr (if (> (count ids) 1) "workspace.options.export-multiple" "workspace.options.export"))
-                     :class        (stl/css-case :title-spacing-export (not has-exports?))}
+      [:> title-bar* {:collapsable  has-exports?
+                      :collapsed    (not open?)
+                      :on-collapsed toggle-content
+                      :title        (tr (if (> (count ids) 1) "workspace.options.export-multiple" "workspace.options.export"))
+                      :class        (stl/css-case :title-spacing-export (not has-exports?))}
        [:> icon-button* {:variant "ghost"
                          :aria-label (tr "workspace.options.export.add-export")
                          :on-click add-export
-                         :icon "add"}]]]
+                         :icon i/add}]]]
      (when open?
        [:div {:class (stl/css :element-set-content)}
 
@@ -198,7 +224,7 @@
             [:> icon-button* {:variant "ghost"
                               :aria-label (tr "workspace.options.export.remove-export")
                               :on-click on-remove-all
-                              :icon "remove"}]]]
+                              :icon i/remove}]]]
 
           (seq exports)
           [:*
@@ -234,7 +260,7 @@
                                 :aria-label (tr "workspace.options.export.remove-export")
                                 :on-click delete-export
                                 :data-value index
-                                :icon "remove"}]])])
+                                :icon i/remove}]])])
 
         (when (or (= :multiple exports) (seq exports))
           [:button

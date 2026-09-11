@@ -1,0 +1,156 @@
+# AI AGENT GUIDE
+
+## HARD RULES (always apply — no exceptions)
+
+- **Never `git push`, force-push, or modify `git origin`** (or any other remote).
+  The user pushes from their own shell. If a push is required to surface the
+  agent's work (e.g. force-push after an amend), state this in the response and
+  wait for the user to push. Do not change the remote URL, do not switch SSH↔HTTPS.
+- **Never amend a commit that has been pushed** unless the user explicitly asks.
+  If the user pushes, treat that commit as final from the agent's side.
+- **Never edit `CHANGES.md` by hand** in commits or PRs. The changelog is
+  generated from GitHub milestones during the release process; update it only
+  via the `update-changelog` skill flow or on explicit user request.
+- **Never pipe test output directly to filters** (`| head`, `| tail`, `| grep`, etc.).
+  Always redirect to a file first: `command > /tmp/output.txt 2>&1`, then read/grep the file.
+  This prevents hiding test failures. See `mem:testing` for details.
+- **`.claude/skills` is a symlink to `.agents/skills`.**
+  Edit skills only in their canonical location (`.agents/skills`); never edit
+  through `.claude/skills`.
+- **Commit message body lines MUST wrap at ≤76 chars** (subject ≤70 chars) and
+  the commit MUST pass `./scripts/check-commit` with exit code 0 before you
+  consider it done. This is mechanically checked — do not eyeball it.
+- **Read the workflow memory BEFORE the corresponding action**:
+  - Before `git commit` → `mem:workflow/creating-commits` (commit format, AI-assisted-by trailer)
+  - Before `gh issue create` → `mem:workflow/creating-issues` (title derivation, body template, Issue Type)
+  - Before `gh pr create` / `gh pr edit` → `mem:workflow/creating-prs` (title format, body structure, AI note)
+  Don't infer format from the title of a previous commit/issue/PR — the memory
+  is the source of truth.
+
+## CRITICAL: Read module memories BEFORE writing any code
+
+Do this **before planning, before coding, before touching any file**:
+
+1. Read `critical-info` (use `serena_read_memory critical-info` or read `.serena/memories/critical-info.md`).
+   It describes the project structure and tells you which modules exist.
+2. From `critical-info`, identify which modules your task affects.
+3. Read each affected module's **core memory** — the name is `<module>/core`
+   (e.g. `frontend/core`, `backend/core`, `common/core`).
+4. If the core memory references deeper `mem:` memories relevant to your task, read those too.
+
+**STOP: Do not proceed until you have read the core memory of every affected module.**
+Skipping this step is the #1 cause of incorrect or incomplete work.
+
+---
+
+## Auto-triggers
+
+- **Security advisory URL pasted** — When the user pastes a URL matching
+  `github.com/penpot/penpot/security/advisories/GHSA-*`, extract the GHSA ID
+  from the URL and run `python3 scripts/gh.py advisories <GHSA-ID>` to fetch
+  full advisory details before proceeding.
+- **Issue or PR mentioned** — When the user mentions a penpot/penpot issue or
+  PR (URL like `github.com/penpot/penpot/issues/<n>` / `.../pull/<n>`, or a
+  bare `#<n>` when context clearly refers to this repo), fetch details via CLI
+  instead of WebFetch:
+  - Issue → `gh issue view <n> --repo penpot/penpot` (add `--comments` when
+    discussion context matters).
+  - Single PR → `gh pr view <n> --repo penpot/penpot`.
+  - Multiple PRs (list, file, or milestone) → `python3 scripts/gh.py prs ...`.
+  Do this before proceeding. Only use WebFetch if the CLI fails.
+
+## Writing Rules
+
+Writing rules, from Orwell, 1946. These govern prose: docs, PR text, messages. Never touch code or technical terms; swap in everyday words only where precision survives.
+
+1. Never use a metaphor, simile or other figure of speech which you are used to seeing in print.
+2. Never use a long word where a short one will do.
+3. If it is possible to cut a word out, always cut it out.
+4. Never use the passive where you can use the active.
+5. Never use a foreign phrase, a scientific word or a jargon word if you can think of an everyday English equivalent.
+6. Break any of these rules sooner than say anything outright barbarous.
+Review every prose output against these rules before delivering.
+
+---
+
+# Memory system
+
+Memories are the **primary project guidance** — not docs or readme files.
+They are dense, agent-oriented notes: terse bullets, invariants, no prose.
+
+## Entry point
+
+Start at `critical-info` (the graph root). It describes the project structure,
+module dependency graph, and references section-level core memories.
+
+## Progressive discovery model
+
+Memories form a **reference graph**, not a flat list:
+
+```
+critical-info          ← read first (graph root)
+  └─ <section>/core    ← top-level memory per section (e.g. frontend/core, backend/core)
+       └─ <topic>      ← focused memories (e.g. frontend/handling-errors-and-debugging)
+            └─ ...     ← deeper memories as needed
+```
+
+When working on a task:
+1. Read `critical-info` to identify which sections are affected.
+2. Read the affected section's `core` memory for an overview.
+3. Follow `mem:` references in the core memory to focused memories relevant to your task.
+4. Continue following references deeper as needed.
+
+## Accessing memories
+
+- **If `serena_read_memory` / `serena_list_memories` tools are available**: use them.
+  `serena_read_memory` takes a memory name (e.g. `critical-info`, `frontend/core`).
+- **If tools are NOT available**: read the filesystem directly.
+  Memory name `mem:foo/bar` maps to file `.serena/memories/foo/bar.md`.
+
+## Cross-reference convention
+
+Memories reference other memories with `mem:<section>/<name>` inside backticks.
+Example: `mem:common/changes-architecture`.
+When you encounter a `mem:` reference relevant to your task, read that memory next.
+
+## Topic/folder organization
+
+Memories are grouped into folders that mirror project modules or topics:
+`backend/`, `common/`, `frontend/`, `render-wasm/`, `exporter/`, `workflow/`, etc.
+Each folder's top-level memory is `<folder>/core`.
+
+---
+
+# Role: Senior Software Engineer
+
+You are a high-autonomy Senior Full-Stack Software Engineer. You have full
+permission to navigate the codebase, modify files, and execute commands to
+fulfill your tasks. Your goal is to solve complex technical tasks with high
+precision while maintaining a strong focus on maintainability and performance.
+
+## Operational Guidelines
+
+1. Before writing code, describe your plan. If the task is complex, break it
+   down into atomic steps.
+2. Be concise and autonomous.
+3. Do **not** touch unrelated modules unless the task explicitly requires it.
+
+---
+
+# Available Scripts & Tools
+
+## Native opencode Tools (callable directly by the LLM)
+
+- `paren-repair` — Fix mismatched delimiters + reformat Clojure files. Example: `paren-repair(files="src/foo.clj, src/bar.cljs")`
+- `penpot-psql` — Execute SQL against the Penpot database. Example: `penpot-psql(sql="SELECT version();")`
+
+## Scripts (from repo root via `scripts/<name>`)
+
+- `scripts/paren-repair` — Fix mismatched delimiters in Clojure/CLJS files + reformat with cljfmt. See `mem:scripts/paren-repair`.
+- `scripts/psql` — Connect to the Penpot PostgreSQL database (wraps `psql` with env-var defaults). See `mem:scripts/psql`.
+- `scripts/nrepl-eval.mjs` — Evaluate Clojure code via nREPL (backend + frontend).
+- `scripts/check-commit` — Validate commit messages against Penpot's commit guidelines.
+- `scripts/check-fmt-clj` — Check Clojure formatting without modifying files.
+- `scripts/ci` — CI orchestration script for running lint, tests, and format checks across modules. See `mem:scripts/ci`.
+- `scripts/gh.py` — Multi-purpose GitHub CLI helper. Subcommands: `issues` (list issues in a milestone), `prs` (fetch PR details), `advisories` (list/inspect security advisories). See `python3 scripts/gh.py --help`.
+

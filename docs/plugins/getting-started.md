@@ -1,6 +1,7 @@
 ---
 layout: layouts/plugins.njk
 title: 1. Getting started
+desc: Dive into Penpot plugins! Extend Penpot's functionality by automating tasks and adding new features using JavaScript, HTML, & CSS. Get started now!
 ---
 
 # Getting started
@@ -68,12 +69,13 @@ You need to provide the plugin's manifest URL for the installation. If there are
 
 | Name          | URL                                                                 |
 | ------------- | ------------------------------------------------------------------- |
-| Lorem Ipsum   | https://lorem-ipsum-penpot-plugin.pages.dev/assets/manifest.json    |
-| Contrast      | https://contrast-penpot-plugin.pages.dev/assets/manifest.json       |
-| Feather icons | https://icons-penpot-plugin.pages.dev/assets/manifest.json          |
-| Tables        | https://table-penpot-plugin.pages.dev/assets/manifest.json          |
-| Color palette | https://create-palette-penpot-plugin.pages.dev/assets/manifest.json |
-| Rename layers | https://rename-layers-penpot-plugin.pages.dev/assets/manifest.json  |
+| Color palette |	https://create-palette.plugins.penpot.app/assets/manifest.json      |
+| Contrast	    | https://contrast.plugins.penpot.app/assets/manifest.json            |
+| Feather icons	| https://icons.plugins.penpot.app/assets/manifest.json               |
+| Lorem ipsum	  | https://lorem-ipsum.plugins.penpot.app/assets/manifest.json         |
+| Rename layers |	https://rename-layers.plugins.penpot.app/assets/manifest.json       |
+| Tables	      | https://table.plugins.penpot.app/assets/manifest.json               |
+
 
 ## 1.4. Plugin's basics
 
@@ -129,6 +131,7 @@ The <code class="language-js">manifest.json</code> file contains the basic infor
 {
   "name": "Your plugin name",
   "description": "Your plugin description",
+  "version": 2,
   "code": "plugin.js",
   "icon": "Your icon",
   "permissions": [
@@ -139,10 +142,17 @@ The <code class="language-js">manifest.json</code> file contains the basic infor
     "user:read",
     "comment:read",
     "comment:write",
-    "allow:downloads"
+    "allow:downloads",
+    "allow:localstorage"
   ]
 }
 ```
+
+<p class="advice">
+Set <code class="language-js">"version": 2</code> in your
+<code class="language-js">manifest.json</code> if you use relative paths for
+<code class="language-js">code</code> or <code class="language-js">icon</code>.
+</p>
 
 #### Properties
 
@@ -171,6 +181,9 @@ Typical use cases: adding new comments to pages; deleting existing comments; rep
 
 - <code class="language-js">allow:downloads</code>: Allows downloading of the project file. Grants access to endpoints and operations that enable the downloading of the entire project file.
 Typical use cases: downloading the full project file for backup or sharing.
+
+- <code class="language-js">allow:localstorage</code>: Allows the access to the local storage proxy to store information. This info is only available for the plugin installation but be aware that a user can see this information in the browser.
+Typical use cases: storing authentication tokens for a plugin login
 
 _Note: Write permissions automatically includes its corresponding read permission (e.g., <code class="language-js">content:write</code> includes <code class="language-js">content:read</code>) because reading is required to perform write or modification actions._
 

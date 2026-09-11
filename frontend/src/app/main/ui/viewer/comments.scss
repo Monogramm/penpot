@@ -2,34 +2,38 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "common/refactor/common-refactor.scss" as *;
+@use "ds/_borders.scss" as *;
+@use "refactor/common-refactor.scss" as deprecated;
 
 // COMMENT DROPDOWN ON HEADER
 .view-options {
-  @include bodySmallTypography;
+  @include deprecated.body-small-typography;
+
   display: flex;
   align-items: center;
   position: relative;
-  gap: $s-4;
-  height: $s-32;
-  padding: $s-8;
-  border-radius: $br-8;
+  gap: deprecated.$s-4;
+  height: deprecated.$s-32;
+  padding: deprecated.$s-8;
+  border-radius: deprecated.$br-8;
   background-color: var(--input-background-color);
   cursor: pointer;
 }
 
 .dropdown {
-  @extend .menu-dropdown;
-  right: $s-2;
-  top: calc($s-2 + $s-48);
-  width: $s-272;
-  padding: $s-6;
+  @extend %menu-dropdown;
+
+  right: deprecated.$s-2;
+  top: calc(deprecated.$s-2 + deprecated.$s-48);
+  width: deprecated.$s-272;
+  padding: deprecated.$s-6;
 }
 
 .dropdown-title {
-  @include bodySmallTypography;
+  @include deprecated.body-small-typography;
+
   flex-grow: 1;
   color: var(--input-foreground-color-active);
 }
@@ -41,11 +45,14 @@
 
 .icon,
 .icon-dropdown {
-  @include flexCenter;
+  @include deprecated.flex-center;
+
   height: 100%;
-  width: $s-16;
+  width: deprecated.$s-16;
+
   svg {
-    @extend .button-icon-small;
+    @extend %button-icon-small;
+
     stroke: var(--icon-foreground);
   }
 }
@@ -55,16 +62,21 @@
 }
 
 .dropdown-element {
-  @extend .dropdown-element-base;
+  @extend %dropdown-element-base;
+
   .icon {
-    @include flexCenter;
+    @include deprecated.flex-center;
+
     height: 100%;
-    width: $s-16;
+    width: deprecated.$s-16;
+
     svg {
-      @extend .button-icon-small;
+      @extend %button-icon-small;
+
       stroke: var(--icon-foreground);
     }
   }
+
   &:hover .label {
     color: var(--input-foreground-color-active);
   }
@@ -74,39 +86,45 @@
   .label {
     color: var(--input-foreground-color-active);
   }
+
   .icon svg {
     stroke: var(--input-foreground-color);
   }
 }
 
 .separator {
-  height: $s-8;
+  position: relative;
+  block-size: var(--sp-xs);
+  inline-size: calc(100% + var(--sp-s));
+  border-top: $b-1 solid var(--color-background-quaternary);
+  left: calc(-1 * var(--sp-xs));
+  margin-top: var(--sp-s);
 }
 
 // FLOATING COMMENT
 .viewer-comments-container {
   position: absolute;
-  top: 0px;
-  left: 0px;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
-  z-index: $z-index-1;
+  z-index: deprecated.$z-index-1;
 }
 
 .threads {
   position: absolute;
-  top: 0px;
-  left: 0px;
+  top: 0;
+  left: 0;
 }
 
-//COMMENT SIDEBAR
+// COMMENT SIDEBAR
 .comments-sidebar {
   position: absolute;
   right: 0;
-  top: $s-44;
-  width: $s-276;
-  height: calc(100vh - $s-48);
-  z-index: $z-index-10;
+  top: deprecated.$s-44;
+  width: var(--right-sidebar-width);
+  height: calc(100vh - deprecated.$s-48);
+  z-index: deprecated.$z-index-10;
   background-color: var(--panel-background-color);
 }
 

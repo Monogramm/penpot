@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.files-update
   (:require
@@ -15,29 +15,29 @@
    [app.common.files.validate :as val]
    [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
-   [app.features.fdata :as feat.fdata]
+   [app.features.fdata :as fdata]
+   [app.features.file-snapshots :as fsnap]
+   [app.features.logical-deletion :as ldel]
    [app.http.errors :as errors]
    [app.loggers.audit :as audit]
    [app.loggers.webhooks :as webhooks]
    [app.metrics :as mtx]
    [app.msgbus :as mbus]
+   [app.redis :as rds]
    [app.rpc :as-alias rpc]
    [app.rpc.climit :as climit]
    [app.rpc.commands.files :as files]
    [app.rpc.commands.teams :as teams]
    [app.rpc.doc :as-alias doc]
    [app.rpc.helpers :as rph]
-   [app.storage :as sto]
    [app.util.blob :as blob]
    [app.util.pointer-map :as pmap]
    [app.util.services :as sv]
-   [app.util.time :as dt]
-   [app.worker :as wrk]
-   [clojure.set :as set]
-   [promesa.exec :as px]))
+   [clojure.set :as set]))
 
 (declare ^:private get-lagged-changes)
 (declare ^:private send-notifications!)
@@ -45,6 +45,7 @@
 (declare ^:private update-file*)
 (declare ^:private process-changes-and-validate)
 (declare ^:private take-snapshot?)
+(declare ^:private invalidate-caches!)
 
 ;; PUBLIC API; intended to be used outside of this module
 (declare update-file!)
@@ -62,10 +63,10 @@
    [:revn {:min 0} ::sm/int]
    [:vern {:min 0} ::sm/int]
    [:features {:optional true} ::cfeat/features]
-   [:changes {:optional true} [:vector ::cpc/change]]
+   [:changes {:optional true} [:vector cpc/schema:change]]
    [:changes-with-metadata {:optional true}
     [:vector [:map
-              [:changes [:vector ::cpc/change]]
+              [:changes [:vector cpc/schema:change]]
               [:hint-origin {:optional true} :keyword]
               [:hint-events {:optional true} [:vector [:string {:max 250}]]]]]]
    [:skip-validate {:optional true} ::sm/boolean]])
@@ -74,7 +75,7 @@
   schema:update-file-result
   [:vector {:title "update-file-result"}
    [:map
-    [:changes [:vector ::cpc/change]]
+    [:changes [:vector cpc/schema:change]]
     [:file-id ::sm/uuid]
     [:id ::sm/uuid]
     [:revn {:min 0} ::sm/int]
@@ -100,6 +101,17 @@
     :mod-typography
     :del-typography})
 
+(def ^:private token-change-types
+  #{:set-tokens-lib
+    :set-token
+    :set-token-set
+    :set-token-theme
+    :set-active-token-themes
+    :rename-token-set-group
+    :move-token-set
+    :move-token-set-group
+    :set-base-font-size})
+
 (def ^:private file-change-types
   #{:add-obj
     :mod-obj
@@ -110,6 +122,7 @@
 (defn- library-change?
   [{:keys [type] :as change}]
   (or (contains? library-change-types type)
+      (contains? token-change-types type)
       (contains? file-change-types type)))
 
 ;; If features are specified from params and the final feature
@@ -117,79 +130,89 @@
 ;; database.
 
 (sv/defmethod ::update-file
-  {::climit/id [[:update-file/by-profile ::rpc/profile-id]
+  {::rpc/id-type :file
+   ::climit/id [[:update-file/by-profile ::rpc/profile-id]
                 [:update-file/global]]
+
    ::webhooks/event? true
-   ::webhooks/batch-timeout (dt/duration "2m")
+   ::webhooks/batch-timeout (ct/duration "2m")
    ::webhooks/batch-key (webhooks/key-fn ::rpc/profile-id :id)
 
    ::sm/params schema:update-file
    ::sm/result schema:update-file-result
    ::doc/module :files
-   ::doc/added "1.17"}
-  [{:keys [::mtx/metrics] :as cfg}
+   ::doc/added "1.17"
+   ::db/transaction true}
+  [{:keys [::mtx/metrics ::db/conn] :as cfg}
    {:keys [::rpc/profile-id id changes changes-with-metadata] :as params}]
-  (db/tx-run! cfg (fn [{:keys [::db/conn] :as cfg}]
-                    (files/check-edition-permissions! conn profile-id id)
-                    (db/xact-lock! conn id)
 
-                    (let [file     (get-file conn id)
-                          team     (teams/get-team conn
-                                                   :profile-id profile-id
-                                                   :team-id (:team-id file))
+  (files/check-edition-permissions! conn profile-id id)
+  (db/xact-lock! conn id)
 
-                          features (-> (cfeat/get-team-enabled-features cf/flags team)
-                                       (cfeat/check-client-features! (:features params))
-                                       (cfeat/check-file-features! (:features file) (:features params)))
+  (let [file     (get-file cfg id)
+        team     (teams/get-team conn
+                                 :profile-id profile-id
+                                 :team-id (:team-id file))
 
-                          changes  (if changes-with-metadata
-                                     (->> changes-with-metadata (mapcat :changes) vec)
-                                     (vec changes))
+        features (-> (cfeat/get-team-enabled-features cf/flags team)
+                     (cfeat/check-client-features! (:features params))
+                     (cfeat/check-file-features! (:features file)))
 
-                          params   (-> params
-                                       (assoc :profile-id profile-id)
-                                       (assoc :features (set/difference features cfeat/frontend-only-features))
-                                       (assoc :team team)
-                                       (assoc :file file)
-                                       (assoc :changes changes))
+        changes  (if changes-with-metadata
+                   (->> changes-with-metadata (mapcat :changes) vec)
+                   (vec changes))
 
-                          cfg      (assoc cfg ::timestamp (dt/now))
+        params   (-> params
+                     (assoc :profile-id profile-id)
+                     (assoc :features (set/difference features cfeat/frontend-only-features))
+                     (assoc :team team)
+                     (assoc :file file)
+                     (assoc :changes changes))
 
-                          tpoint   (dt/tpoint)]
+        cfg      (assoc cfg ::timestamp (ct/now))
+
+        tpoint   (ct/tpoint)]
+
+    (when (not= (:vern params)
+                (:vern file))
+      (ex/raise :type :validation
+                :code :vern-conflict
+                :hint "A different version has been restored for the file."
+                :context {:incoming-revn (:revn params)
+                          :stored-revn (:revn file)}))
+
+    (when (> (:revn params)
+             (:revn file))
+      (ex/raise :type :validation
+                :code :revn-conflict
+                :hint "The incoming revision number is greater that stored version."
+                :context {:incoming-revn (:revn params)
+                          :stored-revn (:revn file)}))
+
+    ;; When newly computed features does not match exactly with the
+    ;; features defined on team row, we update it
+    (when-let [features (-> features
+                            (set/difference (:features team))
+                            (set/difference cfeat/no-team-inheritable-features)
+                            (not-empty))]
+      (let [features (-> features
+                         (set/union (:features team))
+                         (set/difference cfeat/no-team-inheritable-features)
+                         (into-array))]
+        (db/update! conn :team
+                    {:features features}
+                    {:id (:id team)}
+                    {::db/return-keys false})))
 
 
-                      (when (not= (:vern params)
-                                  (:vern file))
-                        (ex/raise :type :validation
-                                  :code :vern-conflict
-                                  :hint "A different version has been restored for the file."
-                                  :context {:incoming-revn (:revn params)
-                                            :stored-revn (:revn file)}))
+    (mtx/run! metrics {:id :update-file-changes :inc (count changes)})
 
-                      (when (> (:revn params)
-                               (:revn file))
-                        (ex/raise :type :validation
-                                  :code :revn-conflict
-                                  :hint "The incoming revision number is greater that stored version."
-                                  :context {:incoming-revn (:revn params)
-                                            :stored-revn (:revn file)}))
-
-                      ;; When newly computed features does not match exactly with
-                      ;; the features defined on team row, we update it.
-                      (when (not= features (:features team))
-                        (let [features (db/create-array conn "text" features)]
-                          (db/update! conn :team
-                                      {:features features}
-                                      {:id (:id team)})))
-
-                      (mtx/run! metrics {:id :update-file-changes :inc (count changes)})
-
-                      (binding [l/*context* (some-> (meta params)
-                                                    (get :app.http/request)
-                                                    (errors/request->context))]
-                        (-> (update-file* cfg params)
-                            (rph/with-defer #(let [elapsed (tpoint)]
-                                               (l/trace :hint "update-file" :time (dt/format-duration elapsed))))))))))
+    (binding [l/*context* (some-> (meta params)
+                                  (get :app.http/request)
+                                  (errors/request->context))]
+      (-> (update-file* cfg params)
+          (rph/with-defer #(let [elapsed (tpoint)]
+                             (l/trace :hint "update-file" :time (ct/format-duration elapsed))))))))
 
 (defn- update-file*
   "Internal function, part of the update-file process, that encapsulates
@@ -199,40 +222,41 @@
   Follow the inner implementation to `update-file-data!` function.
 
   Only intended for internal use on this module."
-  [{:keys [::db/conn ::wrk/executor ::timestamp] :as cfg}
-   {:keys [profile-id file features changes session-id skip-validate] :as params}]
+  [{:keys [::db/conn ::timestamp] :as cfg}
+   {:keys [profile-id file team features changes session-id skip-validate] :as params}]
 
-  (let [;; Retrieve the file data
-        file (feat.fdata/resolve-file-data cfg file)
+  (binding [pmap/*tracked* (pmap/create-tracked)
+            pmap/*load-fn* (partial fdata/load-pointer cfg (:id file))]
 
-        file (assoc file :features
-                    (-> features
-                        (set/difference cfeat/frontend-only-features)
-                        (set/union (:features file))))
+    (let [file (assoc file :features
+                      (-> features
+                          (set/difference cfeat/frontend-only-features)
+                          (set/union (:features file))))
 
-        ;; Process the file data on separated thread for avoid to do
-        ;; the CPU intensive operation on vthread.
-        file  (px/invoke! executor
-                          (fn []
-                            (binding [cfeat/*current*  features
-                                      cfeat/*previous* (:features file)]
-                              (update-file-data! cfg file
-                                                 process-changes-and-validate
-                                                 changes skip-validate))))]
+          ;; We need to preserve the original revn for the response
+          revn
+          (get file :revn)
 
-    (when (feat.fdata/offloaded? file)
-      (let [storage (sto/resolve cfg ::db/reuse-conn true)]
-        (some->> (:data-ref-id file) (sto/touch-object! storage))))
+          file
+          (binding [cfeat/*current*  features
+                    cfeat/*previous* (:features file)]
+            (update-file-data! cfg file
+                               process-changes-and-validate
+                               changes skip-validate))
 
-    (persist-file! cfg file)
+          deleted-at
+          (ct/plus timestamp (ct/duration {:hours 1}))]
 
-    (let [params   (assoc params :file file)
-          response {:revn (:revn file)
-                    :lagged (get-lagged-changes conn params)}
-          features (db/create-array conn "text" (:features file))
-          deleted-at (if (::snapshot-data file)
-                       (dt/plus timestamp (cf/get-deletion-delay))
-                       (dt/plus timestamp (dt/duration {:hours 1})))]
+      (when-let [file (::snapshot file)]
+        (let [deleted-at (ct/plus timestamp (ldel/get-deletion-delay team))
+              label      (str "internal/snapshot/" revn)]
+
+          (fsnap/create! cfg file
+                         {:label label
+                          :created-by "system"
+                          :deleted-at deleted-at
+                          :profile-id profile-id
+                          :session-id session-id})))
 
       ;; Insert change (xlog) with deleted_at in a future data for
       ;; make them automatically eleggible for GC once they expires
@@ -246,75 +270,67 @@
                    :file-id (:id file)
                    :revn (:revn file)
                    :version (:version file)
-                   :features features
-                   :label (::snapshot-label file)
-                   :data (::snapshot-data file)
+                   :features (into-array (:features file))
                    :changes (blob/encode changes)}
                   {::db/return-keys false})
 
+      (persist-file! cfg file)
+
+      (when (contains? cf/flags :redis-cache)
+        (invalidate-caches! cfg file))
+
       ;; Send asynchronous notifications
-      (send-notifications! cfg params)
+      (send-notifications! cfg params file)
 
-      (vary-meta response assoc ::audit/replace-props
-                 {:id         (:id file)
-                  :name       (:name file)
-                  :features   (:features file)
-                  :project-id (:project-id file)
-                  :team-id    (:team-id file)}))))
-
-(defn update-file!
-  "A public api that allows apply a transformation to a file with all context setup."
-  [cfg file-id update-fn & args]
-  (let [file (get-file cfg file-id)
-        file (apply update-file-data! cfg file update-fn args)]
-    (persist-file! cfg file)))
-
-(def ^:private sql:get-file
-  "SELECT f.*, p.team_id
-     FROM file AS f
-     JOIN project AS p ON (p.id = f.project_id)
-    WHERE f.id = ?
-      AND (f.deleted_at IS NULL OR
-           f.deleted_at > now())
-      FOR KEY SHARE")
+      (with-meta {:revn revn :lagged (get-lagged-changes conn params)}
+        {::audit/replace-props
+         {:id         (:id file)
+          :name       (:name file)
+          :features   (:features file)
+          :project-id (:project-id file)
+          :team-id    (:team-id file)}}))))
 
 (defn get-file
   "Get not-decoded file, only decodes the features set."
-  [conn id]
-  (let [file (db/exec-one! conn [sql:get-file id])]
-    (when-not file
-      (ex/raise :type :not-found
-                :code :object-not-found
-                :hint (format "file with id '%s' does not exists" id)))
-    (update file :features db/decode-pgarray #{})))
+  [cfg id]
+  (bfc/get-file cfg id :decode? false :lock-for-share? true))
 
 (defn persist-file!
   "Function responsible of persisting already encoded file. Should be
   used together with `get-file` and `update-file-data!`.
 
   It also updates the project modified-at attr."
-  [{:keys [::db/conn ::timestamp]} file]
-  (let [features (db/create-array conn "text" (:features file))
-        ;; The timestamp can be nil because this function is also
+  [{:keys [::db/conn ::timestamp] :as cfg} file]
+  (let [;; The timestamp can be nil because this function is also
         ;; intended to be used outside of this module
-        modified-at (or timestamp (dt/now))]
+        modified-at
+        (or timestamp (ct/now))
+
+        file
+        (-> file
+            (dissoc ::snapshot)
+            (assoc :modified-at modified-at)
+            (assoc :has-media-trimmed false))]
 
     (db/update! conn :project
                 {:modified-at modified-at}
                 {:id (:project-id file)}
                 {::db/return-keys false})
 
-    (db/update! conn :file
-                {:revn (:revn file)
-                 :data (:data file)
-                 :version (:version file)
-                 :features features
-                 :data-backend nil
-                 :data-ref-id nil
-                 :modified-at modified-at
-                 :has-media-trimmed false}
-                {:id (:id file)}
-                {::db/return-keys false})))
+    (bfc/update-file! cfg file)))
+
+(defn- invalidate-caches!
+  [cfg {:keys [id] :as file}]
+  (rds/run! cfg (fn [{:keys [::rds/conn]}]
+                  (let [key (files/file-summary-cache-key id)]
+                    (rds/del conn key)))))
+
+(defn- attach-snapshot
+  "Attach snapshot data to the file. This should be called before the
+  upcoming file operations are applied to the file."
+  [cfg migrated? file]
+  (let [snapshot (if migrated? file (fdata/realize cfg file))]
+    (assoc file ::snapshot snapshot)))
 
 (defn- update-file-data!
   "Perform a file data transformation in with all update context setup.
@@ -326,80 +342,35 @@
   fdata/pointer-map modified fragments."
 
   [cfg {:keys [id] :as file} update-fn & args]
-  (binding [pmap/*tracked* (pmap/create-tracked)
-            pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-    (let [file (update file :data (fn [data]
-                                    (-> data
-                                        (blob/decode)
-                                        (assoc :id (:id file)))))
+  (let [file (update file :data (fn [data]
+                                  (-> data
+                                      (blob/decode)
+                                      (assoc :id id))))
+        libs (delay (bfc/get-resolved-file-libraries cfg file))
 
-          ;; For avoid unnecesary overhead of creating multiple pointers
-          ;; and handly internally with objects map in their worst
-          ;; case (when probably all shapes and all pointers will be
-          ;; readed in any case), we just realize/resolve them before
-          ;; applying the migration to the file
-          file (if (fmg/need-migration? file)
-                 (-> file
-                     (update :data feat.fdata/process-pointers deref)
-                     (update :data feat.fdata/process-objects (partial into {}))
-                     (fmg/migrate-file))
-                 file)
+        need-migration?
+        (fmg/need-migration? file)
 
-          file (apply update-fn cfg file args)
+        take-snapshot?
+        (take-snapshot? file)
 
-          ;; TODO: reuse operations if file is migrated
-          ;; TODO: move encoding to a separated thread
-          file (if (take-snapshot? file)
-                 (let [tpoint   (dt/tpoint)
-                       snapshot (-> (:data file)
-                                    (feat.fdata/process-pointers deref)
-                                    (feat.fdata/process-objects (partial into {}))
-                                    (blob/encode))
-                       elapsed (tpoint)
-                       label   (str "internal/snapshot/" (:revn file))]
+        ;; For avoid unnecesary overhead of creating multiple
+        ;; pointers and handly internally with objects map in their
+        ;; worst case (when probably all shapes and all pointers
+        ;; will be readed in any case), we just realize/resolve them
+        ;; before applying the migration to the file
+        file
+        (cond-> file
+          ;; need-migration?
+          ;; (->> (fdata/realize cfg))
 
-                   (l/trc :hint "take snapshot"
-                          :file-id (str (:id file))
-                          :revn (:revn file)
-                          :label label
-                          :elapsed (dt/format-duration elapsed))
+          need-migration?
+          (fmg/migrate-file libs)
 
-                   (-> file
-                       (assoc ::snapshot-data snapshot)
-                       (assoc ::snapshot-label label)))
-                 file)
+          take-snapshot?
+          (->> (attach-snapshot cfg need-migration?)))]
 
-          file (cond-> file
-                 (contains? cfeat/*current* "fdata/objects-map")
-                 (feat.fdata/enable-objects-map)
-
-                 (contains? cfeat/*current* "fdata/pointer-map")
-                 (feat.fdata/enable-pointer-map)
-
-                 :always
-                 (update :data blob/encode))]
-
-      (feat.fdata/persist-pointers! cfg id)
-
-      file)))
-
-(defn- get-file-libraries
-  "A helper for preload file libraries, mainly used for perform file
-  semantical and structural validation"
-  [{:keys [::db/conn] :as cfg} file]
-  (->> (files/get-file-libraries conn (:id file))
-       (into [file] (map (fn [{:keys [id]}]
-                           (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)
-                                     pmap/*tracked* nil]
-                             ;; We do not resolve the objects maps here
-                             ;; because there is a lower probability that all
-                             ;; shapes needed to be loded into memory, so we
-                             ;; leeave it on lazy status
-                             (-> (files/get-file cfg id :migrate? false)
-                                 (update :data feat.fdata/process-pointers deref) ; ensure all pointers resolved
-                                 (update :data feat.fdata/process-objects (partial into {}))
-                                 (fmg/migrate-file))))))
-       (d/index-by :id)))
+    (apply update-fn cfg file args)))
 
 (defn- soft-validate-file-schema!
   [file]
@@ -409,24 +380,20 @@
       (l/error :hint "file schema validation error" :cause cause))))
 
 (defn- soft-validate-file!
-  [file libs]
+  [file libs changes]
   (try
-    (val/validate-file! file libs)
+    (val/validate-file-affected! file libs changes)
     (catch Throwable cause
       (l/error :hint "file validation error"
                :cause cause))))
 
-
 (defn- process-changes-and-validate
   [cfg file changes skip-validate]
-  (let [;; WARNING: this ruins performance; maybe we need to find
-        ;; some other way to do general validation
-        libs
+  (let [libs
         (when (and (or (contains? cf/flags :file-validation)
                        (contains? cf/flags :soft-file-validation))
                    (not skip-validate))
-          (get-file-libraries cfg file))
-
+          (bfc/get-resolved-file-libraries cfg file))
 
         ;; The main purpose of this atom is provide a contextual state
         ;; for the changes subsystem where optionally some hints can
@@ -450,14 +417,14 @@
 
     (binding [pmap/*tracked* nil]
       (when (contains? cf/flags :soft-file-validation)
-        (soft-validate-file! file libs))
+        (soft-validate-file! file libs changes))
 
       (when (contains? cf/flags :soft-file-schema-validation)
         (soft-validate-file-schema! file))
 
       (when (and (contains? cf/flags :file-validation)
                  (not skip-validate))
-        (val/validate-file! file libs))
+        (val/validate-file-affected! file libs changes))
 
       (when (and (contains? cf/flags :file-schema-validation)
                  (not skip-validate))
@@ -471,11 +438,11 @@
   (when (contains? cf/flags :auto-file-snapshot)
     (let [freq    (or (cf/get :auto-file-snapshot-every) 20)
           timeout (or (cf/get :auto-file-snapshot-timeout)
-                      (dt/duration {:hours 1}))]
+                      (ct/duration {:hours 1}))]
 
       (or (= 1 freq)
           (zero? (mod revn freq))
-          (> (inst-ms (dt/diff modified-at (dt/now)))
+          (> (inst-ms (ct/diff modified-at (ct/now)))
              (inst-ms timeout))))))
 
 (def ^:private sql:lagged-changes
@@ -489,11 +456,12 @@
 (defn- get-lagged-changes
   [conn {:keys [id revn] :as params}]
   (->> (db/exec! conn [sql:lagged-changes id revn])
-       (map files/decode-row)
-       (vec)))
+       (filter :changes)
+       (mapv (fn [row]
+               (update row :changes blob/decode)))))
 
 (defn- send-notifications!
-  [cfg {:keys [file team changes session-id] :as params}]
+  [cfg {:keys [team changes session-id] :as params} file]
   (let [lchanges (filter library-change? changes)
         msgbus   (::mbus/msgbus cfg)]
 
@@ -515,5 +483,5 @@
                            :file-id (:id file)
                            :session-id session-id
                            :revn (:revn file)
-                           :modified-at (dt/now)
+                           :modified-at (ct/now)
                            :changes lchanges}))))

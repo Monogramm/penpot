@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.geom.shapes.intersect
   (:require
@@ -13,9 +13,9 @@
    [app.common.geom.point :as gpt]
    [app.common.geom.rect :as grc]
    [app.common.geom.shapes.common :as gco]
-   [app.common.geom.shapes.path :as gpp]
    [app.common.geom.shapes.text :as gte]
-   [app.common.math :as mth]))
+   [app.common.math :as mth]
+   [app.common.types.path.segment :as path.segm]))
 
 (defn orientation
   "Given three ordered points gives the orientation
@@ -55,16 +55,16 @@
      (and (not= o1 o2) (not= o3 o4))
 
      ;; p1, q1 and p2 colinear and p2 lies on p1q1
-     (and (= o1 :coplanar) ^boolean (on-segment? p2 p1 q1))
+     (and (= o1 ::coplanar) ^boolean (on-segment? p2 p1 q1))
 
      ;; p1, q1 and q2 colinear and q2 lies on p1q1
-     (and (= o2 :coplanar) ^boolean (on-segment? q2 p1 q1))
+     (and (= o2 ::coplanar) ^boolean (on-segment? q2 p1 q1))
 
      ;; p2, q2 and p1 colinear and p1 lies on p2q2
-     (and (= o3 :coplanar) ^boolean (on-segment? p1 p2 q2))
+     (and (= o3 ::coplanar) ^boolean (on-segment? p1 p2 q2))
 
      ;; p2, q2 and p1 colinear and q1 lies on p2q2
-     (and (= o4 :coplanar) ^boolean (on-segment? q1 p2 q2)))))
+     (and (= o4 ::coplanar) ^boolean (on-segment? q1 p2 q2)))))
 
 (defn points->lines
   "Given a set of points for a polygon will return
@@ -186,7 +186,7 @@
           rect-lines   (points->lines rect-points)
           path-lines   (if simple?
                          (points->lines (:points shape))
-                         (gpp/path->lines shape))
+                         (path.segm/path->lines shape))
           start-point (-> shape :content (first) :params (gpt/point))]
 
       (or (intersects-lines? rect-lines path-lines)
@@ -315,7 +315,8 @@
                    (update :height + (* 2 swidth)))]
     (or (not shape)
         (cond
-          (cfh/path-shape? shape)
+          (or (cfh/path-shape? shape)
+              (cfh/bool-shape? shape))
           (and (overlaps-rect-points? rect (:points shape))
                (overlaps-path? shape rect true))
 
@@ -354,11 +355,15 @@
 
 (defn has-point?
   [shape point]
-  (if (or ^boolean (cfh/path-shape? shape)
-          ^boolean (cfh/bool-shape? shape)
-          ^boolean (cfh/circle-shape? shape))
-    (slow-has-point? shape point)
-    (fast-has-point? shape point)))
+  (let [rotation (dm/get-prop shape :rotation)]
+    ;; Rotated shapes don't match their axis-aligned box, so use the polygon test.
+    (if (or ^boolean (cfh/path-shape? shape)
+            ^boolean (cfh/bool-shape? shape)
+            ^boolean (cfh/circle-shape? shape)
+            (and (some? rotation)
+                 (not ^boolean (mth/almost-zero? rotation))))
+      (slow-has-point? shape point)
+      (fast-has-point? shape point))))
 
 (defn rect-contains-shape?
   [rect shape]
@@ -368,7 +373,7 @@
 
 
 (defn line-line-intersect
-  "Calculates the interesection point for two lines given by the points a-b and b-c"
+  "Calculates the intersection point for two lines given by the points a-b and b-c"
   [a b c d]
 
   (let [;; Line equation representation: ax + by + c = 0

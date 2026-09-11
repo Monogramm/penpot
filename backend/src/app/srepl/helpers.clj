@@ -2,23 +2,20 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.srepl.helpers
   "A  main namespace for server repl."
   (:refer-clojure :exclude [parse-uuid])
   (:require
+   [app.binfile.common :as bfc]
    [app.common.data :as d]
    [app.common.files.migrations :as fmg]
    [app.common.files.validate :as cfv]
+   [app.common.time :as ct]
    [app.db :as db]
-   [app.features.components-v2 :as feat.comp-v2]
-   [app.features.fdata :as feat.fdata]
-   [app.main :as main]
-   [app.rpc.commands.files :as files]
-   [app.rpc.commands.files-snapshot :as fsnap]
-   [app.util.blob :as blob]
-   [app.util.pointer-map :as pmap]))
+   [app.features.file-snapshots :as fsnap]
+   [app.system :as sys]))
 
 (def ^:dynamic *system* nil)
 
@@ -26,6 +23,10 @@
   [& params]
   (locking println
     (apply println params)))
+
+(defn get-current-system
+  []
+  *system*)
 
 (defn parse-uuid
   [v]
@@ -35,49 +36,18 @@
 
 (defn get-file
   "Get the migrated data of one file."
-  ([id] (get-file (or *system* main/system) id nil))
-  ([system id & {:keys [raw?] :as opts}]
+  ([id]
+   (get-file (or *system* sys/system) id))
+  ([system id]
+   (db/run! system bfc/get-file id)))
+
+(defn get-raw-file
+  "Get the migrated data of one file."
+  ([id] (get-raw-file (or *system* sys/system) id))
+  ([system id]
    (db/run! system
             (fn [system]
-              (let [file (files/get-file system id :migrate? false)]
-                (if raw?
-                  file
-                  (binding [pmap/*load-fn* (partial feat.fdata/load-pointer system id)]
-                    (-> file
-                        (update :data feat.fdata/process-pointers deref)
-                        (update :data feat.fdata/process-objects (partial into {}))
-                        (fmg/migrate-file)))))))))
-
-(defn update-file!
-  [system {:keys [id] :as file}]
-  (let [conn (db/get-connection system)
-        file (if (contains? (:features file) "fdata/objects-map")
-               (feat.fdata/enable-objects-map file)
-               file)
-
-        file (if (contains? (:features file) "fdata/pointer-map")
-               (binding [pmap/*tracked* (pmap/create-tracked)]
-                 (let [file (feat.fdata/enable-pointer-map file)]
-                   (feat.fdata/persist-pointers! system id)
-                   file))
-               file)
-
-        file (-> file
-                 (update :features db/encode-pgarray conn "text")
-                 (update :data blob/encode))]
-
-    (db/update! conn :file
-                {:revn (:revn file)
-                 :data (:data file)
-                 :version (:version file)
-                 :features (:features file)
-                 :deleted-at (:deleted-at file)
-                 :created-at (:created-at file)
-                 :modified-at (:modified-at file)
-                 :data-backend nil
-                 :data-ref-id nil
-                 :has-media-trimmed false}
-                {:id (:id file)})))
+              (bfc/get-file system id :decode? false)))))
 
 (defn update-team!
   [system {:keys [id] :as team}]
@@ -90,13 +60,26 @@
                 {:id id})
     team))
 
-(defn get-raw-file
-  "Get the migrated data of one file."
-  ([id] (get-raw-file (or *system* main/system) id))
-  ([system id]
-   (db/run! system
-            (fn [system]
-              (files/get-file system id :migrate? false)))))
+(def ^:private sql:get-and-lock-team-files
+  "SELECT f.id
+     FROM file AS f
+     JOIN project AS p ON (p.id = f.project_id)
+    WHERE p.team_id = ?
+      AND p.deleted_at IS NULL
+      AND f.deleted_at IS NULL
+      FOR UPDATE")
+
+(defn get-team
+  [conn team-id]
+  (-> (db/get conn :team {:id team-id}
+              {::db/remove-deleted false
+               ::db/check-deleted false})
+      (update :features db/decode-pgarray #{})))
+
+(defn get-and-lock-team-files
+  [conn team-id]
+  (transduce (map :id) conj []
+             (db/plan conn [sql:get-and-lock-team-files team-id])))
 
 (defn reset-file-data!
   "Hardcode replace of the data of one file."
@@ -132,55 +115,72 @@
 (defn take-team-snapshot!
   [system team-id label]
   (let [conn (db/get-connection system)]
-    (->> (feat.comp-v2/get-and-lock-team-files conn team-id)
+    (->> (get-and-lock-team-files conn team-id)
          (reduce (fn [result file-id]
-                   (fsnap/create-file-snapshot! system nil file-id label)
-                   (inc result))
+                   (let [file (bfc/get-file system file-id :realize? true :lock-for-update? true)]
+                     (fsnap/create! system file
+                                    {:label label
+                                     :created-by "admin"})
+                     (inc result)))
                  0))))
 
 (defn restore-team-snapshot!
   [system team-id label]
   (let [conn (db/get-connection system)
-        ids  (->> (feat.comp-v2/get-and-lock-team-files conn team-id)
+        ids  (->> (get-and-lock-team-files conn team-id)
                   (into #{}))
 
         snap (search-file-snapshots conn ids label)
-
-        ids' (into #{} (map :file-id) snap)
-        team (-> (feat.comp-v2/get-team conn team-id)
-                 (update :features disj "components/v2"))]
+        ids' (into #{} (map :file-id) snap)]
 
     (when (not= ids ids')
       (throw (RuntimeException. "no uniform snapshot available")))
 
-    (feat.comp-v2/update-team! conn team)
     (reduce (fn [result {:keys [file-id id]}]
-              (fsnap/restore-file-snapshot! system file-id id)
+              (fsnap/restore! system file-id id)
               (inc result))
             0
             snap)))
 
+(defn mark-migrated!
+  "A helper that inserts an entry in the file migration table for make
+  file migrated for the specified migration label."
+  [system file-id label]
+  (db/insert! system :file-migration
+              {:file-id file-id
+               :name label}
+              {::db/return-keys false}))
+
 (defn process-file!
-  [system file-id update-fn & {:keys [label validate? with-libraries?] :or {validate? true} :as opts}]
+  [system file-id update-fn
+   & {:keys [::profile-id ::snapshot-label ::validate? ::with-libraries?]
+      :or {validate? true} :as opts}]
+  (let [file  (bfc/get-file system file-id
+                            :lock-for-update? true
+                            :realize? true)
 
-  (when (string? label)
-    (fsnap/create-file-snapshot! system nil file-id label))
-
-  (let [conn  (db/get-connection system)
-        file  (get-file system file-id opts)
         libs  (when with-libraries?
-                (->> (files/get-file-libraries conn file-id)
-                     (into [file] (map (fn [{:keys [id]}]
-                                         (get-file system id))))
-                     (d/index-by :id)))
+                (bfc/get-resolved-file-libraries system file))
 
-        file' (if with-libraries?
-                (update-fn file libs opts)
-                (update-fn file opts))]
+        file' (when file
+                (if with-libraries?
+                  (update-fn file libs opts)
+                  (update-fn file opts)))]
 
     (when (and (some? file')
-               (not (identical? file file')))
-      (when validate? (cfv/validate-file-schema! file'))
+               (or (fmg/migrated? file)
+                   (not (identical? file file'))))
+
+      (when validate?
+        (cfv/validate-file-schema! file'))
+
+      (when (string? snapshot-label)
+        (fsnap/create! system file
+                       {:label snapshot-label
+                        :profile-id profile-id
+                        :deleted-at (ct/in-future {:days 30})
+                        :created-by "system"}))
+
       (let [file' (update file' :revn inc)]
-        (update-file! system file')
+        (bfc/update-file! system file' opts)
         true))))

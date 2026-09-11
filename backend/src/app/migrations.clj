@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.migrations
   (:require
@@ -10,6 +10,7 @@
    [app.common.logging :as l]
    [app.db :as db]
    [app.migrations.clj.migration-0023 :as mg0023]
+   [app.migrations.clj.migration-0145 :as mg0145]
    [app.util.migrations :as mg]
    [integrant.core :as ig]))
 
@@ -429,7 +430,79 @@
     :fn (mg/resource "app/migrations/sql/0135-mod-team-invitation-table.sql")}
 
    {:name "0136-mod-comments-mentions.sql"
-    :fn (mg/resource "app/migrations/sql/0136-mod-comments-mentions.sql")}])
+    :fn (mg/resource "app/migrations/sql/0136-mod-comments-mentions.sql")}
+
+   {:name "0137-add-file-migration-table.sql"
+    :fn (mg/resource "app/migrations/sql/0137-add-file-migration-table.sql")}
+
+   {:name "0138-mod-file-data-fragment-table.sql"
+    :fn (mg/resource "app/migrations/sql/0138-mod-file-data-fragment-table.sql")}
+
+   {:name "0139-mod-file-change-table.sql"
+    :fn (mg/resource "app/migrations/sql/0139-mod-file-change-table.sql")}
+
+   {:name "0140-mod-file-change-table.sql"
+    :fn (mg/resource "app/migrations/sql/0140-mod-file-change-table.sql")}
+
+   {:name "0140-add-locked-by-column-to-file-change-table"
+    :fn (mg/resource "app/migrations/sql/0140-add-locked-by-column-to-file-change-table.sql")}
+
+   {:name "0141-add-idx-to-file-library-rel"
+    :fn (mg/resource "app/migrations/sql/0141-add-idx-to-file-library-rel.sql")}
+
+   {:name "0141-add-file-data-table.sql"
+    :fn (mg/resource "app/migrations/sql/0141-add-file-data-table.sql")}
+
+   {:name "0142-add-sso-provider-table"
+    :fn (mg/resource "app/migrations/sql/0142-add-sso-provider-table.sql")}
+
+   {:name "0143-http-session-v2-table"
+    :fn (mg/resource "app/migrations/sql/0143-add-http-session-v2-table.sql")}
+
+   {:name "0144-mod-server-error-report-table"
+    :fn (mg/resource "app/migrations/sql/0144-mod-server-error-report-table.sql")}
+
+   {:name "0145-fix-plugins-uri-on-profile"
+    :fn mg0145/migrate}
+
+   {:name "0145-mod-audit-log-table"
+    :fn (mg/resource "app/migrations/sql/0145-mod-audit-log-table.sql")}
+
+   {:name "0146-mod-audit-log-table"
+    :fn (mg/resource "app/migrations/sql/0146-mod-audit-log-table.sql")}
+
+   {:name "0146-mod-access-token-table"
+    :fn (mg/resource "app/migrations/sql/0146-mod-access-token-table.sql")}
+
+   {:name "0147-mod-team-invitation-table"
+    :fn (mg/resource "app/migrations/sql/0147-mod-team-invitation-table.sql")}
+
+   {:name "0147-add-upload-session-table"
+    :fn (mg/resource "app/migrations/sql/0147-add-upload-session-table.sql")}
+
+   {:name "0148-add-variant-name-team-font-variant"
+    :fn (mg/resource "app/migrations/sql/0148-add-variant-name-team-font-variant.sql")}
+
+   {:name "0149-mod-file-library-rel-synced-at"
+    :fn (mg/resource "app/migrations/sql/0149-mod-file-library-rel-synced-at.sql")}
+
+   {:name "0150-mod-http-session-v2"
+    :fn (mg/resource "app/migrations/sql/0150-mod-http-session-v2.sql")}
+
+   {:name "0150-mod-storage-object-table"
+    :fn (mg/resource "app/migrations/sql/0150-mod-storage-object-table.sql")}
+
+   {:name "0151-mod-file-tagged-object-thumbnail-table"
+    :fn (mg/resource "app/migrations/sql/0151-mod-file-tagged-object-thumbnail-table.sql")}
+
+   {:name "0152-improve-uuid-defaults-and-drop-extension"
+    :fn (mg/resource "app/migrations/sql/0152-improve-uuid-defaults-and-drop-extension.sql")}
+
+   {:name "0152-rename-version-and-add-indexes-to-server-error-report"
+    :fn (mg/resource "app/migrations/sql/0152-rename-version-and-add-indexes-to-server-error-report.sql")}
+
+   {:name "0153-add-storage-object-status-and-deletion-attempts"
+    :fn (mg/resource "app/migrations/sql/0153-add-storage-object-status-and-deletion-attempts.sql")}])
 
 (defn apply-migrations!
   [pool name migrations]

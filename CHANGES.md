@@ -1,6 +1,1090 @@
 # CHANGELOG
 
-## 2.5.0 (Unreleased)
+## 2.19.0 (Unreleased)
+
+### :rocket: Epics and highlights
+
+- Add configurable keyboard shortcuts [#9924](https://github.com/penpot/penpot/issues/9924) (PR: [#10237](https://github.com/penpot/penpot/pull/10237))
+- Improve path operations and edition in the path editor [#10889](https://github.com/penpot/penpot/issues/10889) (PR: [#10807](https://github.com/penpot/penpot/pull/10807))
+- Add auto-linking of libraries during import based on slugified name [#9263](https://github.com/penpot/penpot/issues/9263) (PR: [#9958](https://github.com/penpot/penpot/pull/9958))
+
+### :bug: Bugs fixed
+
+- Fix copying text from Penpot to the clipboard not working on MS Windows [#11303](https://github.com/penpot/penpot/issues/11303) (PR: [#11305](https://github.com/penpot/penpot/pull/11305))
+- Fix performance issue with WebGL render [#11240](https://github.com/penpot/penpot/issues/11240) (PR: [#11259](https://github.com/penpot/penpot/pull/11259))
+- Fix comment bubbles rendering on top of workspace dropdown menus [#10283](https://github.com/penpot/penpot/issues/10283) (PR: [#11201](https://github.com/penpot/penpot/pull/11201))
+- Fix inconsistent Mixed label in blur options and numeric inputs across 24 locales (by @filipsajdak) [#11148](https://github.com/penpot/penpot/issues/11148) (PR: [#11151](https://github.com/penpot/penpot/pull/11151))
+- Fix overlay shifting left when shown with top-center alignment in viewer prototype (by @filipsajdak) [#9048](https://github.com/penpot/penpot/issues/9048) (PR: [#10454](https://github.com/penpot/penpot/pull/10454))
+- Fix internal error when clicking the Copy button on the Access Token page (by @0xTHAC0) [#8496](https://github.com/penpot/penpot/issues/8496) (PR: [#11156](https://github.com/penpot/penpot/pull/11156))
+- Fix `disable-registration` flag not preventing non-users from creating accounts in the share prototypes page (by @0xTHAC0) [#5164](https://github.com/penpot/penpot/issues/5164) (PR: [#11199](https://github.com/penpot/penpot/pull/11199))
+- Fix "Cannot assign to read only property 'toString'" error during text resize (by @makesomethingshit) [#10168](https://github.com/penpot/penpot/issues/10168) (PR: [#11521](https://github.com/penpot/penpot/pull/11521))
+- Fix plugin postMessage channel broadcasting messages to all plugins without origin validation [#10968](https://github.com/penpot/penpot/issues/10968) (PR: [#10970](https://github.com/penpot/penpot/pull/10970))
+- Fix MCP plugin page navigation while connected crashing the workspace (by @makesomethingshit) [#11001](https://github.com/penpot/penpot/issues/11001) (PR: [#11521](https://github.com/penpot/penpot/pull/11521))
+- Fix shortcut search never matching on key combination, only on action label [#11003](https://github.com/penpot/penpot/issues/11003) (PR: [#11081](https://github.com/penpot/penpot/pull/11081))
+- Fix Shift + special character key shortcut capturing the shifted character instead of the physical key [#11004](https://github.com/penpot/penpot/issues/11004) (PR: [#11081](https://github.com/penpot/penpot/pull/11081))
+- Fix reassigning the "Paste" shortcut not updating the UI or taking effect in the workspace [#11005](https://github.com/penpot/penpot/issues/11005) (PR: [#11081](https://github.com/penpot/penpot/pull/11081))
+- Fix font-size dropdown clipping multi-digit values in Firefox (by @0xTHAC0) [#11008](https://github.com/penpot/penpot/issues/11008) (PR: [#11162](https://github.com/penpot/penpot/pull/11162), [#11500](https://github.com/penpot/penpot/pull/11500))
+- Fix exporting shortcuts producing an invalid "toggle-fullscreen" entry that breaks re-import [#11032](https://github.com/penpot/penpot/issues/11032) (PR: [#11081](https://github.com/penpot/penpot/pull/11081))
+- Fix plugin API missing permission checks in tokens, shapes, variants, flows, layouts, and user identity [#11137](https://github.com/penpot/penpot/issues/11137) (PR: [#11139](https://github.com/penpot/penpot/pull/11139))
+- Fix library summary Redis cache keys omitting the tenant [#11407](https://github.com/penpot/penpot/issues/11407) (PR: [#11408](https://github.com/penpot/penpot/pull/11408))
+- Fix active theme name in the inspect tab displaying an id instead of the name [#11437](https://github.com/penpot/penpot/issues/11437) (PR: [#11439](https://github.com/penpot/penpot/pull/11439))
+- Fix triple-click not selecting the full line in text editor v3 [#11483](https://github.com/penpot/penpot/issues/11483) (PR: [#11493](https://github.com/penpot/penpot/pull/11493))
+- Fix pasted text losing formatting on last lines after resizing and adding new lines from the top [#11501](https://github.com/penpot/penpot/issues/11501) (PR: [#11503](https://github.com/penpot/penpot/pull/11503))
+- Fix variant property dropdown appearing empty and throwing an internal error when the component has no sibling variants [#11524](https://github.com/penpot/penpot/issues/11524) (PR: [#11499](https://github.com/penpot/penpot/pull/11499))
+
+### :sparkles: New features & Enhancements
+
+- Make backend storage resilient to interrupted writes, missing files and stalled cleanup [#11344](https://github.com/penpot/penpot/issues/11344) (PR: [#11345](https://github.com/penpot/penpot/pull/11345))
+- Implement RTL support in the text editor v3 [#11262](https://github.com/penpot/penpot/issues/11262)
+- Improve path operations and edition in the path editor [#10889](https://github.com/penpot/penpot/issues/10889) (PR: [#10807](https://github.com/penpot/penpot/pull/10807))
+- Add configurable keyboard shortcuts [#9924](https://github.com/penpot/penpot/issues/9924) (PR: [#10237](https://github.com/penpot/penpot/pull/10237))
+- Add auto-linking of libraries during import based on slugified name [#9263](https://github.com/penpot/penpot/issues/9263) (PR: [#9958](https://github.com/penpot/penpot/pull/9958))
+- Add support for internal libraries and file sync for Design Tokens [#9334](https://github.com/penpot/penpot/issues/9334)
+- Warn self-hosted users when their Penpot version is outdated and surface what they're missing [#10497](https://github.com/penpot/penpot/issues/10497) (PR: [#11411](https://github.com/penpot/penpot/pull/11411))
+- Add dedicated RPC methods for plugin registry operations with permission validation [#10952](https://github.com/penpot/penpot/issues/10952) (PR: [#10957](https://github.com/penpot/penpot/pull/10957))
+- Document MCP and internal resolver environment variables (by @ShreyashAgare26) [#11318](https://github.com/penpot/penpot/issues/11318) (PR: [#11572](https://github.com/penpot/penpot/pull/11572))
+- Add tokens source indicator to assets tab [#11365](https://github.com/penpot/penpot/issues/11365) (PR: [#11439](https://github.com/penpot/penpot/pull/11439))
+- Export multiple fills to SVG [#11466](https://github.com/penpot/penpot/issues/11466) (PR: [#11467](https://github.com/penpot/penpot/pull/11467))
+- Add Penpot-specific board size presets (file thumbnail, template cover, plugin icon/cover) [#11561](https://github.com/penpot/penpot/issues/11561) (PR: [#11565](https://github.com/penpot/penpot/pull/11565))
+
+## 2.18.0 (Unreleased)
+
+### :rocket: Epics and highlights
+
+- Group toolbar drawing tools into shape and free-draw flyouts [#9316](https://github.com/penpot/penpot/issues/9316) (PR: [#9480](https://github.com/penpot/penpot/pull/9480), [#10354](https://github.com/penpot/penpot/pull/10354))
+- Add dedicated Line and Arrow drawing tools (by @davidv399) [#9145](https://github.com/penpot/penpot/issues/9145) (PR: [#9146](https://github.com/penpot/penpot/pull/9146))
+- Show and manage comments while designing in the workspace [#10239](https://github.com/penpot/penpot/issues/10239) (PR: [#10275](https://github.com/penpot/penpot/pull/10275))
+
+### :bug: Bugs fixed
+
+- Fix MCP integration hanging when the Penpot tab is backgrounded or frozen by the browser [#10323](https://github.com/penpot/penpot/issues/10323) (PR: [#10392](https://github.com/penpot/penpot/pull/10392))
+- Fix synced component copy not reflowing children after spacing token update [#9892](https://github.com/penpot/penpot/issues/9892)
+- Fix spacebar activating pan mode while typing a comment (by @Krishcode264) [#10285](https://github.com/penpot/penpot/issues/10285) (PR: [#10287](https://github.com/penpot/penpot/pull/10287))
+- Fix plugin API rejecting negative letterSpacing values (by @filipsajdak) [#9780](https://github.com/penpot/penpot/issues/9780) (PR: [#10257](https://github.com/penpot/penpot/pull/10257))
+- Fix plugin API addTheme calls failing with the signature shown in the high-level overview [#10074](https://github.com/penpot/penpot/issues/10074) (PR: [#10359](https://github.com/penpot/penpot/pull/10359))
+- Fix empty text shape not being deleted on editor exit [#10540](https://github.com/penpot/penpot/issues/10540) (PR: [#10541](https://github.com/penpot/penpot/pull/10541))
+- Fix broken token pills showing wrong default state when not selected [#10524](https://github.com/penpot/penpot/issues/10524) (PR: [#10535](https://github.com/penpot/penpot/pull/10535))
+- Fix Chinese (zh-CN) translation showing wrong label for Intersection in board path menu (by @sawirricardo) [#10346](https://github.com/penpot/penpot/issues/10346) (PR: [#10381](https://github.com/penpot/penpot/pull/10381))
+- Fix invalid formulas being accepted in numeric inputs (by @AKnassa) [#9581](https://github.com/penpot/penpot/issues/9581) (PR: [#10659](https://github.com/penpot/penpot/pull/10659))
+- Fix radial gradient handles blowing up in size when rotated on ellipses (by @AKnassa) [#10069](https://github.com/penpot/penpot/issues/10069) (PR: [#10666](https://github.com/penpot/penpot/pull/10666))
+- Fix plugin API validation errors being too generic to diagnose the failure (by @AKnassa) [#10072](https://github.com/penpot/penpot/issues/10072) (PR: [#10667](https://github.com/penpot/penpot/pull/10667))
+- Fix crash with referential integrity error when deleting a component inside a grid (by @Alotor) [#10101](https://github.com/penpot/penpot/issues/10101) (PR: [#10956](https://github.com/penpot/penpot/pull/10956))
+- Fix component copies not preserving rotation when the main component has changes [#10109](https://github.com/penpot/penpot/issues/10109) (PR: [#10574](https://github.com/penpot/penpot/pull/10574))
+- Fix text width and height staying stale after setting growType in the plugin API [#10207](https://github.com/penpot/penpot/issues/10207) (PR: [#9898](https://github.com/penpot/penpot/pull/9898))
+- Fix padding not painted until expanding the 4-sides padding option [#10278](https://github.com/penpot/penpot/issues/10278) (PR: [#10602](https://github.com/penpot/penpot/pull/10602))
+- Fix files with custom fonts breaking with a referential integrity error when moved between teams (by @filipsajdak) [#10496](https://github.com/penpot/penpot/issues/10496) (PR: [#10837](https://github.com/penpot/penpot/pull/10837))
+- Fix clicking overlapping comment bubbles zooming to 20000% without showing the comments [#10526](https://github.com/penpot/penpot/issues/10526) (PR: [#10543](https://github.com/penpot/penpot/pull/10543))
+- Fix user menu subsections in the dashboard not closing when hovering away from the parent option (by @AKnassa) [#10549](https://github.com/penpot/penpot/issues/10549) (PR: [#10639](https://github.com/penpot/penpot/pull/10639))
+- Fix self-hosted env-generated config.js being cached for 7 days so PENPOT_FLAGS changes did not reach already-cached browsers (by @filipsajdak) [#10556](https://github.com/penpot/penpot/issues/10556) (PR: [#11146](https://github.com/penpot/penpot/pull/11146))
+- Fix color of selected text in light theme [#10570](https://github.com/penpot/penpot/issues/10570) (PR: [#10614](https://github.com/penpot/penpot/pull/10614))
+- Fix margin input order being inconsistent with padding inputs and between collapsed and expanded states [#10578](https://github.com/penpot/penpot/issues/10578) (PR: [#10797](https://github.com/penpot/penpot/pull/10797))
+- Fix uncaught DOMException when writing image/svg+xml content to the clipboard (by @AKnassa) [#10596](https://github.com/penpot/penpot/issues/10596) (PR: [#10663](https://github.com/penpot/penpot/pull/10663))
+- Fix tick icons not aligned in the font selector [#10597](https://github.com/penpot/penpot/issues/10597) (PR: [#10774](https://github.com/penpot/penpot/pull/10774))
+- Fix incorrect padding values when multiple shapes are selected [#10598](https://github.com/penpot/penpot/issues/10598) (PR: [#10602](https://github.com/penpot/penpot/pull/10602))
+- Fix integrity errors related to variants not being repaired [#10606](https://github.com/penpot/penpot/issues/10606) (PR: [#10768](https://github.com/penpot/penpot/pull/10768))
+- Fix changing password showing 'Password should be at least 8 characters' error on the old password field (by @AKnassa) [#10626](https://github.com/penpot/penpot/issues/10626) (PR: [#10661](https://github.com/penpot/penpot/pull/10661))
+- Fix stroke caps disappearing when dragging [#10633](https://github.com/penpot/penpot/issues/10633) (PR: [#10634](https://github.com/penpot/penpot/pull/10634))
+- Fix layout padding being saved as string after invalid input in multi-selection, causing persistence errors (by @niwinz) [#10638](https://github.com/penpot/penpot/issues/10638) (PR: [#10758](https://github.com/penpot/penpot/pull/10758))
+- Fix inconsistent theme handling between Penpot and plugins [#10676](https://github.com/penpot/penpot/issues/10676) (PR: [#10677](https://github.com/penpot/penpot/pull/10677))
+- Fix image stroke (strokeImage) support missing in the plugin API Stroke interface [#10682](https://github.com/penpot/penpot/issues/10682) (PR: [#10683](https://github.com/penpot/penpot/pull/10683))
+- Fix SVG images not working as fill in the WebGL renderer [#10705](https://github.com/penpot/penpot/issues/10705) (PR: [#10707](https://github.com/penpot/penpot/pull/10707))
+- Fix background blur not working on text shapes [#10706](https://github.com/penpot/penpot/issues/10706) (PR: [#10712](https://github.com/penpot/penpot/pull/10712))
+- Fix background blur not applying on strokes [#10713](https://github.com/penpot/penpot/issues/10713) (PR: [#10716](https://github.com/penpot/penpot/pull/10716))
+- Fix text shape with empty content breaking workspace updates [#10725](https://github.com/penpot/penpot/issues/10725) (PR: [#10731](https://github.com/penpot/penpot/pull/10731))
+- Fix missing SVG option in the file filters when adding an image fill (by @LuBoys) [#10756](https://github.com/penpot/penpot/issues/10756) (PR: [#10771](https://github.com/penpot/penpot/pull/10771))
+- Update onboarding image [#10779](https://github.com/penpot/penpot/issues/10779) (PR: [#10783](https://github.com/penpot/penpot/pull/10783))
+- Fix main toolbar overlapping the grid edition bar [#10788](https://github.com/penpot/penpot/issues/10788) (PR: [#10789](https://github.com/penpot/penpot/pull/10789))
+- Fix WASM renderer panic when the WebGL context is restored mid-reload [#10810](https://github.com/penpot/penpot/issues/10810) (PR: [#10824](https://github.com/penpot/penpot/pull/10824))
+- Fix nginx frontend forwarding the client Host header to backend/exporter, breaking Istio strict mTLS routing (by @yamila-moreno) [#10835](https://github.com/penpot/penpot/issues/10835) (PR: [#11233](https://github.com/penpot/penpot/pull/11233))
+- Fix tutorial templates with components causing errors [#10839](https://github.com/penpot/penpot/issues/10839)
+- Fix plugin 'Try out' flow crashing when projects have not loaded yet [#10858](https://github.com/penpot/penpot/issues/10858) (PR: [#10859](https://github.com/penpot/penpot/pull/10859))
+- Fix collapsed Fill color section on the design panel for new texts [#10860](https://github.com/penpot/penpot/issues/10860) (PR: [#10972](https://github.com/penpot/penpot/pull/10972))
+- Fix grid item date tooltip in the project view showing 'Will be deleted' instead of creation date (by @0xTHAC0) [#10873](https://github.com/penpot/penpot/issues/10873) (PR: [#11161](https://github.com/penpot/penpot/pull/11161))
+- Merge stop and start measurement shortcut to match current behavior [#10884](https://github.com/penpot/penpot/issues/10884) (PR: [#10906](https://github.com/penpot/penpot/pull/10906))
+- Fix shape size badge displayed twice when a user with Viewer permissions selects a shape [#10893](https://github.com/penpot/penpot/issues/10893) (PR: [#10985](https://github.com/penpot/penpot/pull/10985))
+- Fix main menu being covered by the toolbar [#10902](https://github.com/penpot/penpot/issues/10902) (PR: [#10926](https://github.com/penpot/penpot/pull/10926))
+- Fix font family typography asset persisting across files in newly created text layers [#10925](https://github.com/penpot/penpot/issues/10925) (PR: [#11134](https://github.com/penpot/penpot/pull/11134))
+- Fix error raised when editing justified text [#10944](https://github.com/penpot/penpot/issues/10944) (PR: [#10945](https://github.com/penpot/penpot/pull/10945))
+- Fix MCP WebSocket proxy failing after penpot-mcp container restarts due to stale nginx DNS resolution (by @780Farva) [#10946](https://github.com/penpot/penpot/issues/10946) (PR: [#10947](https://github.com/penpot/penpot/pull/10947))
+- Fix verification email address being unreadable due to low-contrast text on the register success page [#10950](https://github.com/penpot/penpot/issues/10950) (PR: [#10965](https://github.com/penpot/penpot/pull/10965))
+- Fix image swatches displaying a wrong format in the color picker list view [#10951](https://github.com/penpot/penpot/issues/10951) (PR: [#10975](https://github.com/penpot/penpot/pull/10975))
+- Fix text editor crashing when dropping dragged text after selecting all content [#10954](https://github.com/penpot/penpot/issues/10954) (PR: [#10959](https://github.com/penpot/penpot/pull/10959))
+- Fix MCP tokens being usable as API access tokens [#10960](https://github.com/penpot/penpot/issues/10960) (PR: [#10962](https://github.com/penpot/penpot/pull/10962))
+- Add size limit and rate limiting to the send-user-feedback endpoint [#10979](https://github.com/penpot/penpot/issues/10979) (PR: [#10990](https://github.com/penpot/penpot/pull/10990))
+- Fix main menu not keeping alignment when the left sidebar is expanded [#10981](https://github.com/penpot/penpot/issues/10981) (PR: [#10986](https://github.com/penpot/penpot/pull/10986))
+- Fix update-profile-props RPC method accepting undocumented keys [#10991](https://github.com/penpot/penpot/issues/10991) (PR: [#10992](https://github.com/penpot/penpot/pull/10992))
+- Fix import-binfile RPC method schema accepting a file-id parameter [#10993](https://github.com/penpot/penpot/issues/10993) (PR: [#10994](https://github.com/penpot/penpot/pull/10994))
+- Fix assemble-chunks session lookup ignoring the profile-id scope [#11011](https://github.com/penpot/penpot/issues/11011) (PR: [#11012](https://github.com/penpot/penpot/pull/11012))
+- Validate font-id team ownership in create-font-variant [#11013](https://github.com/penpot/penpot/issues/11013) (PR: [#11014](https://github.com/penpot/penpot/pull/11014))
+- Validate team ownership on file library link endpoints [#11015](https://github.com/penpot/penpot/issues/11015) (PR: [#11016](https://github.com/penpot/penpot/pull/11016))
+- Limit object size allocation in the V1 binfile parser [#11017](https://github.com/penpot/penpot/issues/11017) (PR: [#11018](https://github.com/penpot/penpot/pull/11018))
+- Limit recursion depth in the Fressian reader [#11019](https://github.com/penpot/penpot/issues/11019) (PR: [#11020](https://github.com/penpot/penpot/pull/11020))
+- Limit concurrent imports in the import-binfile RPC method [#11023](https://github.com/penpot/penpot/issues/11023) (PR: [#11024](https://github.com/penpot/penpot/pull/11024))
+- Validate content-type on management upload endpoints [#11025](https://github.com/penpot/penpot/issues/11025) (PR: [#11026](https://github.com/penpot/penpot/pull/11026))
+- Fix webhook endpoints allowing unauthorized access via creator-id fallback [#11028](https://github.com/penpot/penpot/issues/11028) (PR: [#11029](https://github.com/penpot/penpot/pull/11029))
+- Escape markdown in user-controlled fields of Mattermost error notifications [#11033](https://github.com/penpot/penpot/issues/11033) (PR: [#11034](https://github.com/penpot/penpot/pull/11034))
+- Enforce file read permission check on asset endpoints [#11035](https://github.com/penpot/penpot/issues/11035) (PR: [#11036](https://github.com/penpot/penpot/pull/11036))
+- Add accumulated storage byte quota for media uploads [#11037](https://github.com/penpot/penpot/issues/11037) (PR: [#11038](https://github.com/penpot/penpot/pull/11038))
+- Add bounding box dimension limit to exports [#11041](https://github.com/penpot/penpot/issues/11041) (PR: [#11042](https://github.com/penpot/penpot/pull/11042))
+- Sanitize embedded scripts in SVG uploads [#11043](https://github.com/penpot/penpot/issues/11043) (PR: [#11044](https://github.com/penpot/penpot/pull/11044))
+- Fix duplicate file ID returning inconsistent error responses [#11045](https://github.com/penpot/penpot/issues/11045) (PR: [#11050](https://github.com/penpot/penpot/pull/11050))
+- Enforce permission checks in WebSocket subscription handlers [#11052](https://github.com/penpot/penpot/issues/11052) (PR: [#11054](https://github.com/penpot/penpot/pull/11054))
+- Fix 'something went wrong' popup when using incremental numerical input interaction [#11053](https://github.com/penpot/penpot/issues/11053) (PR: [#10794](https://github.com/penpot/penpot/pull/10794))
+- Enforce password complexity validation on the backend [#11055](https://github.com/penpot/penpot/issues/11055) (PR: [#11059](https://github.com/penpot/penpot/pull/11059))
+- Normalize string inputs before processing [#11060](https://github.com/penpot/penpot/issues/11060) (PR: [#11061](https://github.com/penpot/penpot/pull/11061))
+- Add cooldown to avoid sending duplicate invitation emails [#11062](https://github.com/penpot/penpot/issues/11062) (PR: [#11063](https://github.com/penpot/penpot/pull/11063))
+- Enable SSRF protection for organization SSO validation [#11064](https://github.com/penpot/penpot/issues/11064) (PR: [#11065](https://github.com/penpot/penpot/pull/11065))
+- Fix clone-file-media-object allowing to clone media objects from files without read access [#11087](https://github.com/penpot/penpot/issues/11087) (PR: [#11090](https://github.com/penpot/penpot/pull/11090))
+- Fix 404 error page logo not visible in dark mode [#11091](https://github.com/penpot/penpot/issues/11091) (PR: [#11167](https://github.com/penpot/penpot/pull/11167))
+- Fix incorrect permission handling when creating an invitation [#11098](https://github.com/penpot/penpot/issues/11098) (PR: [#11099](https://github.com/penpot/penpot/pull/11099))
+- Reject zero or negative total-chunks values in upload sessions [#11103](https://github.com/penpot/penpot/issues/11103) (PR: [#11104](https://github.com/penpot/penpot/pull/11104))
+- Fix import-binfile accepting unsupported version values without validation [#11105](https://github.com/penpot/penpot/issues/11105) (PR: [#11107](https://github.com/penpot/penpot/pull/11107))
+- Fix sessions remaining active on other devices after account deletion [#11114](https://github.com/penpot/penpot/issues/11114) (PR: [#11115](https://github.com/penpot/penpot/pull/11115))
+- Use random UUIDs for share link IDs instead of a predictable scheme [#11116](https://github.com/penpot/penpot/issues/11116) (PR: [#11117](https://github.com/penpot/penpot/pull/11117))
+- Fix plugin manifest fetch hanging indefinitely without timeout [#11119](https://github.com/penpot/penpot/issues/11119) (PR: [#11120](https://github.com/penpot/penpot/pull/11120))
+- Use constant-time comparison for shared key authentication [#11121](https://github.com/penpot/penpot/issues/11121) (PR: [#11122](https://github.com/penpot/penpot/pull/11122))
+- Fix ESC key not closing the comment input box after posting a comment in the workspace [#11128](https://github.com/penpot/penpot/issues/11128) (PR: [#11131](https://github.com/penpot/penpot/pull/11131))
+- Fix token edit modal crashing when resolving tokens with group nodes [#11143](https://github.com/penpot/penpot/issues/11143) (PR: [#11144](https://github.com/penpot/penpot/pull/11144))
+- Fix text editor crashing when pasting into an empty text shape [#11149](https://github.com/penpot/penpot/issues/11149) (PR: [#11150](https://github.com/penpot/penpot/pull/11150))
+- Fix comment avatars appearing on top of rulers when scrolling the canvas (by @filipsajdak) [#11163](https://github.com/penpot/penpot/issues/11163) (PR: [#11168](https://github.com/penpot/penpot/pull/11168))
+- Fix infinite loop of get-teams and get-team-members calls when granting team access from an email link [#11215](https://github.com/penpot/penpot/issues/11215) (PR: [#11223](https://github.com/penpot/penpot/pull/11223))
+- Fix RPC requests bypassing rate limiting with fractional bucket refill intervals [#11253](https://github.com/penpot/penpot/issues/11253) (PR: [#11254](https://github.com/penpot/penpot/pull/11254))
+- Fix tempfile bucket serving objects to any authenticated user instead of only the uploader [#11269](https://github.com/penpot/penpot/issues/11269) (PR: [#11270](https://github.com/penpot/penpot/pull/11270))
+- Fix increasing a value by clicking and dragging in a numeric input [#11274](https://github.com/penpot/penpot/issues/11274) (PR: [#11334](https://github.com/penpot/penpot/pull/11334))
+- Fix notification pill rendering unescaped HTML in the detail section when importing tokens [#11276](https://github.com/penpot/penpot/issues/11276) (PR: [#11275](https://github.com/penpot/penpot/pull/11275))
+- Fix share-link holders reading pages outside the authorized scope via the get-page RPC command [#11281](https://github.com/penpot/penpot/issues/11281) (PR: [#11284](https://github.com/penpot/penpot/pull/11284))
+- Fix incorrect permission handling when managing share links on a file [#11289](https://github.com/penpot/penpot/issues/11289) (PR: [#11290](https://github.com/penpot/penpot/pull/11290))
+- Fix backend session remaining valid after logout when the auth-token cookie is replayed [#11316](https://github.com/penpot/penpot/issues/11316) (PR: [#11317](https://github.com/penpot/penpot/pull/11317))
+- Fix get-team-invitation-token requiring only read permissions [#11358](https://github.com/penpot/penpot/issues/11358) (PR: [#11359](https://github.com/penpot/penpot/pull/11359))
+- Fix missing text in legacy SVG board thumbnails [#10182](https://github.com/penpot/penpot/issues/10182) (PR: [#11552](https://github.com/penpot/penpot/pull/11552))
+- Fix workspace crash when applying transform modifiers in the WASM renderer [#10894](https://github.com/penpot/penpot/issues/10894) (PR: [#10896](https://github.com/penpot/penpot/pull/10896))
+- Limit ZIP entry count and object size on V3 binfile import [#11021](https://github.com/penpot/penpot/issues/11021) (PR: [#11022](https://github.com/penpot/penpot/pull/11022))
+- Block plugin UI iframe URLs targeting the Penpot domain [#11271](https://github.com/penpot/penpot/issues/11271) (PR: [#11273](https://github.com/penpot/penpot/pull/11273))
+- Restrict the MCP REPL code execution endpoint to development environments [#11283](https://github.com/penpot/penpot/issues/11283) (PR: [#11282](https://github.com/penpot/penpot/pull/11282))
+- Filter share-link tokens from the get-view-only-bundle response [#11285](https://github.com/penpot/penpot/issues/11285) (PR: [#11286](https://github.com/penpot/penpot/pull/11286))
+- Disable MCP developer tools in multi-user mode [#11291](https://github.com/penpot/penpot/issues/11291) (PR: [#11310](https://github.com/penpot/penpot/pull/11310))
+- Fix Hide comments setting being ignored after opening the Comments section [#11308](https://github.com/penpot/penpot/issues/11308) (PR: [#11492](https://github.com/penpot/penpot/pull/11492))
+- Block NAT64/6to4/Teredo IPv6 transition addresses in the SSRF guard [#11319](https://github.com/penpot/penpot/issues/11319) (PR: [#11320](https://github.com/penpot/penpot/pull/11320))
+- Prevent team admins from removing the team owner [#11367](https://github.com/penpot/penpot/issues/11367) (PR: [#11368](https://github.com/penpot/penpot/pull/11368))
+- Enforce share-link comment permissions and page scope [#11370](https://github.com/penpot/penpot/issues/11370) (PR: [#11371](https://github.com/penpot/penpot/pull/11371))
+- Clean up orphaned teams, projects and files on profile deletion [#11394](https://github.com/penpot/penpot/issues/11394) (PR: [#11395](https://github.com/penpot/penpot/pull/11395))
+- Fix crash when pressing Ctrl+D with no shape selected [#11448](https://github.com/penpot/penpot/issues/11448) (PR: [#11491](https://github.com/penpot/penpot/pull/11491))
+- Fix text layout not updating when auto-width is set by double-clicking the bounding box [#11480](https://github.com/penpot/penpot/issues/11480) (PR: [#11541](https://github.com/penpot/penpot/pull/11541))
+- Fix boolean shapes rendering deformed in the WASM renderer and exports [#11482](https://github.com/penpot/penpot/issues/11482) (PR: [#11551](https://github.com/penpot/penpot/pull/11551))
+
+### :sparkles: New features & Enhancements
+
+- Group toolbar drawing tools into shape and free-draw flyouts [#9316](https://github.com/penpot/penpot/issues/9316) (PR: [#9480](https://github.com/penpot/penpot/pull/9480), [#10354](https://github.com/penpot/penpot/pull/10354))
+- Add outline stroke to Paths [#9961](https://github.com/penpot/penpot/issues/9961) (PR: [#8677](https://github.com/penpot/penpot/pull/8677))
+- Add dedicated Line and Arrow drawing tools (by @davidv399) [#9145](https://github.com/penpot/penpot/issues/9145) (PR: [#9146](https://github.com/penpot/penpot/pull/9146))
+- Refactor wasm rulers and UI state [#10116](https://github.com/penpot/penpot/issues/10116) (PR: [#10461](https://github.com/penpot/penpot/pull/10461))
+- Improve team invitations modal in the dashboard [#10484](https://github.com/penpot/penpot/issues/10484) (PR: [#10459](https://github.com/penpot/penpot/pull/10459))
+- Highlight the first matching font in the font list when searching (by @ai-mountain) [#3204](https://github.com/penpot/penpot/issues/3204) (PR: [#9512](https://github.com/penpot/penpot/pull/9512), [#10450](https://github.com/penpot/penpot/pull/10450))
+- Preserve token references when copying and pasting properties instead of resolving them to values (by @AKnassa) [#9582](https://github.com/penpot/penpot/issues/9582) (PR: [#10665](https://github.com/penpot/penpot/pull/10665))
+- Add waitForLayoutUpdate method to the plugin API [#10136](https://github.com/penpot/penpot/issues/10136) (PR: [#9898](https://github.com/penpot/penpot/pull/9898))
+- Show and manage comments while designing in the workspace [#10239](https://github.com/penpot/penpot/issues/10239) (PR: [#10275](https://github.com/penpot/penpot/pull/10275))
+- Simplify MCP server configuration for common MCP clients [#10355](https://github.com/penpot/penpot/issues/10355) (PR: [#10604](https://github.com/penpot/penpot/pull/10604))
+- Remove misleading MCP client JSON snippet from the key-generated modal (by @Shlok1729) [#10399](https://github.com/penpot/penpot/issues/10399) (PR: [#10415](https://github.com/penpot/penpot/pull/10415))
+- Preview font families in the font selector [#10403](https://github.com/penpot/penpot/issues/10403) (PR: [#10411](https://github.com/penpot/penpot/pull/10411))
+- Remember expanded/collapsed state of token sets in the color tokens picker (session scope) [#10551](https://github.com/penpot/penpot/issues/10551) (PR: [#10864](https://github.com/penpot/penpot/pull/10864))
+- Show token sets in reverse order by default in the color tokens picker (by @rhinocap) [#10552](https://github.com/penpot/penpot/issues/10552) (PR: [#10658](https://github.com/penpot/penpot/pull/10658))
+- Add multi-selection and bulk delete support to pages in the workspace sitemap [#10580](https://github.com/penpot/penpot/issues/10580) (PR: [#10581](https://github.com/penpot/penpot/pull/10581))
+- Add a grid/list view toggle for files in the dashboard [#10691](https://github.com/penpot/penpot/issues/10691) (PR: [#10692](https://github.com/penpot/penpot/pull/10692))
+- Migrate Docker images to Docker Hardened Images (DHI) [#10720](https://github.com/penpot/penpot/issues/10720) (PR: [#10732](https://github.com/penpot/penpot/pull/10732), [#10733](https://github.com/penpot/penpot/pull/10733), [#10734](https://github.com/penpot/penpot/pull/10734))
+- Adopt React Aria [#10802](https://github.com/penpot/penpot/issues/10802) (PR: [#10675](https://github.com/penpot/penpot/pull/10675))
+- Add plugin API function for awaiting component updates beyond waitForLayoutUpdate [#10927](https://github.com/penpot/penpot/issues/10927) (PR: [#10964](https://github.com/penpot/penpot/pull/10964))
+- Emit open-workspace-file audit event with file statistics on workspace load [#11106](https://github.com/penpot/penpot/issues/11106) (PR: [#11138](https://github.com/penpot/penpot/pull/11138))
+## 2.17.2
+
+### :bug: Bugs fixed
+
+- Fix linear gradients in SVG text exports being emitted as radial gradients [#5972](https://github.com/penpot/penpot/issues/5972) (PR: [#11272](https://github.com/penpot/penpot/pull/11272))
+- Fix typography token becoming detached when editing text content [#11362](https://github.com/penpot/penpot/issues/11362) (PR: [#11366](https://github.com/penpot/penpot/pull/11366))
+- Fix command injection in SVG exporter via legacy fill-color (https://github.com/penpot/penpot/security/advisories/GHSA-4f36-m4hj-cv86)
+
+## 2.17.1
+
+### :bug: Bugs fixed
+
+- Fix overrides lost after switching component variant [#10588](https://github.com/penpot/penpot/issues/10588) (PR: [#10619](https://github.com/penpot/penpot/pull/10619))
+- Fix malformed get-font-variants request when team-id is missing from dashboard URL [#10644](https://github.com/penpot/penpot/issues/10644) (PR: [#10645](https://github.com/penpot/penpot/pull/10645))
+- Fix malformed get-profiles-for-file-comments request when file-id is missing from workspace URL [#10652](https://github.com/penpot/penpot/issues/10652) (PR: [#10655](https://github.com/penpot/penpot/pull/10655))
+- Fix internal error when dragging inner layout with Boolean operations [#10647](https://github.com/penpot/penpot/issues/10647) (PR: [#10778](https://github.com/penpot/penpot/pull/10778))
+- Fix frontend throwing raw TypeError on undefined .getData receivers across import, paste, drag, and text editor paths [#10709](https://github.com/penpot/penpot/issues/10709) (PR: [#10718](https://github.com/penpot/penpot/pull/10718))
+- Fix workspace crash with 'can't access dead object' in Firefox when navigating between pages [#10719](https://github.com/penpot/penpot/issues/10719) (PR: [#10721](https://github.com/penpot/penpot/pull/10721))
+- Fix workspace crash when holding an arrow key on a selection due to excessive re-renders [#10726](https://github.com/penpot/penpot/issues/10726) (PR: [#10736](https://github.com/penpot/penpot/pull/10736))
+- Fix dashboard sidebar throwing removeChild NotFoundError during rapid keyboard navigation [#10714](https://github.com/penpot/penpot/issues/10714) (PR: [#10715](https://github.com/penpot/penpot/pull/10715))
+- Fix asset download failing with S3 auth conflict when using access token [#10776](https://github.com/penpot/penpot/issues/10776) (PR: [#10777](https://github.com/penpot/penpot/pull/10777))
+- Fix import worker crashing when importing non-Penpot zip files [#10781](https://github.com/penpot/penpot/issues/10781) (PR: [#10782](https://github.com/penpot/penpot/pull/10782))
+- Fix viewer crash with WASM panic when opening URL with page-id [#10800](https://github.com/penpot/penpot/issues/10800) (PR: [#10805](https://github.com/penpot/penpot/pull/10805))
+- Fix backend returning 500 when JSON request body has unrecognized escape sequence [#10804](https://github.com/penpot/penpot/issues/10804) (PR: [#10808](https://github.com/penpot/penpot/pull/10808))
+- Fix color picker eyedropper crashing when viewport is unmounted during pointer move [#10811](https://github.com/penpot/penpot/issues/10811) (PR: [#10812](https://github.com/penpot/penpot/pull/10812))
+- Fix flex layout crash when dragging shapes with missing bounds [#10843](https://github.com/penpot/penpot/issues/10843) (PR: [#10845](https://github.com/penpot/penpot/pull/10845))
+- Fix export failing when shape has blank layer name [#10849](https://github.com/penpot/penpot/issues/10849) (PR: [#10852](https://github.com/penpot/penpot/pull/10852))
+- Fix area selection (marquee) being aborted by select-shapes interrupt [#10872](https://github.com/penpot/penpot/issues/10872) (PR: [#10870](https://github.com/penpot/penpot/pull/10870))
+- Fix gradient editor sending invalid stop offset when clicking outside gradient line [#10879](https://github.com/penpot/penpot/issues/10879) (PR: [#10881](https://github.com/penpot/penpot/pull/10881))
+- Fix audit event validation failing when error reports contain string profile-id and missing token context [#10897](https://github.com/penpot/penpot/issues/10897) (PR: [#10898](https://github.com/penpot/penpot/pull/10898))
+- Fix MCP tool call timeout being too low for some operations [#10953](https://github.com/penpot/penpot/issues/10953) (PR: [#10967](https://github.com/penpot/penpot/pull/10967))
+- Fix MCP requests running into timeouts after leaving a file in Penpot [#10958](https://github.com/penpot/penpot/issues/10958) (PR: [#10967](https://github.com/penpot/penpot/pull/10967))
+- Fix duplicate WebSocket MCP connection attempts deregistering the original connection's routing entries [#10961](https://github.com/penpot/penpot/issues/10961) (PR: [#10967](https://github.com/penpot/penpot/pull/10967))
+
+## 2.17.0
+
+### :rocket: Epics and highlights
+
+- Render prototype viewer with WASM (Skia) engine instead of SVG [#10037](https://github.com/penpot/penpot/issues/10037) (PR: [#10038](https://github.com/penpot/penpot/pull/10038))
+- Add layer blur effect for visual depth and styling [#9844](https://github.com/penpot/penpot/issues/9844) (PR: [#10034](https://github.com/penpot/penpot/pull/10034))
+- Render guides in WebGL for consistent viewer performance [#10068](https://github.com/penpot/penpot/issues/10068) (PR: [#10014](https://github.com/penpot/penpot/pull/10014))
+- Add concurrency limiter and status indicators for MCP server communications [#9493](https://github.com/penpot/penpot/issues/9493) (PR: [#9748](https://github.com/penpot/penpot/pull/9748))
+- Add typography token row to multiselected texts for better token visibility [#9336](https://github.com/penpot/penpot/issues/9336) (PR: [#9128](https://github.com/penpot/penpot/pull/9128))
+
+### :sparkles: New features & Enhancements
+
+- Expose `variants` retrieval on `LibraryComponent` via `isVariant()` type guard in plugin API (by @opcode81) [#9185](https://github.com/penpot/penpot/issues/9185) (PR: [#9302](https://github.com/penpot/penpot/pull/9302))
+- Add search bar to prototype interaction destination dropdown (by @EvaMarco) [#8618](https://github.com/penpot/penpot/issues/8618) (PR: [#9769](https://github.com/penpot/penpot/pull/9769))
+- Add dashed stroke customization with dash and gap inputs (by @EvaMarco) [#3881](https://github.com/penpot/penpot/issues/3881) (PR: [#9765](https://github.com/penpot/penpot/pull/9765))
+- Add author, relative timestamp and short identifier to history entries (by @FairyPigDev) [#7660](https://github.com/penpot/penpot/issues/7660) (PR: [#9132](https://github.com/penpot/penpot/pull/9132))
+- Add typography token row to multiselected texts [#9336](https://github.com/penpot/penpot/issues/9336) (PR: [#9128](https://github.com/penpot/penpot/pull/9128))
+- Optimize propagation of tokens [#9261](https://github.com/penpot/penpot/issues/9261) (PR: [#9144](https://github.com/penpot/penpot/pull/9144))
+- Add typography information to token dropdown option [#9377](https://github.com/penpot/penpot/issues/9377) (PR: [#9375](https://github.com/penpot/penpot/pull/9375))
+- Cache OIDC provider records to skip per-login discovery (by @Dexterity104) [#9294](https://github.com/penpot/penpot/issues/9294) (PR: [#9295](https://github.com/penpot/penpot/pull/9295))
+- Validate shape on add-object to catch malformed inputs early (by @Dexterity104) [#9507](https://github.com/penpot/penpot/issues/9507) (PR: [#9291](https://github.com/penpot/penpot/pull/9291))
+- Remove unreachable try/catch in hex->hsl (by @Dexterity104) [#9244](https://github.com/penpot/penpot/issues/9244) (PR: [#9245](https://github.com/penpot/penpot/pull/9245))
+- Remove stray debug log in exporter upload-resource (by @iot2edge) [#9270](https://github.com/penpot/penpot/issues/9270) (PR: [#9272](https://github.com/penpot/penpot/pull/9272))
+- Release pool connection during font variant creation (by @Dexterity104) [#9286](https://github.com/penpot/penpot/issues/9286) (PR: [#9287](https://github.com/penpot/penpot/pull/9287))
+- Add autocomplete combobox to token creation and edition forms [#9899](https://github.com/penpot/penpot/issues/9899) (PR: [#9109](https://github.com/penpot/penpot/pull/9109), [#8294](https://github.com/penpot/penpot/pull/8294))
+- Add list view mode to color picker UI [#4420](https://github.com/penpot/penpot/issues/4420) (PR: [#9953](https://github.com/penpot/penpot/pull/9953))
+- Use Clipboard API consistently across the application (by @MilosM348) [#6514](https://github.com/penpot/penpot/issues/6514) (PR: [#9188](https://github.com/penpot/penpot/pull/9188))
+- Use `$` as DTCG token/group discriminator and make `$description` optional [#8342](https://github.com/penpot/penpot/issues/8342) (PR: [#9912](https://github.com/penpot/penpot/pull/9912))
+- Match version preview banner text to History sidebar labels (by @MilosM348) [#9503](https://github.com/penpot/penpot/issues/9503) (PR: [#9697](https://github.com/penpot/penpot/pull/9697))
+- Use "copia" as duplicate suffix for Spanish (by @Rene0422) [#9623](https://github.com/penpot/penpot/issues/9623) (PR: [#9671](https://github.com/penpot/penpot/pull/9671))
+- Harden CORS middleware to not reflect Origin with credentials enabled [#9659](https://github.com/penpot/penpot/issues/9659) (PR: [#9675](https://github.com/penpot/penpot/pull/9675))
+- Revert token migrations on clashing names to prevent data loss [#9816](https://github.com/penpot/penpot/issues/9816) (PR: [#9950](https://github.com/penpot/penpot/pull/9950))
+- Update contributing guidelines with current issue tags and CSS linting rules [#9900](https://github.com/penpot/penpot/issues/9900) (PR: [#9418](https://github.com/penpot/penpot/pull/9418))
+- Add composite typography token input to the Design sidebar [#9932](https://github.com/penpot/penpot/issues/9932) (PR: [#9128](https://github.com/penpot/penpot/pull/9128), [#9375](https://github.com/penpot/penpot/pull/9375), [#8749](https://github.com/penpot/penpot/pull/8749))
+- Avoid deduplicating temporary export files to prevent stale content (by @yong2bba) [#9970](https://github.com/penpot/penpot/issues/9970) (PR: [#9959](https://github.com/penpot/penpot/pull/9959))
+- Add layer blur effect [#9844](https://github.com/penpot/penpot/issues/9844) (PR: [#10034](https://github.com/penpot/penpot/pull/10034))
+- Add concurrency limiter for MCP Server Plugin Communications [#9493](https://github.com/penpot/penpot/issues/9493) (PR: [#9748](https://github.com/penpot/penpot/pull/9748))
+- Render guides in WebGL [#10068](https://github.com/penpot/penpot/issues/10068) (PR: [#10014](https://github.com/penpot/penpot/pull/10014))
+- Add configurable resource limits to ImageMagick image processing [#10223](https://github.com/penpot/penpot/issues/10223) (PR: [#10240](https://github.com/penpot/penpot/pull/10240))
+- Add resource limits to font processing child processes [#10234](https://github.com/penpot/penpot/issues/10234) (PR: [#10274](https://github.com/penpot/penpot/pull/10274))
+- Add color variants and positioning to selection size badge [#10258](https://github.com/penpot/penpot/issues/10258) (PR: [#9210](https://github.com/penpot/penpot/pull/9210))
+- Use hard reload for render engine switching in the workspace menu [#10441](https://github.com/penpot/penpot/issues/10441) (PR: [#10444](https://github.com/penpot/penpot/pull/10444))
+- Rotate size badge when shape is rotated [#10386](https://github.com/penpot/penpot/issues/10386) (PR: [#10393](https://github.com/penpot/penpot/pull/10393))
+- Add separate internal URI for exporter to handle Docker deployments where internal and public URIs differ [#10627](https://github.com/penpot/penpot/issues/10627) (PR: [#10630](https://github.com/penpot/penpot/pull/10630))
+
+### :bug: Bugs fixed
+
+- Fix Plugin API variant creation failing due to undocumented multi-step workflow [#10075](https://github.com/penpot/penpot/issues/10075) (PR: [#10149](https://github.com/penpot/penpot/pull/10149))
+- Fix workspace crash when editing text shapes with degenerate selrect [#10617](https://github.com/penpot/penpot/issues/10617) (PR: [#10618](https://github.com/penpot/penpot/pull/10618))
+- Fix SVG stroke line join not applied when pasting strokes [#4836](https://github.com/penpot/penpot/issues/4836) (PR: [#9982](https://github.com/penpot/penpot/pull/9982), [#10019](https://github.com/penpot/penpot/pull/10019))
+- Fix blend-mode hover preview on canvas not reverted when dismissing dropdown (by @davidv399) [#9235](https://github.com/penpot/penpot/issues/9235) (PR: [#9237](https://github.com/penpot/penpot/pull/9237))
+- Fix View Mode mouse-leave and click in combination not working [#4855](https://github.com/penpot/penpot/issues/4855) (PR: [#9991](https://github.com/penpot/penpot/pull/9991))
+- Fix Storybook UI missing scrollbar (by @MilosM348) [#6049](https://github.com/penpot/penpot/issues/6049) (PR: [#9319](https://github.com/penpot/penpot/pull/9319))
+- Fix font selector missing intermediate font weights for Source Sans Pro and similar fonts (by @dhgoal) [#7378](https://github.com/penpot/penpot/issues/7378) (PR: [#9247](https://github.com/penpot/penpot/pull/9247))
+- Fix plugin API `typography.remove()` passing wrong parameter format (by @peter-rango) [#8223](https://github.com/penpot/penpot/issues/8223) (PR: [#9279](https://github.com/penpot/penpot/pull/9279))
+- Fix plugin API fills and strokes array elements being read-only (by @RenzoMXD) [#8357](https://github.com/penpot/penpot/issues/8357) (PR: [#9161](https://github.com/penpot/penpot/pull/9161))
+- Fix "Show Guides" shortcut not working on German keyboards (by @RenzoMXD) [#8423](https://github.com/penpot/penpot/issues/8423) (PR: [#9209](https://github.com/penpot/penpot/pull/9209))
+- Fix token validation failing when a malformed token exists in the Component category [#9010](https://github.com/penpot/penpot/issues/9010) (PR: [#9025](https://github.com/penpot/penpot/pull/9025), [#9825](https://github.com/penpot/penpot/pull/9825))
+- Fix Docker frontend image missing CSS reference (by @NativeTeachingAidsB) [#9135](https://github.com/penpot/penpot/issues/9135) (PR: [#9840](https://github.com/penpot/penpot/pull/9840))
+- Fix MCP media upload error and SVG data URI image parsing (by @claytonlin1110) [#9164](https://github.com/penpot/penpot/issues/9164) (PR: [#9201](https://github.com/penpot/penpot/pull/9201))
+- Fix lost-update race on team features during concurrent file creation (by @Lobster-0429) [#9197](https://github.com/penpot/penpot/issues/9197) (PR: [#9198](https://github.com/penpot/penpot/pull/9198))
+- Fix get-profile RPC method silently masking DB errors as "Anonymous User" (by @davidv399) [#9253](https://github.com/penpot/penpot/issues/9253) (PR: [#9254](https://github.com/penpot/penpot/pull/9254))
+- Fix crash when creating or editing tokens named "white" or "black" [#9256](https://github.com/penpot/penpot/issues/9256) (PR: [#9034](https://github.com/penpot/penpot/pull/9034))
+- Fix conditional use-ctx hook violation in shape-wrapper (by @Dexterity104) [#9280](https://github.com/penpot/penpot/issues/9280) (PR: [#9281](https://github.com/penpot/penpot/pull/9281))
+- Make ShapeImageIds byte conversion fallible to prevent panics (by @Dexterity104) [#9282](https://github.com/penpot/penpot/issues/9282) (PR: [#9283](https://github.com/penpot/penpot/pull/9283))
+- Fix plugin API showing incorrect error messages for invalid operations (by @bitcompass) [#9417](https://github.com/penpot/penpot/issues/9417) (PR: [#9486](https://github.com/penpot/penpot/pull/9486))
+- Add inactivity timeout to SSE sessions to match Streamable HTTP sessions [#9432](https://github.com/penpot/penpot/issues/9432) (PR: [#9464](https://github.com/penpot/penpot/pull/9464))
+- Fix component variant switching behaving differently on two identical copies (by @MischaPanch) [#9498](https://github.com/penpot/penpot/issues/9498) (PR: [#9434](https://github.com/penpot/penpot/pull/9434))
+- Add missing error message for invalid shadow token [#9583](https://github.com/penpot/penpot/issues/9583) (PR: [#9809](https://github.com/penpot/penpot/pull/9809))
+- Fix moving a component in a library triggering stale update notification in dependent files [#9629](https://github.com/penpot/penpot/issues/9629) (PR: [#9616](https://github.com/penpot/penpot/pull/9616))
+- Fix newly created token not visible when placed above existing tokens in the tree [#9711](https://github.com/penpot/penpot/issues/9711) (PR: [#9803](https://github.com/penpot/penpot/pull/9803))
+- Fix B(V) input label misalignment in HSB color picker [#9731](https://github.com/penpot/penpot/issues/9731) (PR: [#9793](https://github.com/penpot/penpot/pull/9793))
+- Fix text style name input appending font name instead of replacing it when edited [#9785](https://github.com/penpot/penpot/issues/9785) (PR: [#9784](https://github.com/penpot/penpot/pull/9784))
+- Fix shadow token creation not allowing empty blur or spread value [#9808](https://github.com/penpot/penpot/issues/9808) (PR: [#9809](https://github.com/penpot/penpot/pull/9809))
+- Fix thinner line in path when its stroke is deleted and added again [#9823](https://github.com/penpot/penpot/issues/9823) (PR: [#9836](https://github.com/penpot/penpot/pull/9836))
+- Fix layers panel perceivable lag when displaying changes [#9834](https://github.com/penpot/penpot/issues/9834)
+- Fix settings form visual layout broken after recent contribution [#9882](https://github.com/penpot/penpot/issues/9882) (PR: [#9883](https://github.com/penpot/penpot/pull/9883))
+- Fix crash when duplicating shapes with fill/stroke properties [#9893](https://github.com/penpot/penpot/issues/9893) (PR: [#9647](https://github.com/penpot/penpot/pull/9647))
+- Fix S3 storage failing with IRSA/Web Identity Token credentials (by @jpc2350) [#9927](https://github.com/penpot/penpot/issues/9927) (PR: [#9928](https://github.com/penpot/penpot/pull/9928))
+- Fix onboarding template spinner stuck after failed template download (by @jeffrey701) [#9931](https://github.com/penpot/penpot/issues/9931) (PR: [#9504](https://github.com/penpot/penpot/pull/9504))
+- Fix stroke caps not working correctly when there are other nodes in the middle of a path [#9987](https://github.com/penpot/penpot/issues/9987) (PR: [#9989](https://github.com/penpot/penpot/pull/9989))
+- Fix missing three dots button for column and row edit menu in WebKit/Safari [#9993](https://github.com/penpot/penpot/issues/9993) (PR: [#9994](https://github.com/penpot/penpot/pull/9994))
+- Fix exported path with strokes being cut off in SVG file [#9995](https://github.com/penpot/penpot/issues/9995) (PR: [#9996](https://github.com/penpot/penpot/pull/9996))
+- Fix French Canada locale falling back to French translations instead of French Canadian (by @alexismo) [#10017](https://github.com/penpot/penpot/issues/10017) (PR: [#10027](https://github.com/penpot/penpot/pull/10027))
+- Fix inconsistent float precision in typography lineHeight API responses [#3658](https://github.com/penpot/penpot/issues/3658) (PR: [#9973](https://github.com/penpot/penpot/pull/9973))
+- Fix variant switching preserving stale absolute positions in nested instance overrides [#9749](https://github.com/penpot/penpot/issues/9749) (PR: [#9691](https://github.com/penpot/penpot/pull/9691))
+- Fix missing top border on first element in shared libraries list [#9910](https://github.com/penpot/penpot/issues/9910) (PR: [#10062](https://github.com/penpot/penpot/pull/10062))
+- Fix theme not applied correctly in sample plugins [#9957](https://github.com/penpot/penpot/issues/9957) (PR: [#9955](https://github.com/penpot/penpot/pull/9955))
+- Fix export presets not being saved in view mode inspect panel [#9971](https://github.com/penpot/penpot/issues/9971) (PR: [#9972](https://github.com/penpot/penpot/pull/9972))
+- Fix cropped outer stroke of rotated board in view mode [#9978](https://github.com/penpot/penpot/issues/9978) (PR: [#9979](https://github.com/penpot/penpot/pull/9979))
+- Fix re-registration with same email showing verification prompt when email verification is disabled [#9998](https://github.com/penpot/penpot/issues/9998) (PR: [#9999](https://github.com/penpot/penpot/pull/9999))
+- Fix toggle color library visibility from color picker shortcut button [#10036](https://github.com/penpot/penpot/issues/10036) (PR: [#10129](https://github.com/penpot/penpot/pull/10129))
+- Improve image rendering performance by making snapshots async [#10045](https://github.com/penpot/penpot/issues/10045) (PR: [#10150](https://github.com/penpot/penpot/pull/10150))
+- Fix text layers wrapping to two lines after copy-pasting between files until edited [#10052](https://github.com/penpot/penpot/issues/10052) (PR: [#10081](https://github.com/penpot/penpot/pull/10081))
+- Fix plugin API creating shapes on wrong page and cross-page appendChild silently no-ops [#10078](https://github.com/penpot/penpot/issues/10078) (PR: [#10085](https://github.com/penpot/penpot/pull/10085))
+- Fix token dropdown triggered with select arrow not replacing previous content [#10104](https://github.com/penpot/penpot/issues/10104) (PR: [#10174](https://github.com/penpot/penpot/pull/10174))
+- Fix incorrect color count in color libraries dropdown (by @Krishcode264) [#10120](https://github.com/penpot/penpot/issues/10120) (PR: [#10281](https://github.com/penpot/penpot/pull/10281))
+- Fix color picker eyedropper returning wrong color values on some GPUs [#10135](https://github.com/penpot/penpot/issues/10135) (PR: [#10255](https://github.com/penpot/penpot/pull/10255))
+- Fix content from previous rendered frame visible in rounded frame transparent areas in viewer WebGL [#10161](https://github.com/penpot/penpot/issues/10161) (PR: [#10191](https://github.com/penpot/penpot/pull/10191))
+- Fix exported HTML/CSS not correctly rendered [#10214](https://github.com/penpot/penpot/issues/10214) (PR: [#10217](https://github.com/penpot/penpot/pull/10217))
+- Fix template import failing from dashboard when downloading example files (by @mdbenito) [#10317](https://github.com/penpot/penpot/issues/10317) (PR: [#10308](https://github.com/penpot/penpot/pull/10308))
+- Emit grid layout telemetry when adding via MCP or plugins [#10307](https://github.com/penpot/penpot/issues/10307) (PR: [#10319](https://github.com/penpot/penpot/pull/10319))
+- Fix guide hover feedback sticking or stopping after interaction [#10321](https://github.com/penpot/penpot/issues/10321) (PR: [#10333](https://github.com/penpot/penpot/pull/10333))
+- Fix rulers visible in thumbnail rendering [#10328](https://github.com/penpot/penpot/issues/10328)
+- Fix page switch blur disappearing early [#10332](https://github.com/penpot/penpot/issues/10332) (PR: [#10337](https://github.com/penpot/penpot/pull/10337))
+- Fix open overlay board mispositioned with repeated image artifacts in viewer WebGL [#10180](https://github.com/penpot/penpot/issues/10180) (PR: [#10191](https://github.com/penpot/penpot/pull/10191))
+- Fix color picker preview when browser has non-100% zoom level [#10265](https://github.com/penpot/penpot/issues/10265) (PR: [#10305](https://github.com/penpot/penpot/pull/10305))
+- Fix negative margins no longer working [#10001](https://github.com/penpot/penpot/issues/10001) (PR: [#10353](https://github.com/penpot/penpot/pull/10353))
+- Fix undo in properties panel reversing each drag step instead of the entire drag when adjusting numeric inputs [#10066](https://github.com/penpot/penpot/issues/10066) (PR: [#10193](https://github.com/penpot/penpot/pull/10193))
+- Fix Plugin API reference token creation and token application failing when the target token set is inactive [#10070](https://github.com/penpot/penpot/issues/10070), [#10071](https://github.com/penpot/penpot/issues/10071) (PR: [#10297](https://github.com/penpot/penpot/pull/10297))
+- Fix Plugin API rejecting numeric token values with a generic validation error [#10073](https://github.com/penpot/penpot/issues/10073) (PR: [#10270](https://github.com/penpot/penpot/pull/10270))
+- Fix Plugin API whole-page export failing with a generic HTTP error [#10076](https://github.com/penpot/penpot/issues/10076) (PR: [#10148](https://github.com/penpot/penpot/pull/10148))
+- Fix Plugin API applyToken failing on padding properties [#10077](https://github.com/penpot/penpot/issues/10077) (PR: [#10087](https://github.com/penpot/penpot/pull/10087))
+- Fix Plugin API crash when instancing or detaching variants [#10099](https://github.com/penpot/penpot/issues/10099) (PR: [#10140](https://github.com/penpot/penpot/pull/10140))
+- Fix black square appearing on first view mode launch [#10188](https://github.com/penpot/penpot/issues/10188) (PR: [#10210](https://github.com/penpot/penpot/pull/10210))
+- Fix Plugin API openPage() not switching active page within the same execution [#10195](https://github.com/penpot/penpot/issues/10195) (PR: [#10085](https://github.com/penpot/penpot/pull/10085))
+- Fix Plugin API appending shapes to the active page instead of the specified .root [#10196](https://github.com/penpot/penpot/issues/10196) (PR: [#10271](https://github.com/penpot/penpot/pull/10271))
+- Fix Plugin API createPage() not making the new page active synchronously [#10197](https://github.com/penpot/penpot/issues/10197) (PR: [#10085](https://github.com/penpot/penpot/pull/10085))
+- Fix Plugin API Flow.startingBoard returning null after createFlow [#10203](https://github.com/penpot/penpot/issues/10203) (PR: [#10244](https://github.com/penpot/penpot/pull/10244))
+- Fix Plugin API page.flows returning null instead of empty array when page has no flows [#10204](https://github.com/penpot/penpot/issues/10204) (PR: [#10246](https://github.com/penpot/penpot/pull/10246))
+- Fix Plugin API auto-creating a stray 'Flow 1' when wiring interactions [#10205](https://github.com/penpot/penpot/issues/10205) (PR: [#10231](https://github.com/penpot/penpot/pull/10231))
+- Fix Plugin API createText throwing error when called with an empty string [#10206](https://github.com/penpot/penpot/issues/10206) (PR: [#10219](https://github.com/penpot/penpot/pull/10219))
+- Fix export rendering auto-width text with a substituted fallback font [#10208](https://github.com/penpot/penpot/issues/10208) (PR: [#10238](https://github.com/penpot/penpot/pull/10238))
+- Expose 'Fix when scrolling' (sticky) constraint in the Plugin API [#10209](https://github.com/penpot/penpot/issues/10209) (PR: [#10218](https://github.com/penpot/penpot/pull/10218))
+- Fix long typography token name in remap modal [#10301](https://github.com/penpot/penpot/issues/10301) (PR: [#10356](https://github.com/penpot/penpot/pull/10356))
+- Fix 'Go to your Penpot' link on error page redirecting to the same team instead of user home [#10324](https://github.com/penpot/penpot/issues/10324) (PR: [#10322](https://github.com/penpot/penpot/pull/10322))
+- Fix premature WASM view-interaction end during pan/zoom pause [#10424](https://github.com/penpot/penpot/issues/10424) (PR: [#10425](https://github.com/penpot/penpot/pull/10425))
+- Fix emojis without fill but with outer stroke not being rendered [#10473](https://github.com/penpot/penpot/issues/10473) (PR: [#10519](https://github.com/penpot/penpot/pull/10519))
+- Fix texts with lots of emojis not being rendered across multiple tiles [#10474](https://github.com/penpot/penpot/issues/10474) (PR: [#10504](https://github.com/penpot/penpot/pull/10504))
+- Fix artifacts in texts with inner strokes [#10476](https://github.com/penpot/penpot/issues/10476) (PR: [#10509](https://github.com/penpot/penpot/pull/10509))
+- Fix open overlay position control showing only center icon instead of full grid [#10176](https://github.com/penpot/penpot/issues/10176) (PR: [#10512](https://github.com/penpot/penpot/pull/10512))
+- Fix wrong text color in selection size badge [#10256](https://github.com/penpot/penpot/issues/10256) (PR: [#10393](https://github.com/penpot/penpot/pull/10393))
+- Fix several issues with plugins [#10394](https://github.com/penpot/penpot/issues/10394)
+- Fix pixel grid rendered on top of the rulers [#10426](https://github.com/penpot/penpot/issues/10426) (PR: [#10430](https://github.com/penpot/penpot/pull/10430))
+- Fix double-clicking text without fills creating a black file [#10472](https://github.com/penpot/penpot/issues/10472) (PR: [#10483](https://github.com/penpot/penpot/pull/10483))
+- Fix SVG raw caching prevented by unnecessary Cow wrapping [#10488](https://github.com/penpot/penpot/issues/10488) (PR: [#10492](https://github.com/penpot/penpot/pull/10492))
+- Add component reset operation to plugin API [#10561](https://github.com/penpot/penpot/issues/10561) (PR: [#10533](https://github.com/penpot/penpot/pull/10533))
+- Fix blur menu alignment in Firefox [#10576](https://github.com/penpot/penpot/issues/10576) (PR: [#10575](https://github.com/penpot/penpot/pull/10575))
+- Fix sidebar not showing all elements with grid layout [#10539](https://github.com/penpot/penpot/issues/10539) (PR: [#10600](https://github.com/penpot/penpot/pull/10600))
+- Fix sidebar getting stuck when selecting shapes that haven't loaded yet [#10599](https://github.com/penpot/penpot/issues/10599) (PR: [#10600](https://github.com/penpot/penpot/pull/10600))
+- Fix text shape bounding boxes not updating after remote fonts finish loading [#10585](https://github.com/penpot/penpot/issues/10585) (PR: [#10566](https://github.com/penpot/penpot/pull/10566))
+- Fix text editor crash from Draft.js selection offset exceeding DOM node length [#10607](https://github.com/penpot/penpot/issues/10607) (PR: [#10608](https://github.com/penpot/penpot/pull/10608))
+- Fix workspace crash when converting SVG-raw shape to path [#10612](https://github.com/penpot/penpot/issues/10612) (PR: [#10613](https://github.com/penpot/penpot/pull/10613))
+- Fix component variant panel crash when selecting multiple copies with mismatched property counts [#10615](https://github.com/penpot/penpot/issues/10615) (PR: [#10616](https://github.com/penpot/penpot/pull/10616))
+- Fix workspace crash from recursion when clicking shape in comments mode [#10620](https://github.com/penpot/penpot/issues/10620) (PR: [#10622](https://github.com/penpot/penpot/pull/10622))
+- Fix Plugin API validation error when listing shared plugin data keys [#10628](https://github.com/penpot/penpot/issues/10628) (PR: [#10632](https://github.com/penpot/penpot/pull/10632))
+- Fix Plugin API silently dropping plugin data written to shared library [#10629](https://github.com/penpot/penpot/issues/10629) (PR: [#10632](https://github.com/penpot/penpot/pull/10632))
+- Fix workspace crash when event target is a DOM text node [#10640](https://github.com/penpot/penpot/issues/10640) (PR: [#10641](https://github.com/penpot/penpot/pull/10641))
+- Fix text shape position-data to include required fills in WASM and DOM calculation paths [#10646](https://github.com/penpot/penpot/issues/10646) (PR: [#10650](https://github.com/penpot/penpot/pull/10650))
+- Log expired OIDC tokens as auth failures instead of server errors [#10635](https://github.com/penpot/penpot/issues/10635) (PR: [#10636](https://github.com/penpot/penpot/pull/10636))
+- Return 400 instead of 500 when ImageMagick rejects invalid uploaded images [#10642](https://github.com/penpot/penpot/issues/10642) (PR: [#10643](https://github.com/penpot/penpot/pull/10643))
+
+## 2.16.2
+
+### :bug: Bugs fixed
+
+- Fix error 500 when submitting the contact form [#10178](https://github.com/penpot/penpot/issues/10178) (PR: [#10419](https://github.com/penpot/penpot/pull/10419))
+- Fix text editor modifying content and detaching applied typography tokens [#10389](https://github.com/penpot/penpot/issues/10389) (PR: [#10402](https://github.com/penpot/penpot/pull/10402))
+
+## 2.16.1
+
+### :sparkles: New features & Enhancements
+
+- Batch multiple thumbnail deletions into a single RPC call [#9944](https://github.com/penpot/penpot/issues/9944) (PR: [#9943](https://github.com/penpot/penpot/pull/9943))
+- Add WebSocket proxy configuration for MCP in Nginx example (by @lancatlin) [#10153](https://github.com/penpot/penpot/issues/10153) (PR: [#10152](https://github.com/penpot/penpot/pull/10152))
+- Add tenant prefix to MCP Redis channel names for multi-environment isolation [#10277](https://github.com/penpot/penpot/issues/10277) (PR: [#10276](https://github.com/penpot/penpot/pull/10276))
+- Show MCP key on Integrations page and remove non-recoverable warning from modal [#10290](https://github.com/penpot/penpot/issues/10290) (PR: [#10298](https://github.com/penpot/penpot/pull/10298))
+- Add MCP status button with single-tab connection control [#9923](https://github.com/penpot/penpot/issues/9923) (PR: [#9930](https://github.com/penpot/penpot/pull/9930))
+
+### :bug: Bugs fixed
+
+- Fix race condition between MCP initialization and plugin runtime [#10138](https://github.com/penpot/penpot/issues/10138) (PR: [#10137](https://github.com/penpot/penpot/pull/10137))
+- Filter ignorable React removeChild errors from browser extensions in error boundary [#10146](https://github.com/penpot/penpot/issues/10146) (PR: [#10145](https://github.com/penpot/penpot/pull/10145))
+- Show resolved values in font family token combobox when pasting comma-separated values [#10212](https://github.com/penpot/penpot/issues/10212) (PR: [#10215](https://github.com/penpot/penpot/pull/10215))
+- Fix MCP server status toggle persistence and missing workspace connection options [#10292](https://github.com/penpot/penpot/issues/10292) (PR: [#10226](https://github.com/penpot/penpot/pull/10226))
+- Allow pasting comma-separated emails in the invite members modal [#10173](https://github.com/penpot/penpot/issues/10173) (PR: [#10186](https://github.com/penpot/penpot/pull/10186))
+- Fix text element edit detaching applied color tokens [#9255](https://github.com/penpot/penpot/issues/9255) (PR: [#9525](https://github.com/penpot/penpot/pull/9525), [#9814](https://github.com/penpot/penpot/pull/9814), [#10340](https://github.com/penpot/penpot/pull/10340))
+
+## 2.16.0
+
+### :boom: Breaking changes & Deprecations
+
+### :rocket: Epics and highlights
+
+- WebGL rendering (beta) user preference [#9683](https://github.com/penpot/penpot/issues/9683) (PR: [#9113](https://github.com/penpot/penpot/pull/9113))
+- Design Tokens at the design tab: numeric fields with token selection in place [#9358](https://github.com/penpot/penpot/issues/9358)
+
+### :sparkles: New features & Enhancements
+
+- Add delete group to assets panel context menu (by @FairyPigDev) [#9141](https://github.com/penpot/penpot/issues/9141) (PR: [#9151](https://github.com/penpot/penpot/pull/9151), [#9211](https://github.com/penpot/penpot/pull/9211))
+- Show alpha percentage on library color values (by @rockchris099) [#6328](https://github.com/penpot/penpot/issues/6328)
+- Add clear artboard guides to frame context menu (by @eureka0928) [#6987](https://github.com/penpot/penpot/issues/6987) (PR: [#8936](https://github.com/penpot/penpot/pull/8936))
+- Add loader feedback while importing and exporting files (by @moorsecopers99) [#9020](https://github.com/penpot/penpot/issues/9020) (PR: [#9024](https://github.com/penpot/penpot/pull/9024))
+- Allow duplicating color and typography styles (by @MkDev11) [#2912](https://github.com/penpot/penpot/issues/2912) (PR: [#8449](https://github.com/penpot/penpot/pull/8449))
+- Add woff2 support on user uploaded fonts (by @Nivl) [#3521](https://github.com/penpot/penpot/issues/3521) (PR: [#8367](https://github.com/penpot/penpot/pull/8367))
+- Import Tokens from linked library (by @dfelinto) [#9635](https://github.com/penpot/penpot/issues/9635) (PR: [#8439](https://github.com/penpot/penpot/pull/8439))
+- Option to download custom fonts (by @dfelinto) [#9672](https://github.com/penpot/penpot/issues/9672) (PR: [#8335](https://github.com/penpot/penpot/pull/8335))
+- Add copy as image to workspace context menu (by @dfelinto) [#9607](https://github.com/penpot/penpot/issues/9607) (PR: [#8364](https://github.com/penpot/penpot/pull/8364), [#9586](https://github.com/penpot/penpot/pull/9586))
+- Add Tab/Shift+Tab navigation to rename layers sequentially (by @bittoby) [#2569](https://github.com/penpot/penpot/issues/2569) (PR: [#8506](https://github.com/penpot/penpot/pull/8506))
+- Copy and paste entire rows in existing table (by @bittoby) [#5969](https://github.com/penpot/penpot/issues/5969) (PR: [#8498](https://github.com/penpot/penpot/pull/8498))
+- Rename token group [#9637](https://github.com/penpot/penpot/issues/9637) (PR: [#8275](https://github.com/penpot/penpot/pull/8275))
+- Duplicate token group [#9638](https://github.com/penpot/penpot/issues/9638) (PR: [#8886](https://github.com/penpot/penpot/pull/8886))
+- Copy token name from contextual menu [#9639](https://github.com/penpot/penpot/issues/9639) (PR: [#8566](https://github.com/penpot/penpot/pull/8566))
+- Add drag-to-change for numeric inputs in workspace sidebar (by @RenzoMXD) [#2466](https://github.com/penpot/penpot/issues/2466) (PR: [#8536](https://github.com/penpot/penpot/pull/8536))
+- Add per-group add button for typographies (by @eureka0928) [#5275](https://github.com/penpot/penpot/issues/5275) (PR: [#8895](https://github.com/penpot/penpot/pull/8895))
+- Add Find & Replace for text content and layer names (by @statxc) [#7108](https://github.com/penpot/penpot/issues/7108) (PR: [#8899](https://github.com/penpot/penpot/pull/8899), [#9687](https://github.com/penpot/penpot/pull/9687))
+- Use page name for multi-export ZIP/PDF downloads (by @Dexterity104) [#8773](https://github.com/penpot/penpot/issues/8773) (PR: [#8874](https://github.com/penpot/penpot/pull/8874))
+- Make links in comments clickable (by @eureka0928) [#1602](https://github.com/penpot/penpot/issues/1602) (PR: [#8894](https://github.com/penpot/penpot/pull/8894))
+- Add visibility toggle for strokes (by @eureka0928) [#7438](https://github.com/penpot/penpot/issues/7438) (PR: [#8913](https://github.com/penpot/penpot/pull/8913))
+- Sort asset library subfolders alphabetically at every nesting level (by @eureka0928) [#2572](https://github.com/penpot/penpot/issues/2572) (PR: [#8952](https://github.com/penpot/penpot/pull/8952))
+- Add Paste to replace (Cmd+Shift+V) for selected shapes (by @eureka0928) [#4240](https://github.com/penpot/penpot/issues/4240) (PR: [#9033](https://github.com/penpot/penpot/pull/9033))
+- Differentiate incoming and outgoing interaction link colors (by @claytonlin1110) [#7794](https://github.com/penpot/penpot/issues/7794) (PR: [#8923](https://github.com/penpot/penpot/pull/8923))
+- Reorder prototyping overlay options to show Position before Relative to (by @rockchris099) [#2910](https://github.com/penpot/penpot/issues/2910)
+- Add customizable colors for ruler guides (by @Dexterity104) [#5199](https://github.com/penpot/penpot/issues/5199) (PR: [#8986](https://github.com/penpot/penpot/pull/8986))
+- Persist asset search and section filter across sidebar tabs (by @eureka0928) [#2913](https://github.com/penpot/penpot/issues/2913) (PR: [#8985](https://github.com/penpot/penpot/pull/8985))
+- Add delete and duplicate buttons to typography dialog (by @eureka0928) [#5270](https://github.com/penpot/penpot/issues/5270) (PR: [#8983](https://github.com/penpot/penpot/pull/8983))
+- Edit ruler guide position by double-clicking the guide pill (by @eureka0928) [#2311](https://github.com/penpot/penpot/issues/2311) (PR: [#8987](https://github.com/penpot/penpot/pull/8987))
+- Add search bar to color palette (by @eureka0928) [#7653](https://github.com/penpot/penpot/issues/7653) (PR: [#8994](https://github.com/penpot/penpot/pull/8994))
+- Add search bar to board size presets (by @eureka0928) [#4658](https://github.com/penpot/penpot/issues/4658) (PR: [#9117](https://github.com/penpot/penpot/pull/9117))
+- Allow customising the OIDC login button label (by @wdeveloper16) [#7027](https://github.com/penpot/penpot/issues/7027) (PR: [#9026](https://github.com/penpot/penpot/pull/9026))
+- Add page separators in Workspace [#9180](https://github.com/penpot/penpot/issues/9180) (PR: [#8561](https://github.com/penpot/penpot/pull/8561))
+- Preserve vector content when pasting SVG from external tools (by @RenzoMXD) [#546](https://github.com/penpot/penpot/issues/546) (PR: [#9182](https://github.com/penpot/penpot/pull/9182))
+- Add pixel grid color picker in viewport settings (by @jack-stormentswe) [#7750](https://github.com/penpot/penpot/issues/7750) (PR: [#9155](https://github.com/penpot/penpot/pull/9155))
+- Add HEX/HSB/HSL support to color picker with persistent model switcher (by @edwin-rivera-dev) [#9133](https://github.com/penpot/penpot/issues/9133) (PR: [#9134](https://github.com/penpot/penpot/pull/9134))
+- Show specific invitation-link error messages (by @niwinz) [#9220](https://github.com/penpot/penpot/issues/9220) (PR: [#9223](https://github.com/penpot/penpot/pull/9223))
+- Show detailed file import error messages (by @jsdevninja) [#8212](https://github.com/penpot/penpot/issues/8212) (PR: [#9004](https://github.com/penpot/penpot/pull/9004))
+- Add read-only preview mode for saved versions (by @wdeveloper16) [#7622](https://github.com/penpot/penpot/issues/7622) (PR: [#8976](https://github.com/penpot/penpot/pull/8976), [#9514](https://github.com/penpot/penpot/pull/9514))
+- Add clipboard read/write permissions to the plugin system (by @wdeveloper16) [#6980](https://github.com/penpot/penpot/issues/6980) (PR: [#9053](https://github.com/penpot/penpot/pull/9053))
+- Update auth hero illustration on login screen [#9532](https://github.com/penpot/penpot/issues/9532) (PR: [#9552](https://github.com/penpot/penpot/pull/9552))
+- Update Open Graph link preview metadata [#9555](https://github.com/penpot/penpot/issues/9555) (PR: [#9557](https://github.com/penpot/penpot/pull/9557))
+- Restore deleted team files in bulk instead of per file (by @Dexterity104) [#9246](https://github.com/penpot/penpot/issues/9246) (PR: [#9248](https://github.com/penpot/penpot/pull/9248))
+- Preserve Inkscape labels when pasting SVGs (by @jeffrey701) [#7869](https://github.com/penpot/penpot/issues/7869) (PR: [#9252](https://github.com/penpot/penpot/pull/9252))
+- Add Alt+click to expand layer subtree (by @MilosM348) [#7736](https://github.com/penpot/penpot/issues/7736) (PR: [#9179](https://github.com/penpot/penpot/pull/9179))
+- Allow deleting the profile avatar after uploading (by @moorsecopers99) [#9067](https://github.com/penpot/penpot/issues/9067) (PR: [#9068](https://github.com/penpot/penpot/pull/9068))
+- Improve file validation performance and fix orphan shape detection [#9790](https://github.com/penpot/penpot/issues/9790) (PR: [#9789](https://github.com/penpot/penpot/pull/9789))
+- Add v2.16 release notes (What's new modal) [#9945](https://github.com/penpot/penpot/issues/9945) (PR: [#9940](https://github.com/penpot/penpot/pull/9940))
+- Enable multi-instance horizontal scaling for MCP server [#10000](https://github.com/penpot/penpot/issues/10000) (PR: [#10013](https://github.com/penpot/penpot/pull/10013))
+
+### :bug: Bugs fixed
+
+- Fix plugin API `Board.addRulerGuide` attaching guides to the page instead of the board due to a shadowed `id` binding; also correct the `'content:write'` permission error message and the `RulerGuideProxy` name (by @girafic) [#8225](https://github.com/penpot/penpot/issues/8225) (PR: [#8632](https://github.com/penpot/penpot/pull/8632))
+- Add Shift+Numpad aliases for zoom shortcuts (by @RenzoMXD) [#2457](https://github.com/penpot/penpot/issues/2457) (PR: [#9063](https://github.com/penpot/penpot/pull/9063))
+- Save and restore selection state in undo/redo (by @eureka0928) [#6007](https://github.com/penpot/penpot/issues/6007) (PR: [#8652](https://github.com/penpot/penpot/pull/8652))
+- Add guide locking and fix locked element selection in viewer (by @Dexterity104) [#8358](https://github.com/penpot/penpot/issues/8358) (PR: [#8949](https://github.com/penpot/penpot/pull/8949))
+- Add natural sorting on token names [#8635](https://github.com/penpot/penpot/issues/8635) (PR: [#8672](https://github.com/penpot/penpot/pull/8672))
+- Fix warnings for unsupported token $type (by @Dexterity104) [#8790](https://github.com/penpot/penpot/issues/8790) (PR: [#8873](https://github.com/penpot/penpot/pull/8873))
+- Apply styles to selection (by @AzazelN28) [#9661](https://github.com/penpot/penpot/issues/9661) (PR: [#8625](https://github.com/penpot/penpot/pull/8625))
+- Fix Alt/Option to draw shapes from center point (by @offreal) [#8360](https://github.com/penpot/penpot/issues/8360) (PR: [#8381](https://github.com/penpot/penpot/pull/8381))
+- Fix library update button freezing [#9330](https://github.com/penpot/penpot/issues/9330) (PR: [#9513](https://github.com/penpot/penpot/pull/9513))
+- Fix typo in subscription settings success key (by @jack-stormentswe) [#9203](https://github.com/penpot/penpot/issues/9203) (PR: [#9204](https://github.com/penpot/penpot/pull/9204))
+- Add token name on broken token pill on sidebar [#9534](https://github.com/penpot/penpot/issues/9534) (PR: [#8527](https://github.com/penpot/penpot/pull/8527))
+- Fix tooltip activated when tab change [#9539](https://github.com/penpot/penpot/issues/9539) (PR: [#8719](https://github.com/penpot/penpot/pull/8719))
+- Fix title on shared button [#9541](https://github.com/penpot/penpot/issues/9541) (PR: [#8696](https://github.com/penpot/penpot/pull/8696))
+- Fix hover on layers [#9542](https://github.com/penpot/penpot/issues/9542) (PR: [#8885](https://github.com/penpot/penpot/pull/8885))
+- Fix highlight after name edition [#9537](https://github.com/penpot/penpot/issues/9537) (PR: [#8890](https://github.com/penpot/penpot/pull/8890))
+- Fix multiple small UI bugs — id prop, update copy, library modal scroll [#9536](https://github.com/penpot/penpot/issues/9536) (PR: [#8604](https://github.com/penpot/penpot/pull/8604))
+- Fix themes modal height [#9535](https://github.com/penpot/penpot/issues/9535) (PR: [#9105](https://github.com/penpot/penpot/pull/9105))
+- Fix layers panel rename showing default type name (by @jack-stormentswe) [#9230](https://github.com/penpot/penpot/issues/9230) (PR: [#9231](https://github.com/penpot/penpot/pull/9231))
+- Suppress browser context menu on workspace sidebar right-click (by @sujyotraut) [#5127](https://github.com/penpot/penpot/issues/5127) (PR: [#9196](https://github.com/penpot/penpot/pull/9196))
+- Fix plugin API fileVersion.restore() hanging on failure (by @thomascolden585-svg) [#9092](https://github.com/penpot/penpot/issues/9092) (PR: [#9111](https://github.com/penpot/penpot/pull/9111))
+- Fix stroke-only SVG paths losing rounded join on split (by @Chrissi2812) [#5283](https://github.com/penpot/penpot/issues/5283) (PR: [#9156](https://github.com/penpot/penpot/pull/9156))
+- Fix plugin API library.connectLibrary() not returning Promise (by @boskodev790) [#9646](https://github.com/penpot/penpot/issues/9646) (PR: [#9158](https://github.com/penpot/penpot/pull/9158))
+- Fix LDAP provider schema typo in malli migration (by @boskodev790) [#9531](https://github.com/penpot/penpot/issues/9531) (PR: [#9165](https://github.com/penpot/penpot/pull/9165))
+- Fix login-with-ldap dropping error on uninitialized LDAP (by @boskodev790) [#9533](https://github.com/penpot/penpot/issues/9533) (PR: [#9159](https://github.com/penpot/penpot/pull/9159))
+- Fix OIDC_USER_INFO_SOURCE flag being ignored (by @GeekClassy) [#9108](https://github.com/penpot/penpot/issues/9108) (PR: [#9114](https://github.com/penpot/penpot/pull/9114))
+- Fix share-link viewer crash on malformed email (by @boskodev790) [#9530](https://github.com/penpot/penpot/issues/9530) (PR: [#9120](https://github.com/penpot/penpot/pull/9120))
+- Fix crash pasting component variants from external library (by @FairyPigDev) [#8144](https://github.com/penpot/penpot/issues/8144) (PR: [#9136](https://github.com/penpot/penpot/pull/9136))
+- Remove corepack from MCP launcher for Node.js 25+ (by @TheAifam5) [#8877](https://github.com/penpot/penpot/issues/8877) (PR: [#9119](https://github.com/penpot/penpot/pull/9119))
+- Fix Copy as SVG for multi-shape selections (by @RenzoMXD) [#9088](https://github.com/penpot/penpot/issues/9088) (PR: [#9066](https://github.com/penpot/penpot/pull/9066))
+- Preserve OpenType variant name table for custom fonts in the dashboard (by @rutherfordcraze) [#8924](https://github.com/penpot/penpot/issues/8924) (PR: [#9193](https://github.com/penpot/penpot/pull/9193))
+- Add export panel to inspect styles tab [#9660](https://github.com/penpot/penpot/issues/9660) (PR: [#8645](https://github.com/penpot/penpot/pull/8645))
+- Fix styles between grid layout inputs [#9656](https://github.com/penpot/penpot/issues/9656) (PR: [#8673](https://github.com/penpot/penpot/pull/8673))
+- Fix dates to avoid show them in english when browser is in auto [#8709](https://github.com/penpot/penpot/issues/8709) (PR: [#8775](https://github.com/penpot/penpot/pull/8775))
+- Fix focus radio button [#9657](https://github.com/penpot/penpot/issues/9657) (PR: [#8774](https://github.com/penpot/penpot/pull/8774))
+- Token tree should be expanded by default [#9662](https://github.com/penpot/penpot/issues/9662) (PR: [#8799](https://github.com/penpot/penpot/pull/8799))
+- Fix opacity incorrectly disabled for visible shapes [#9658](https://github.com/penpot/penpot/issues/9658) (PR: [#8854](https://github.com/penpot/penpot/pull/8854))
+- Fix plugin modal drag over iframe and close button (by @marekhrabe) [#9529](https://github.com/penpot/penpot/issues/9529) (PR: [#8871](https://github.com/penpot/penpot/pull/8871))
+- Fix hot update on color-row on texts [#9664](https://github.com/penpot/penpot/issues/9664) (PR: [#8880](https://github.com/penpot/penpot/pull/8880))
+- Fix selected color tokens [#9655](https://github.com/penpot/penpot/issues/9655) (PR: [#8889](https://github.com/penpot/penpot/pull/8889))
+- Fix dashboard Recent/Deleted titles overlapped by scrolling content (by @rockchris099) [#8577](https://github.com/penpot/penpot/issues/8577)
+- Display resolved values of inactive tokens [#9665](https://github.com/penpot/penpot/issues/9665) (PR: [#8589](https://github.com/penpot/penpot/pull/8589))
+- Fix hyphens stripped from export filenames (by @jamesrayammons) [#8901](https://github.com/penpot/penpot/issues/8901) (PR: [#8944](https://github.com/penpot/penpot/pull/8944))
+- Fix app crash on multiselection with hidden shapes and opacity mixed value [#9666](https://github.com/penpot/penpot/issues/9666) (PR: [#8932](https://github.com/penpot/penpot/pull/8932))
+- Fix gap input throwing an error [#9667](https://github.com/penpot/penpot/issues/9667) (PR: [#8984](https://github.com/penpot/penpot/pull/8984))
+- Fix copy to be more specific [#9668](https://github.com/penpot/penpot/issues/9668) (PR: [#9028](https://github.com/penpot/penpot/pull/9028))
+- Fix incorrect rendering when exporting text as SVG, PNG and JPG (by @edwin-rivera-dev) [#8516](https://github.com/penpot/penpot/issues/8516) (PR: [#9094](https://github.com/penpot/penpot/pull/9094))
+- Fix typography style creation with tokenized line-height (by @juan-flores077) [#8479](https://github.com/penpot/penpot/issues/8479) (PR: [#9121](https://github.com/penpot/penpot/pull/9121))
+- Fix colorpicker layout hiding eyedropper button [#9669](https://github.com/penpot/penpot/issues/9669) (PR: [#9125](https://github.com/penpot/penpot/pull/9125))
+- Fix restore-deleted-team-files reduce typo (by @Dexterity104) [#9240](https://github.com/penpot/penpot/issues/9240) (PR: [#9241](https://github.com/penpot/penpot/pull/9241))
+- Fix internal error on layer prev/next sibling selection (by @jsdevninja) [#7064](https://github.com/penpot/penpot/issues/7064) (PR: [#9003](https://github.com/penpot/penpot/pull/9003))
+- Fix tooltip appearing two times when nested elements [#9674](https://github.com/penpot/penpot/issues/9674) (PR: [#9031](https://github.com/penpot/penpot/pull/9031))
+- Fix broken update library notification link in the UI [#9673](https://github.com/penpot/penpot/issues/9673) (PR: [#9070](https://github.com/penpot/penpot/pull/9070))
+- Fix plugin API ShapeBase.component() returning outermost instead of immediate component [#9183](https://github.com/penpot/penpot/issues/9183) (PR: [#9298](https://github.com/penpot/penpot/pull/9298))
+- Fix content attribute sync group resolution by shape type [#9527](https://github.com/penpot/penpot/issues/9527) (PR: [#8724](https://github.com/penpot/penpot/pull/8724))
+- Fix plugin parse-point returning plain map instead of Point record (by @FairyPigDev) [#8409](https://github.com/penpot/penpot/issues/8409) (PR: [#9129](https://github.com/penpot/penpot/pull/9129))
+- Fix `:heigth` typo in clipboard frame-same-size? (by @iot2edge) [#9249](https://github.com/penpot/penpot/issues/9249) (PR: [#9250](https://github.com/penpot/penpot/pull/9250))
+- Fix Settings Update button enabled state (by @moorsecopers99) [#9090](https://github.com/penpot/penpot/issues/9090) (PR: [#9091](https://github.com/penpot/penpot/pull/9091))
+- Fix library updates reappearing after reload [#9326](https://github.com/penpot/penpot/issues/9326) (PR: [#9563](https://github.com/penpot/penpot/pull/9563))
+- Fix internal error on margins [#9309](https://github.com/penpot/penpot/issues/9309) (PR: [#9311](https://github.com/penpot/penpot/pull/9311))
+- Remove drag-to-change when token applied on numeric input [#9313](https://github.com/penpot/penpot/issues/9313) (PR: [#9314](https://github.com/penpot/penpot/pull/9314))
+- Fix extra input on canvas background [#9359](https://github.com/penpot/penpot/issues/9359) (PR: [#9360](https://github.com/penpot/penpot/pull/9360))
+- Fix frame selection highlight persists after rename [#9538](https://github.com/penpot/penpot/issues/9538) (PR: [#8938](https://github.com/penpot/penpot/pull/8938))
+- Fix several color picker issues [#9556](https://github.com/penpot/penpot/issues/9556) (PR: [#9558](https://github.com/penpot/penpot/pull/9558))
+- Fix asset icon broken on Asset tab [#9587](https://github.com/penpot/penpot/issues/9587) (PR: [#9612](https://github.com/penpot/penpot/pull/9612))
+- Fix text fill color stops updating in multiselect with texts [#9608](https://github.com/penpot/penpot/issues/9608) (PR: [#9549](https://github.com/penpot/penpot/pull/9549))
+- Fix standalone tokens ordering separated from token groups [#9733](https://github.com/penpot/penpot/issues/9733) (PR: [#9736](https://github.com/penpot/penpot/pull/9736))
+- Fix delete invitation modal readability in light theme [#9737](https://github.com/penpot/penpot/issues/9737) (PR: [#9747](https://github.com/penpot/penpot/pull/9747))
+- Fix team invitation not automatically accepted after account validation [#9776](https://github.com/penpot/penpot/issues/9776) (PR: [#9782](https://github.com/penpot/penpot/pull/9782))
+- Fix Plugin API addRulerGuide creating guides on page instead of board (by @girafic) [#8225](https://github.com/penpot/penpot/issues/8225) (PR: [#8632](https://github.com/penpot/penpot/pull/8632))
+- Fix text editor not swapping correctly when enabling/disabling WebGL [#10015](https://github.com/penpot/penpot/issues/10015)
+- Fix WebGL renderer focus mode leaving artefacts [#10061](https://github.com/penpot/penpot/issues/10061) (PR: [#10091](https://github.com/penpot/penpot/pull/10091))
+- Fix double click on text selecting underlying element when WebGL render is enabled [#10080](https://github.com/penpot/penpot/issues/10080) (PR: [#10123](https://github.com/penpot/penpot/pull/10123))
+- Fix publishing or unpublishing file as library failing with unexpected state found error [#10094](https://github.com/penpot/penpot/issues/10094) (PR: [#10093](https://github.com/penpot/penpot/pull/10093))
+- Fix team invitation failing when email address contains consecutive dots in domain [#10097](https://github.com/penpot/penpot/issues/10097) (PR: [#10096](https://github.com/penpot/penpot/pull/10096))
+- Add detailed error messages for unspecified import errors [#9759](https://github.com/penpot/penpot/issues/9759) (PR: [#9886](https://github.com/penpot/penpot/pull/9886))
+- Fix mask with children not applying blur correctly [#10004](https://github.com/penpot/penpot/issues/10004) (PR: [#10028](https://github.com/penpot/penpot/pull/10028))
+- Fix WebGL italic font mismatch when custom font variants are mapped [#10060](https://github.com/penpot/penpot/issues/10060) (PR: [#10122](https://github.com/penpot/penpot/pull/10122))
+
+
+## 2.15.4
+
+### :sparkles: New features & Enhancements
+
+- Add rate limiting and concurrency safety for file snapshot operations [#9723](https://github.com/penpot/penpot/issues/9723) (PR: [#9722](https://github.com/penpot/penpot/pull/9722))
+- Prevent concurrent font uploads from causing excessive simultaneous requests [#9922](https://github.com/penpot/penpot/issues/9922) (PR: [#9921](https://github.com/penpot/penpot/pull/9921))
+
+### :bug: Bugs fixed
+
+- Emit `create-shape-layout` for flex/grid layout creation from plugins and MCP (same event as workspace) [#9652](https://github.com/penpot/penpot/issues/9652) (PR: [#9654](https://github.com/penpot/penpot/pull/9654))
+- Fix broken authentication on /assets handlers [#9677](https://github.com/penpot/penpot/issues/9677) (PR: [#9679](https://github.com/penpot/penpot/pull/9679))
+- Fix API doc endpoint returning HTML as text/plain [#9680](https://github.com/penpot/penpot/issues/9680) (PR: [#9681](https://github.com/penpot/penpot/pull/9681))
+- Fix unexpected error when opening the export dialog [#9721](https://github.com/penpot/penpot/issues/9721) (PR: [#9704](https://github.com/penpot/penpot/pull/9704))
+
+
+## 2.15.3
+
+### :bug: Bugs fixed
+
+- Fix Plugin API token methods failing with schema validation error on PRO [GH #9641](https://github.com/penpot/penpot/issues/9641)
+  (PR: [#9632](https://github.com/penpot/penpot/pull/9632))
+- Sanitize comment content on rendering [GH #9642](https://github.com/penpot/penpot/issues/9642)
+  (PR: [#9605](https://github.com/penpot/penpot/pull/9605))
+- Sanitize font family names on custom uploaded fonts [GH #9643](https://github.com/penpot/penpot/issues/9643)
+  (PR: [#9601](https://github.com/penpot/penpot/pull/9601))
+
+## 2.15.2
+
+### :bug: Bugs fixed
+
+- Fix mcp related internal config for docker images [GH #9565](https://github.com/penpot/penpot/pull/9565)
+
+## 2.15.1
+
+### :sparkles: New features & Enhancements
+
+- Add support for chunked uploading of fonts [GH #9560](https://github.com/penpot/penpot/issues/9560)
+
+### :bug: Bugs fixed
+
+- Fix "Help & Learning" submenu vertical alignment in account menu (by @juan-flores077) [#9137](https://github.com/penpot/penpot/issues/9137) (PR: [#9138](https://github.com/penpot/penpot/pull/9138))
+
+## 2.15.0
+
+### :rocket: Epics and highlights
+
+- Add MCP server integration for AI-assisted design workflows [#9174](https://github.com/penpot/penpot/issues/9174) (PR: [#9032](https://github.com/penpot/penpot/pull/9032), [#9321](https://github.com/penpot/penpot/pull/9321))
+
+### :sparkles: New features & Enhancements
+
+- Add MCP server integration [GH #9174](https://github.com/penpot/penpot/issues/9174)
+  (PR: [#9032](https://github.com/penpot/penpot/pull/9032), [#9321](https://github.com/penpot/penpot/pull/9321))
+- Add chunked upload API for large media and binary files (removes previous upload size limits) [GH #9516](https://github.com/penpot/penpot/issues/9516)
+  (PR: [#8909](https://github.com/penpot/penpot/pull/8909))
+- Add anonymous telemetry event collection [GH #9467](https://github.com/penpot/penpot/issues/9467)
+  (PR: [#9065](https://github.com/penpot/penpot/pull/9065), [#9483](https://github.com/penpot/penpot/pull/9483))
+- Improve team name validation [GH #9517](https://github.com/penpot/penpot/issues/9517)
+  (PR: [#9176](https://github.com/penpot/penpot/pull/9176))
+- Enhance readability of applied tokens in plugins API [GH #9175](https://github.com/penpot/penpot/issues/9175)
+  (PR: [#8607](https://github.com/penpot/penpot/pull/8607))
+- Encourage use of flex/grid layouts in designs generated via MCP [GH #9081](https://github.com/penpot/penpot/issues/9081)
+  (PR: [#9084](https://github.com/penpot/penpot/pull/9084))
+- Improve MCP server logging, adding Loki support [GH #9415](https://github.com/penpot/penpot/issues/9415)
+  (PR: [#9425](https://github.com/penpot/penpot/pull/9425))
+- Add security headers to Nginx on Docker images [GH #9519](https://github.com/penpot/penpot/issues/9519)
+  (PR: [#9473](https://github.com/penpot/penpot/pull/9473))
+
+### :bug: Bugs fixed
+
+- Fix text edition mode not exited when changing selection, blocking token application [GH #9346](https://github.com/penpot/penpot/issues/9346)
+  (PR: [#9355](https://github.com/penpot/penpot/pull/9355))
+- Reduce memory usage of MCP server when handling images (by @opcode81) [GH #9420](https://github.com/penpot/penpot/issues/9420)
+  (PR: [#9431](https://github.com/penpot/penpot/pull/9431))
+- Fix Plugin API token methods rejecting JS array of strings (by @boskodev790) [GH #9162](https://github.com/penpot/penpot/issues/9162)
+  (PR: [#9166](https://github.com/penpot/penpot/pull/9166))
+- Fix release notes modal appearing behind the dashboard sidebar (by @RenzoMXD) [GH #8296](https://github.com/penpot/penpot/issues/8296)
+  (PR: [#9126](https://github.com/penpot/penpot/pull/9126), [#9233](https://github.com/penpot/penpot/pull/9233))
+- Fix empty warning on login [GH #9520](https://github.com/penpot/penpot/issues/9520)
+  (PR: [#9056](https://github.com/penpot/penpot/pull/9056))
+- Fix maximum call stack size exceeded in SSE read-stream [GH #9470](https://github.com/penpot/penpot/issues/9470)
+  (PR: [#9484](https://github.com/penpot/penpot/pull/9484))
+- Fix incorrect handling of version restore operation [GH #9515](https://github.com/penpot/penpot/issues/9515)
+  (PR: [#9041](https://github.com/penpot/penpot/pull/9041))
+- Fix MCP ReplServer binding to all interfaces (0.0.0.0) instead of localhost, allowing unauthenticated RCE [GH #9518](https://github.com/penpot/penpot/issues/9518)
+  (PR: [#9400](https://github.com/penpot/penpot/pull/9400))
+- Fix MCP integrations URL copy action to match the URL displayed in settings [GH #9238](https://github.com/penpot/penpot/issues/9238)
+  (PR: [#9239](https://github.com/penpot/penpot/pull/9239))
+- Fix swapped analytics event names on MCP tab-switch dialog (by @Dexterity104) [GH #9496](https://github.com/penpot/penpot/issues/9496)
+  (PR: [#9322](https://github.com/penpot/penpot/pull/9322))
+- Fix multiple selection on shapes with token applied to stroke color [GH #9522](https://github.com/penpot/penpot/issues/9522)
+  (PR: [#9110](https://github.com/penpot/penpot/pull/9110))
+- Fix onboarding modals appearing behind libraries and templates panel [GH #9521](https://github.com/penpot/penpot/issues/9521)
+  (PR: [#9178](https://github.com/penpot/penpot/pull/9178))
+- Fix keep-alive interval leak in PluginBridge (by @opcode81) [GH #9430](https://github.com/penpot/penpot/issues/9430)
+  (PR: [#9435](https://github.com/penpot/penpot/pull/9435))
+
+## 2.14.5
+
+### :bug: Bugs fixed
+
+- Fix incorrect invitation token handling on register process [GH #9380](https://github.com/penpot/penpot/pull/9380)
+
+## 2.14.4
+
+### :bug: Bugs fixed
+
+- Fix email validation [Taiga #14006](https://tree.taiga.io/project/penpot/issue/14006)
+- Fix email blacklisting [GH #9122](https://github.com/penpot/penpot/pull/9122)
+- Fix removeChild errors from unmount race conditions [GH #8927](https://github.com/penpot/penpot/pull/8927)
+
+## 2.14.3
+
+### :sparkles: New features & Enhancements
+
+- Add webp export format to plugin types [GH #8870](https://github.com/penpot/penpot/pull/8870)
+- Use shared singleton containers for React portals to reduce DOM growth [GH #8957](https://github.com/penpot/penpot/pull/8957)
+
+### :bug: Bugs fixed
+
+- Fix variants corner cases with selrect and points [GH #8882](https://github.com/penpot/penpot/pull/8882)
+- Fix dashboard navigation tabs overlap with projects content when scrolling [Taiga #13962](https://tree.taiga.io/project/penpot/issue/13962)
+- Fix text editor v1 focus [Taiga #13961](https://tree.taiga.io/project/penpot/issue/13961)
+- Fix highlight on frames after rename [GH #8938](https://github.com/penpot/penpot/pull/8938)
+- Fix TypeError in sd-token-uuid when resolving tokens interactively [GH #8929](https://github.com/penpot/penpot/pull/8929)
+- Fix path drawing preview passing shape instead of content to next-node
+- Fix swapped arguments in CLJS PathData `-nth` with default
+- Normalize PathData coordinates to safe integer bounds on read
+- Fix RangeError from re-entrant error handling causing stack overflow [GH #8962](https://github.com/penpot/penpot/pull/8962)
+- Fix builder bool styles and media validation [GH #8963](https://github.com/penpot/penpot/pull/8963)
+- Fix "Move to" menu allowing same project as target when multiple files are selected
+- Fix crash when index query param is duplicated in URL
+- Fix wrong extremity point in path `calculate-extremities` for line-to segments
+- Fix reversed args in DTCG shadow composite token conversion
+- Fix `inside-layout?` passing shape id instead of shape to `frame-shape?`
+- Fix wrong `mapcat` call in `collect-main-shapes`
+- Fix stale accumulator in `get-children-in-instance` recursion
+- Fix typo `:podition` in swap-shapes grid cell
+- Fix multiple selection on shapes with token applied to stroke color
+
+## 2.14.2
+
+### :sparkles: New features & Enhancements
+
+- Add protection for stale JS asset cache to force reload on version mismatch [GH #8638](https://github.com/penpot/penpot/pull/8638)
+- Normalize newsletter opt-in checkbox across different register flows [GH #8839](https://github.com/penpot/penpot/pull/8839)
+
+### :bug: Bugs fixed
+
+- Fix PathData corruption root causes across WASM and CLJS (unsafe transmute and byteOffset handling)
+- Handle corrupted PathData segments gracefully instead of crashing
+- Fix swapped move-to/line-to type codes in PathData binary readers
+- Fix non-integer row/column values in grid cell position inputs [GH #8869](https://github.com/penpot/penpot/pull/8869)
+- Fix nil path content crash by exposing safe public API [GH #8806](https://github.com/penpot/penpot/pull/8806)
+- Fix infinite recursion in get-frame-ids for thumbnail extraction [GH #8807](https://github.com/penpot/penpot/pull/8807)
+- Fix stale-asset detector missing protocol-dispatch errors
+- Ignore Zone.js toString TypeError in uncaught error handler [GH #8804](https://github.com/penpot/penpot/pull/8804)
+- Prevent thumbnail frame recursion overflow [GH #8763](https://github.com/penpot/penpot/pull/8763)
+- Fix vector index out of bounds in viewer zoom-to-fit/fill [GH #8834](https://github.com/penpot/penpot/pull/8834)
+- Guard delete undo against missing sibling order [GH #8858](https://github.com/penpot/penpot/pull/8858)
+- Fix ICounted error on numeric-input token dropdown keyboard nav [GH #8803](https://github.com/penpot/penpot/pull/8803)
+
+## 2.14.1
+
+### :sparkles: New features & Enhancements
+
+- Add automatic retry with backoff for idempotent RPC requests on network failures [GH #8792](https://github.com/penpot/penpot/pull/8792)
+- Add scroll and zoom throttling to one state update per animation frame [GH #8812](https://github.com/penpot/penpot/pull/8812)
+- Improve error handling and exception formatting [GH #8757](https://github.com/penpot/penpot/pull/8757)
+
+### :bug: Bugs fixed
+
+- Fix crash in apply-text-modifier with nil selrect or modifier [GH #8762](https://github.com/penpot/penpot/pull/8762)
+- Fix incorrect attrs references on generate-sync-shape [GH #8776](https://github.com/penpot/penpot/pull/8776)
+- Fix regression on subpath support [GH #8793](https://github.com/penpot/penpot/pull/8793)
+- Improve error reporting on request parsing failures [GH #8805](https://github.com/penpot/penpot/pull/8805)
+- Fix fetch abort errors escaping the unhandled exception handler [GH #8801](https://github.com/penpot/penpot/pull/8801)
+- Fix nil deref on missing bounds in layout modifier propagation [GH #8735](https://github.com/penpot/penpot/pull/8735)
+- Fix TypeError when token error map lacks :error/fn key [GH #8767](https://github.com/penpot/penpot/pull/8767)
+- Fix dissoc error when detaching stroke color from library [GH #8738](https://github.com/penpot/penpot/pull/8738)
+- Fix crash when pasting image into text editor
+- Fix null text crash on paste in text editor
+- Ensure path content is always PathData when saving
+- Fix error when get-parent-with-data encounters non-Element nodes
+
+## 2.14.0
+
+### :boom: Breaking changes & Deprecations
+
+- Deprecate `PENPOT_HTTP_SERVER_MAX_MULTIPART_BODY_SIZE` in favour of `PENPOT_HTTP_SERVER_MAX_BODY_SIZE`.
+
+### :sparkles: New features & Enhancements
+
+- Access to design tokens in Penpot Plugins [Taiga #8990](https://tree.taiga.io/project/penpot/us/8990)
+- Remap references when renaming tokens [Taiga #10202](https://tree.taiga.io/project/penpot/us/10202)
+- Tokens panel nested path view [Taiga #9966](https://tree.taiga.io/project/penpot/us/9966)
+- Improve usability of lock and hide buttons in the layer panel. [Taiga #12916](https://tree.taiga.io/project/penpot/issue/12916)
+- Optimize sidebar performance for deeply nested shapes [Taiga #13017](https://tree.taiga.io/project/penpot/task/13017)
+- Remove tokens path node and bulk remove tokens [Taiga #13007](https://tree.taiga.io/project/penpot/us/13007)
+- Replace themes management modal radio buttons for switches [Taiga #9215](https://tree.taiga.io/project/penpot/us/9215)
+
+### :bug: Bugs fixed
+
+- Remove whitespaces from asset export filename [GH #8133](https://github.com/penpot/penpot/pull/8133)
+- Fix prototype connections lost when switching between variants [Taiga #12812](https://tree.taiga.io/project/penpot/issue/12812)
+- Fix wrong image in the onboarding invitation block [Taiga #13040](https://tree.taiga.io/project/penpot/issue/13040)
+- Fix wrong register image [Taiga #12955](https://tree.taiga.io/project/penpot/task/12955)
+- Fix error message on components doesn't close automatically [Taiga #12012](https://tree.taiga.io/project/penpot/issue/12012)
+- Fix incorrect default option on tokens import dialog [GH #8051](https://github.com/penpot/penpot/pull/8051)
+- Fix unhandled exception tokens creation dialog [GH #8110](https://github.com/penpot/penpot/issues/8110)
+- Fix displaying a hidden user avatar when there is only one more [Taiga #13058](https://tree.taiga.io/project/penpot/issue/13058)
+- Fix exception on uploading large fonts [GH #8135](https://github.com/penpot/penpot/pull/8135)
+- Fix boolean operators in menu for boards [Taiga #13174](https://tree.taiga.io/project/penpot/issue/13174)
+- Fix viewer can update library [Taiga #13186](https://tree.taiga.io/project/penpot/issue/13186)
+- Fix remove fill affects different element than selected [Taiga #13128](https://tree.taiga.io/project/penpot/issue/13128)
+- Fix cannot apply second token after creation while shape is selected [Taiga #13513](https://tree.taiga.io/project/penpot/issue/13513)
+- Fix error activating a set with invalid shadow token applied [Taiga #13528](https://tree.taiga.io/project/penpot/issue/13528)
+- Fix component "broken" after variant switch [Taiga #12984](https://tree.taiga.io/project/penpot/issue/12984)
+- Fix incorrect query for file versions [GH #8463](https://github.com/penpot/penpot/pull/8463)
+- Fix warning when clicking on number token pills [Taiga #13661](https://tree.taiga.io/project/penpot/issue/13661)
+- Fix 'not ISeqable' error when entering float values in layout item and opacity inputs [GH #8569](https://github.com/penpot/penpot/pull/8569)
+- Fix crash in select component when options vector is empty [GH #8578](https://github.com/penpot/penpot/pull/8578)
+- Fix scroll on colorpicker [Taiga #13623](https://tree.taiga.io/project/penpot/issue/13623)
+- Fix crash when pasting non-map transit clipboard data [GH #8580](https://github.com/penpot/penpot/pull/8580)
+- Fix `penpot.openPage()` plugin API not navigating in the same tab; change default to same-tab navigation and allow passing a UUID string instead of a Page object [GH #8520](https://github.com/penpot/penpot/issues/8520)
+
+## 2.13.3
+
+### :bug: Bugs fixed
+
+- Revert yetti (http server) update, because that caused a regression on multipart uploads
+
+## 2.13.2
+
+### :bug: Bugs fixed
+
+- Fix modifying shapes by apply negative tokens to border radius [Taiga #13317](https://tree.taiga.io/project/penpot/issue/13317)
+- Fix arbitrary file read security issue on create-font-variant rpc method (https://github.com/penpot/penpot/security/advisories/GHSA-xp3f-g8rq-9px2)
+
+## 2.13.1
+
+### :bug: Bugs fixed
+
+- Fix PDF Exporter outputs empty page when board has A4 format [Taiga #13181](https://tree.taiga.io/project/penpot/issue/13181)
+
+## 2.13.0
+
+### :heart: Community contributions (Thank you!)
+
+- Fix mask issues with component swap (by @dfelinto) [GH #7675](https://github.com/penpot/penpot/issues/7675)
+
+### :sparkles: New features & Enhancements
+
+- Add new Box Shadow Tokens [Taiga #10201](https://tree.taiga.io/project/penpot/us/10201)
+- Make i18n translation files load on-demand [Taiga #11474](https://tree.taiga.io/project/penpot/us/11474)
+- Add deleted files to dashboard [Taiga #8149](https://tree.taiga.io/project/penpot/us/8149)
+
+### :bug: Bugs fixed
+
+- Fix problem when drag+duplicate a full grid [Taiga #12565](https://tree.taiga.io/project/penpot/issue/12565)
+- Fix problem when pasting elements in reverse flex layout [Taiga #12460](https://tree.taiga.io/project/penpot/issue/12460)
+- Fix wrong board size presets in Android [Taiga #12339](https://tree.taiga.io/project/penpot/issue/12339)
+- Fix problem with grid layout components and auto sizing [GH #7797](https://github.com/penpot/penpot/issues/7797)
+- Fix some alignments on inspect tab [Taiga #12915](https://tree.taiga.io/project/penpot/issue/12915)
+- Fix problem with text editor maintaining previous styles [Taiga #12835](https://tree.taiga.io/project/penpot/issue/12835)
+- Fix color assets from shared libraries not appearing as assets in Selected colors panel [Taiga #12957](https://tree.taiga.io/project/penpot/issue/12957)
+- Fix CSS generated box-shadow property [Taiga #12997](https://tree.taiga.io/project/penpot/issue/12997)
+- Fix inner shadow selector on shadow token [Taiga #12951](https://tree.taiga.io/project/penpot/issue/12951)
+- Fix missing text color token from selected shapes in selected colors list [Taiga #12956](https://tree.taiga.io/project/penpot/issue/12956)
+- Fix dropdown option width in Guides columns dropdown [Taiga #12959](https://tree.taiga.io/project/penpot/issue/12959)
+- Fix typos on download modal [Taiga #12865](https://tree.taiga.io/project/penpot/issue/12865)
+- Fix allow negative spread values on shadow token creation [Taiga #13167](https://tree.taiga.io/project/penpot/issue/13167)
+- Fix spanish translations on import export token modal [Taiga #13171](https://tree.taiga.io/project/penpot/issue/13171)
+- Fix unhandled exception on open-new-window helper [GH #7787](https://github.com/penpot/penpot/issues/7787)
+- Fix incorrect handling of input values on layout gap and padding inputs [GH #8113](https://github.com/penpot/penpot/issues/8113)
+- Fix several race conditions on path editor [GH #8187](https://github.com/penpot/penpot/pull/8187)
+- Fix app freeze when introducing an error on a very long token name [Taiga #13214](https://tree.taiga.io/project/penpot/issue/13214)
+- Fix import a file with shadow tokens [Taiga #13229](https://tree.taiga.io/project/penpot/issue/13229)
+- Fix allow spaces on token description [Taiga #13184](https://tree.taiga.io/project/penpot/issue/13184)
+- Fix error when creating a token with an invalid name [Taiga #13219](https://tree.taiga.io/project/penpot/issue/13219)
+
+## 2.12.1
+
+### :bug: Bugs fixed
+
+- Fix setting a portion of text as bold or underline messes things up [GH #7980](https://github.com/penpot/penpot/issues/7980)
+- Fix problem with style in fonts input [Taiga #12935](https://tree.taiga.io/project/penpot/issue/12935)
+- Fix problem with path editor and right click [GH #7917](https://github.com/penpot/penpot/issues/7917)
+
+## 2.12.0
+
+### :boom: Breaking changes & Deprecations
+
+#### Backend RPC API changes
+
+The backend RPC API URLS are changed from `/api/rpc/command/<name>` to
+`/api/main/methods/<name>`. The previous PATH is preserved for backward
+compatibility; however, if you are a user of this API, it is strongly
+recommended that you adapt your code to use the new PATH.
+
+#### Updated SSO Callback URL
+
+The OAuth / Single Sign-On (SSO) callback endpoint has changed to
+align with the new OpenID Connect (OIDC) implementation.
+
+Old callback URL:
+
+```
+https://<your_domain>/api/auth/oauth/<oauth_provider>/callback
+```
+
+New callback URL:
+
+```
+https://<your_domain>/api/auth/oidc/callback
+```
+
+**Action required:**
+
+If you have SSO/Social-Auth configured on your on-premise instance,
+the following actions are required before update:
+
+Update your OAuth or SSO provider configuration (e.g., Okta, Google,
+Azure AD, etc.) to use the new callback URL. Failure to update may
+result in authentication failures after upgrading.
+
+**Reason for change:**
+
+This update standardizes all authentication flows under the single URL
+and makis it more modular, enabling the ability to configure SSO auth
+provider dinamically.
+
+#### Changes on default docker compose
+
+We have updated the `docker/images/docker-compose.yaml` with a small
+change related to the `PENPOT_SECRET_KEY`. Since this version, this
+environment variable is also required on exporter. So if you are using
+penpot on-premise you will need to apply the same changes on your own
+`docker-compose.yaml` file.
+
+We have removed the Minio server from the `docker/images/docker-compose.yml`
+example. It's still usable as before, we just removed the example.
+
+### :rocket: Epics and highlights
+
+### :heart: Community contributions (Thank you!)
+
+- Ensure consistent snap behavior across all zoom levels [GH #7774](https://github.com/penpot/penpot/pull/7774) by [@Tokytome](https://github.com/Tokytome)
+- Fix crash in token grid view due to tooltip validation (by @dfelinto) [GH #7887](https://github.com/penpot/penpot/pull/7887)
+- Enable Hindi translations on the application
+
+### :sparkles: New features & Enhancements
+
+- Add the ability to select boards to export as PDF [Taiga #12320](https://tree.taiga.io/project/penpot/issue/12320)
+- Add toggle for switching boolean property values [Taiga #12341](https://tree.taiga.io/project/penpot/us/12341)
+- Make the file export process more reliable [Taiga #12555](https://tree.taiga.io/project/penpot/us/12555)
+- Add auth flow changes [Taiga #12333](https://tree.taiga.io/project/penpot/us/12333)
+- Add new shape validation mechanism for shapes [GH #7696](https://github.com/penpot/penpot/pull/7696)
+- Apply color tokens from sidebar [Taiga #11353](https://tree.taiga.io/project/penpot/us/11353)
+- Display tokens in the inspect tab [Taiga #9313](https://tree.taiga.io/project/penpot/us/9313)
+- Refactor clipboard behavior to assess some minor inconsistencies and make pasting binary data faster. [Taiga #12571](https://tree.taiga.io/project/penpot/task/12571)
+
+### :bug: Bugs fixed
+
+- Fix text line-height values are wrong [Taiga #12252](https://tree.taiga.io/project/penpot/issue/12252)
+- Fix pan cursor not disabling viewport guides [GH #6985](https://github.com/penpot/penpot/issues/6985)
+- Fix viewport resize on locked shapes [Taiga #11974](https://tree.taiga.io/project/penpot/issue/11974)
+- Fix on copy instance inside a components chain touched are missing [Taiga #12371](https://tree.taiga.io/project/penpot/issue/12371)
+- Fix problem with multiple selection and shadows [GH #7437](https://github.com/penpot/penpot/issues/7437)
+- Fix search shortcut [Taiga #10265](https://tree.taiga.io/project/penpot/issue/10265)
+- Fix shortcut conflict in text editor (increase/decrease font size vs word selection)
+- Fix problem with plugins generating code for pages different than current one [Taiga #12312](https://tree.taiga.io/project/penpot/issue/12312)
+- Fix input confirmation behavior is not uniform [Taiga #12294](https://tree.taiga.io/project/penpot/issue/12294)
+- Fix copy/pasting application/transit+json [Taiga #12721](https://tree.taiga.io/project/penpot/issue/12721)
+- Fix problem with plugins content attribute [Plugins #209](https://github.com/penpot/penpot-plugins/issues/209)
+- Fix U and E icon displayed in project list [Taiga #12806](https://tree.taiga.io/project/penpot/issue/12806)
+- Fix unpublish library modal not scrolling a long file list [Taiga #12285](https://tree.taiga.io/project/penpot/issue/12285)
+- Fix incorrect interaction betwen hower and scroll on assets sidebar [Taiga #12389](https://tree.taiga.io/project/penpot/issue/12389)
+- Fix switch variants with paths [Taiga #12841](https://tree.taiga.io/project/penpot/issue/12841)
+- Fix referencing typography tokens on font-family tokens [Taiga #12492](https://tree.taiga.io/project/penpot/issue/12492)
+- Fix horizontal scroll on layer panel [Taiga #12843](https://tree.taiga.io/project/penpot/issue/12843)
+- Fix unicode handling on email template abbreviation filter [GH #7966](https://github.com/penpot/penpot/pull/7966)
+
+## 2.11.1
+
+- Fix WEBP shape export on docker images [Taiga #3838](https://tree.taiga.io/project/penpot/issue/3838)
+
+## 2.11.0
+
+### :boom: Breaking changes & Deprecations
+
+- Deprecated configuration variables with the prefix `PENPOT_ASSETS_*`, and will be
+  removed in future versions:
+  - The `PENPOT_ASSETS_STORAGE_BACKEND` becomes `PENPOT_OBJECTS_STORAGE_BACKEND` and its
+    values passes from (`assets-fs` or `assets-s3`) to (`fs` or `s3`)
+  - The `PENPOT_STORAGE_ASSETS_FS_DIRECTORY` becomes `PENPOT_OBJECTS_STORAGE_FS_DIRECTORY`
+  - The `PENPOT_STORAGE_ASSETS_S3_BUCKET` becomes `PENPOT_OBJECTS_STORAGE_S3_BUCKET`
+  - The `PENPOT_STORAGE_ASSETS_S3_REGION` becomes `PENPOT_OBJECTS_STORAGE_S3_REGION`
+  - The `PENPOT_STORAGE_ASSETS_S3_ENDPOINT` becomes `PENPOT_OBJECTS_STORAGE_S3_ENDPOINT`
+  - The `PENPOT_STORAGE_ASSETS_S3_IO_THREADS` replaced (see below)
+
+- Add `PENPOT_NETTY_IO_THREADS` and `PENPOT_EXECUTOR_THREADS` variables to provide the
+  control over concurrency of the shared resources used by netty. Penpot uses the netty IO
+  threads for AWS S3 SDK and Redis/Valkey communication, and the EXEC threads to perform
+  out of HTTP serving threads tasks such that cache invalidation, S3 response completion,
+  configuration reloading and many other auxiliar tasks. By default they use a half number
+  if available cpus with a minumum of 2 for both executors. You should not touch that
+  variables unless you are know what you are doing.
+
+- Replace the `PENPOT_STORAGE_ASSETS_S3_IO_THREADS` with a more general configuration
+  `PENPOT_NETTY_IO_THREADS` used to configure a shared netty resources across different
+  services which use netty internally (redis connection, S3 SDK client). This
+  configuration is not very commonly used so don't expected real impact on any user.
+
+### :sparkles: New features & Enhancements
+
+- New composite token: Typography [Taiga #10200](https://tree.taiga.io/project/penpot/us/10200)
+- Show current Penpot version [Taiga #11603](https://tree.taiga.io/project/penpot/us/11603)
+- Switch several variant copies at the same time [Taiga #11411](https://tree.taiga.io/project/penpot/us/11411)
+- Invitations management improvements [Taiga #3479](https://tree.taiga.io/project/penpot/us/3479)
+- Alternative ways of creating variants - Button Viewport [Taiga #11931](https://tree.taiga.io/project/penpot/us/11931)
+- Reorder properties for a component [Taiga #10225](https://tree.taiga.io/project/penpot/us/10225)
+- File Data storage layout refactor [GH #7345](https://github.com/penpot/penpot/pull/7345)
+- Make several queries optimization on comment threads [GH #7506](https://github.com/penpot/penpot/pull/7506)
+
+### :bug: Bugs fixed
+
+- Fix selection problems when devtools open [Taiga #11950](https://tree.taiga.io/project/penpot/issue/11950)
+- Fix long font names overlap [Taiga #11844](https://tree.taiga.io/project/penpot/issue/11844)
+- Fix paste behavior according to the selected element [Taiga #11979](https://tree.taiga.io/project/penpot/issue/11979)
+- Fix problem with export size [GH #7160](https://github.com/penpot/penpot/issues/7160)
+- Fix multi level library dependencies [Taiga #12155](https://tree.taiga.io/project/penpot/issue/12155)
+- Fix component context menu options order in assets tab [Taiga #11941](https://tree.taiga.io/project/penpot/issue/11941)
+- Fix error updating library [Taiga #12218](https://tree.taiga.io/project/penpot/issue/12218)
+- Fix restoring a variant in another file makes it overlap the existing variant [Taiga #12049](https://tree.taiga.io/project/penpot/issue/12049)
+- Fix auto-width changes to fixed when switching variants [Taiga #12172](https://tree.taiga.io/project/penpot/issue/12172)
+- Fix component number has no singular translation string [Taiga #12106](https://tree.taiga.io/project/penpot/issue/12106)
+- Fix adding/removing identical text fills [Taiga #12287](https://tree.taiga.io/project/penpot/issue/12287)
+- Fix scroll on the inspect tab [Taiga #12293](https://tree.taiga.io/project/penpot/issue/12293)
+- Fix lock proportion tooltip [Taiga #12326](https://tree.taiga.io/project/penpot/issue/12326)
+- Fix internal Error when selecting a set by name in the token theme editor [Taiga #12310](https://tree.taiga.io/project/penpot/issue/12310)
+- Fix drag & drop functionality is swapping instead or reordering [Taiga #12254](https://tree.taiga.io/project/penpot/issue/12254)
+- Fix variants not syncronizing tokens on switch [Taiga #12290](https://tree.taiga.io/project/penpot/issue/12290)
+- Fix incorrect behavior of Alt + Drag for variants [Taiga #12309](https://tree.taiga.io/project/penpot/issue/12309)
+- Fix text override is lost after switch [Taiga #12269](https://tree.taiga.io/project/penpot/issue/12269)
+- Fix exporting a board crashing the app [Taiga #12384](https://tree.taiga.io/project/penpot/issue/12384)
+- Fix nested variant in a component doesn't keep inherited overrides [Taiga #12299](https://tree.taiga.io/project/penpot/issue/12299)
+- Fix selected colors not showing colors from children shapes in multiple selection [Taiga #12385](https://tree.taiga.io/project/penpot/issue/12385)
+- Fix scrollbar issue in design tab [Taiga #12367](https://tree.taiga.io/project/penpot/issue/12367)
+- Fix library update notificacions showing when they should not [Taiga #12397](https://tree.taiga.io/project/penpot/issue/12397)
+- Fix remove flex button doesn’t work within variant [Taiga #12314](https://tree.taiga.io/project/penpot/issue/12314)
+- Fix an error translation [Taiga #12402](https://tree.taiga.io/project/penpot/issue/12402)
+- Fix problem with certain text input in some editable labels (pages, components, tokens...) being in conflict with the drag/drop functionality [Taiga #12316](https://tree.taiga.io/project/penpot/issue/12316)
+- Fix not controlled theme renaming [Taiga #12411](https://tree.taiga.io/project/penpot/issue/12411)
+- Fix paste without selection sends the new element in the back [Taiga #12382](https://tree.taiga.io/project/penpot/issue/12382)
+- Fix options button does not work for comments created in the lower part of the screen [Taiga #12422](https://tree.taiga.io/project/penpot/issue/12422)
+- Fix problem when checking usage with removed teams [Taiga #12442](https://tree.taiga.io/project/penpot/issue/12442)
+- Fix focus mode persisting across page/file navigation [Taiga #12469](https://tree.taiga.io/project/penpot/issue/12469)
+- Fix shadow color validation [GH #7705](https://github.com/penpot/penpot/pull/7705)
+- Fix exception on selection blend-mode using keyboard [GH #7710](https://github.com/penpot/penpot/pull/7710)
+- Fix crash when using decimal (floating-point) values for X/Y or width/height [Taiga #12543](https://tree.taiga.io/project/penpot/issue/12543)
+
+## 2.10.1
+
+### :sparkles: New features & Enhancements
+
+- Improve workpace file loading [Github 7366](https://github.com/penpot/penpot/pull/7366)
+
+### :bug: Bugs fixed
+
+- Fix regression with text shapes creation with Plugins API [Taiga #12244](https://tree.taiga.io/project/penpot/issue/12244)
+
+## 2.10.0
+
+### :rocket: Epics and highlights
+
+- Variants
+
+### :boom: Breaking changes & Deprecations
+
+### :heart: Community contributions (Thank you!)
+
+### :sparkles: New features & Enhancements
+
+- Add efficiency enhancements to right sidebar [GH #7182](https://github.com/penpot/penpot/pull/7182)
+- Add defaults for artboard drawing [Taiga #494](https://tree.taiga.io/project/penpot/us/494?milestone=465047)
+- Continuous display of distances between elements when moving a layer with the keyboard [Taiga #1780](https://tree.taiga.io/project/penpot/us/1780)
+- New Number token - unitless values [Taiga #10936](https://tree.taiga.io/project/penpot/us/10936)
+- New font-family token [Taiga #10937](https://tree.taiga.io/project/penpot/us/10937)
+- New text case token [Taiga #10942](https://tree.taiga.io/project/penpot/us/10942)
+- New text-decoration token [Taiga #10941](https://tree.taiga.io/project/penpot/us/10941)
+- New letter spacing token [Taiga #10940](https://tree.taiga.io/project/penpot/us/10940)
+- New font weight token [Taiga #10939](https://tree.taiga.io/project/penpot/us/10939)
+- Upgrade Node to v22.18.0 [GH #7283](https://github.com/penpot/penpot/pull/7283)
+- Upgrade the base docker image for penpot frontend to v1.29.1 [GH #7283](https://github.com/penpot/penpot/pull/7283)
+- Create variant from an existing component [Taiga #2088](https://tree.taiga.io/project/penpot/us/2088)
+- Create variant from an existing variant [Taiga #8282](https://tree.taiga.io/project/penpot/us/8282)
+- Actions over a component with variants [Taiga #10503](https://tree.taiga.io/project/penpot/us/10503)
+- Create a variant by dragging a component into a component with variants [Taiga #8134](https://tree.taiga.io/project/penpot/us/8134)
+- Transform a variant into an individual component [Taiga #8141](https://tree.taiga.io/project/penpot/us/8141)
+- Delete variant [Taiga #6890](https://tree.taiga.io/project/penpot/us/6890)
+- Restore an orphaned copy of a variant [Taiga #10446](https://tree.taiga.io/project/penpot/us/10446)
+- Add, Edit & Delete variant properties name and value [Taiga #6892](https://tree.taiga.io/project/penpot/us/6892)
+- Retrieve variants [Taiga #6888](https://tree.taiga.io/project/penpot/us/6888)
+- Retrieve variants with nested components [Taiga #10277](https://tree.taiga.io/project/penpot/us/10277)
+- Create variants in bulk from existing components [Taiga #7926](https://tree.taiga.io/project/penpot/us/7926)
+- Alternative ways of creating variants - Button Design Tab [Taiga #10316](https://tree.taiga.io/project/penpot/us/10316)
+- Fix problem with component swapping panel [Taiga #12175](https://tree.taiga.io/project/penpot/issue/12175)
+
+### :bug: Bugs fixed
+
+- Display strokes information in inspect tab [Taiga #11154](https://tree.taiga.io/project/penpot/issue/11154)
+- Fix problem with booleans selection [Taiga #11627](https://tree.taiga.io/project/penpot/issue/11627)
+- Fix missing font when copy&paste a chunk of text [Taiga #11522](https://tree.taiga.io/project/penpot/issue/11522)
+- Fix bad swap slot after two swaps [Taiga #11659](https://tree.taiga.io/project/penpot/issue/11659)
+- Fix missing package for the `penpot_exporter` Docker image [GitHub #7205](https://github.com/penpot/penpot/issues/7025)
+- Fix issue where multiple dropdown menus could be opened simultaneously on the dashboard page [Taiga #11500](https://tree.taiga.io/project/penpot/issue/11500)
+- Fix font size/variant not updated when editing a text [Taiga #11552](https://tree.taiga.io/project/penpot/issue/11552)
+- Fix issue where Alt + arrow keys shortcut interferes with letter-spacing when moving text layers [Taiga #11552](https://tree.taiga.io/project/penpot/issue/11771)
+- Fix consistency issues on how font variants are visualized [Taiga #11499](https://tree.taiga.io/project/penpot/us/11499)
+- Fix parsing rx and ry SVG values for rect radius [Taiga #11861](https://tree.taiga.io/project/penpot/issue/11861)
+- Fix misleading affordance in saved versions [Taiga #11887](https://tree.taiga.io/project/penpot/issue/11887)
+- Fix pasting RTF text crashes penpot [Taiga #11717](https://tree.taiga.io/project/penpot/issue/11717)
+- Fix navigation arrows in Libraries & Templates carousel [Taiga #10609](https://tree.taiga.io/project/penpot/issue/10609)
+- Fix applying tokens with zero value to size [Taiga #11618](https://tree.taiga.io/project/penpot/issue/11618)
+- Fix typo [Taiga #11969](https://tree.taiga.io/project/penpot/issue/11969)
+- Fix typo [Taiga #11970](https://tree.taiga.io/project/penpot/issue/11970)
+- Fix typos [Taiga #11971](https://tree.taiga.io/project/penpot/issue/11971)
+- Fix inconsistent naming for "Flatten" [Taiga #8371](https://tree.taiga.io/project/penpot/issue/8371)
+- Layout item tokens should be unapplied when moving out of a layout [Taiga #11012](https://tree.taiga.io/project/penpot/issue/11012)
+- Fix incorrect date displayed for support plan [Taiga #11986](https://tree.taiga.io/project/penpot/issue/11986)
+- Fix can't import 'borderWidth' type token [#132](https://github.com/tokens-studio/penpot/issues/132)
+- Fix moving elements up or down while pressing alt [Taiga Issue #11992](https://tree.taiga.io/project/penpot/issue/11992)
+- Fix conflicting shortcuts (remove dec/inc line height and letter spacing) [Taiga #12102](https://tree.taiga.io/project/penpot/issue/12102)
+- Fix conflicting shortcuts (remove text-align shortcuts) [Taiga #12047](https://tree.taiga.io/project/penpot/issue/12047)
+- Fix export file with empty tokens library [Taiga #12137](https://tree.taiga.io/project/penpot/issue/12137)
+- Fix context menu on spacing tokens [Taiga #12141](https://tree.taiga.io/project/penpot/issue/12141)
+
+## 2.9.0
 
 ### :rocket: Epics and highlights
 
@@ -8,23 +1092,391 @@
 
 ### :heart: Community contributions (Thank you!)
 
-### :sparkles: New features
+- Clarify message when inviting existing team members to make it more user-friendly and clear which invitations will be sent. [Taiga #11441](https://tree.taiga.io/project/penpot/issue/11441) by [@iprithvitharun](https://github.com/iprithvitharun)
+- Update email change confirmation message for clarity and correct grammar. [GitHub #6786](https://github.com/penpot/penpot/issues/6786) by [@iprithvitharun](https://github.com/iprithvitharun)
 
-- New gradients UI with multi-stop support. [Taiga #3418](https://tree.taiga.io/project/penpot/epic/3418)
-- Shareable link pointing to an specific board. [Taiga #3219](https://tree.taiga.io/project/penpot/us/3219)
-- Copy styles in CSS [Taiga #9401](https://tree.taiga.io/project/penpot/us/9401)
-- Copy/paste shape styles (fills, strokes, shadows, etc..) [Taiga #8937](https://tree.taiga.io/project/penpot/us/8937)
-- Resize board to fit content option [Taiga #4707](https://tree.taiga.io/project/penpot/us/4707)
-- Rename selected layer via Board name [Taiga #9430](https://tree.taiga.io/project/penpot/us/9430)
+### :sparkles: New features & Enhancements
+
+- Add visual indicator for new comments in the workspace [Taiga #11328](https://tree.taiga.io/project/penpot/issue/11328)
+- On components overrides, separate the content of the text from the rest of properties [Taiga #7434](https://tree.taiga.io/project/penpot/us/7434)
+- Improve dashboard's sidebar [Taiga #10700](https://tree.taiga.io/project/penpot/us/10700)
+- Change "Save color" button to primary button [Taiga #9410](https://tree.taiga.io/project/penpot/issue/9410)
+- Support for exif rotated images [GitHub #6767](https://github.com/penpot/penpot/issues/6767)
+- Display Blend Mode and Layer Opacity properties in the Inspect tab [Taiga #11283](https://tree.taiga.io/project/penpot/issue/11283)
+- Provide CSS `mix-blend-mode` property in code editor when present on shape [Taiga #11282](https://tree.taiga.io/project/penpot/issue/11282)
+- Add the option to import tokens in a .zip file. [Taiga #11378](https://tree.taiga.io/project/penpot/us/11378)
+- New typography token type - font size token [Taiga #10938](https://tree.taiga.io/project/penpot/us/10938)
+- Hide bounding box while editing visual effects [Taiga #11576](https://tree.taiga.io/project/penpot/issue/11576)
+- Improved text layer resizing: Allow double-click on text bounding box to set auto-width/auto-height [Taiga #11577](https://tree.taiga.io/project/penpot/issue/11577)
+- Improve text layer auto-resize: auto-width switches to auto-height on horizontal resize, and only switches to fixed on vertical resize [Taiga #11578](https://tree.taiga.io/project/penpot/issue/11578)
+- Add the ability to show login dialog on profile settings [GH #6871](https://github.com/penpot/penpot/pull/6871)
+- Improve the application of tokens with object specific tokens [Taiga #10209](https://tree.taiga.io/project/penpot/us/10209)
+- Add info to apply-token event [Taiga #11710](https://tree.taiga.io/project/penpot/task/11710)
+- Fix double click on set name input [Taiga #11747](https://tree.taiga.io/project/penpot/issue/11747)
 
 ### :bug: Bugs fixed
 
+- Copying font size does not copy the unit [Taiga #11143](https://tree.taiga.io/project/penpot/issue/11143)
+- Fix text-decoration line-through that displays a wrong property value [Taiga #11145](https://tree.taiga.io/project/penpot/issue/11145)
+- Fix display error message on register form [Taiga #11444](https://tree.taiga.io/project/penpot/issue/11444)
+- Fix toggle focus mode did not restore viewport and selection upon exit [GitHub #6280](https://github.com/penpot/penpot/issues/6820)
+- Fix problem when creating a layout from an existing layout [Taiga #11554](https://tree.taiga.io/project/penpot/issue/11554)
+- Fix title button from Title Case to Capitalize [Taiga #11476](https://tree.taiga.io/project/penpot/issue/11476)
+- Fix touchpad swipe leading to navigating back/forth [GitHub #4246](https://github.com/penpot/penpot/issues/4246)
+- Keep color data when copying from info tab into CSS [Taiga #11144](https://tree.taiga.io/project/penpot/issue/11144)
+- Update HSL values to modern syntax as defined in W3C CSS Color Module Level 4 [Taiga #11144](https://tree.taiga.io/project/penpot/issue/11144)
+- Fix main component receives focus and is selected when using 'Show Main Component' [Taiga #11402](https://tree.taiga.io/project/penpot/issue/11402)
+- Fix UI theme selection from main menu [Taiga #11567](https://tree.taiga.io/project/penpot/issue/11567)
+- Fix duplicating pages with mainInstance shapes nested inside groups [Taiga #10774](https://tree.taiga.io/project/penpot/issue/10774)
+- Fix ESC key not closing Add/Manage Libraries modal [Taiga #11523](https://tree.taiga.io/project/penpot/issue/11523)
+- Fix copying a shadow color from info tab [Taiga #11211](https://tree.taiga.io/project/penpot/issue/11211)
+- Fix remove color button in the gradient editor [Taiga #11623](https://tree.taiga.io/project/penpot/issue/11623)
+- Fix "Copy as SVG" generates different code from the Inspect panel [Taiga #11519](https://tree.taiga.io/project/penpot/issue/11519)
+- Fix overriden tokens in text copies are not preserved [Taiga #11486](https://tree.taiga.io/project/penpot/issue/11486)
+- Fix problem when changing between flex/grid layout [Taiga #11625](https://tree.taiga.io/project/penpot/issue/11625)
+- Fix opacity on stroke gradients [Taiga #11646](https://tree.taiga.io/project/penpot/issue/11646)
+- Fix change from gradient to solid color [Taiga #11648](https://tree.taiga.io/project/penpot/issue/11648)
+- Fix the context menu always closes after any action [Taiga #11624](https://tree.taiga.io/project/penpot/issue/11624)
+- Fix X & Y position do not sincronize with tokens [Taiga #11617](https://tree.taiga.io/project/penpot/issue/11617)
+- Fix tooltip position after first time [Taiga #11688](https://tree.taiga.io/project/penpot/issue/11688)
+- Fix inconsistent ordering of pinned projects on dashboard sidebar [Taiga #11674](https://tree.taiga.io/project/penpot/issue/11674)
+- Fix export button width on inspect tab [Taiga #11394](https://tree.taiga.io/project/penpot/issue/11394)
+- Fix stroke width token application [Taiga #11724](https://tree.taiga.io/project/penpot/issue/11724)
+- Fix number token application on shape [Taiga #11331](https://tree.taiga.io/project/penpot/task/11331)
+- Fix auto height is fixed in the HTML inspect tab for text elements [Taiga #11680](https://tree.taiga.io/project/penpot/task/11680)
+
+## 2.8.1
+
+### :bug: Bugs fixed
+
+- Fix unexpected exception on processing old texts [GH #6889](https://github.com/penpot/penpot/pull/6889)
+- Fix error on inspect tab when selecting multiple shapes [Taiga #11655](https://tree.taiga.io/project/penpot/issue/11655)
+- Fix missing package for the penport_exporter Docker image [GitHub #7205](https://github.com/penpot/penpot/issues/7025)
+
+## 2.8.0
+
+### :rocket: Epics and highlights
+
+### :boom: Breaking changes & Deprecations
+
+**Penpot Library**
+
+The initial prototype is completly reworked to provide a more consistent API
+and to have proper validation and params decoding. All the details can be found
+on [its own changelog](library/CHANGES.md)
+
+**Penpot migrate from Redis to Valkey**
+
+As [Valkey](https://valkey.io/) is an opne-souce fork of [Redis](https://redis.io/)
+version 7.2.4, this version of Penpot will be compatible with Redis but may diverge
+in future versions. Therefore, **migration from Redis to ValKey is recommended for all
+on-premises instances** that want to keep up to date.
+
+### :heart: Community contributions (Thank you!)
+
+- Add Serbian language [GitHub #5002](https://github.com/penpot/penpot/issues/5002) by [crnobog69](https://github.com/crnobog69)
+
+### :sparkles: New features & Enhancements
+
+- Optimize profile setup flow for better user experience [Taiga #10028](https://tree.taiga.io/project/penpot/us/10028)
+- Rewrite path shape data PathData encoding [Taiga #8542](https://tree.taiga.io/project/penpot/us/8542?milestone=441308)
+- Update base image for Docker Backend and Exporter to Ubuntu 24.04
+- Update base image for Docker Frontend to Nginx 1.28.0
+- Allow multi file token import [GH #27](https://github.com/tokens-studio/penpot/issues/27)
+- Create `input*` wrapper component, and `label*`, `input-field*` and `hint-message*` components [Taiga #10713](https://tree.taiga.io/project/penpot/us/10713)
+- Deselect layers (and path nodes) with Ctrl+Shift+Drag [GH #2509](https://github.com/penpot/penpot/issues/2509)
+- Copy to SVG from contextual menu [GH #838](https://github.com/penpot/penpot/issues/838)
+- Add styles for Inkeep Chat at workspace [Taiga #10708](https://tree.taiga.io/project/penpot/us/10708)
+- Add configuration for air gapped installations with Docker
+- Support system color scheme [GH #5030](https://github.com/penpot/penpot/issues/5030)
+- Persist ruler visibility across files and reloads [GitHub #4586](https://github.com/penpot/penpot/issues/4586)
+- Update google fonts (at 2025/05/19) [Taiga 10792](https://tree.taiga.io/project/penpot/us/10792)
+- Add tooltip component to DS [Taiga 9220](https://tree.taiga.io/project/penpot/us/9220)
+- Allow multi file token export [Taiga #10144](https://tree.taiga.io/project/penpot/us/10144)
+- Fix problem when double click on hidden shapes [Taiga #11314](https://tree.taiga.io/project/penpot/issue/11314)
+
+### :bug: Bugs fixed
+
+- Fix getCurrentUser for plugins api [Taiga #11057](https://tree.taiga.io/project/penpot/issue/11057)
+- Fix spacing / sizes of different elements in the measurements section of the design tab [Taiga #11076](https://tree.taiga.io/project/penpot/issue/11076)
+- Fix selection of short paths [GH #4472](https://github.com/penpot/penpot/issues/4472)
+- Fix element positioning on the right side to adjust to grid [#11073](https://tree.taiga.io/project/penpot/issue/11073)
+- Fix palette is over sidebar [#11160](https://tree.taiga.io/project/penpot/issue/11160)
+- Fix font size input not displaying "mixed" when multiple texts are selected [Taiga #11177](https://tree.taiga.io/project/penpot/issue/11177)
+- Misalignments at Create account [Taiga #11315](https://tree.taiga.io/project/penpot/issue/11315)
+- Fix issue with importing files where flex/grid is used [Taiga #11334](https://tree.taiga.io/project/penpot/issue/11334)
+- Fix wrong color in the export progress bar [Taiga #11299](https://tree.taiga.io/project/penpot/issue/11299)
+- Fix right sidebar width overflow on long layer names [Taiga #11212](https://tree.taiga.io/project/penpot/issue/11212)
+- Fix comment icon fill [Taiga #11388](https://tree.taiga.io/project/penpot/issue/11388)
+- Fix gap on radio-buttons component [Taiga #11360](https://tree.taiga.io/project/penpot/issue/11360)
+- Fix button width [Taiga #11394](https://tree.taiga.io/project/penpot/issue/11394)
+- Fix mixed letter spacing and line height [Taiga #11178](https://tree.taiga.io/project/penpot/issue/11178)
+- Fix snap nodes shortcut [Taiga #11054](https://tree.taiga.io/project/penpot/issue/11054)
+- Fix changing a text property in a text layer does not unapply the previously applied token in the same property [Taiga #11337](https://tree.taiga.io/project/penpot/issue/11337)
+- Fix shortcut error pressing G+W from the View Mode [Taiga #11061](https://tree.taiga.io/project/penpot/issue/11061)
+- Fix entering long project name [Taiga #11417](https://tree.taiga.io/project/penpot/issue/11417)
+- Fix slow color picker [Taiga #11019](https://tree.taiga.io/project/penpot/issue/11019)
+- Fix tooltip position after click [Taiga #11405](https://tree.taiga.io/project/penpot/issue/11405)
+- Fix incorrect media translation on paste text with fill images [GH #6845](https://github.com/penpot/penpot/pull/6845)
+
+## 2.7.2
+
+### :bug: Bugs fixed
+
+- Update plugins runtime [GH #6604](https://github.com/penpot/penpot/pull/6604)
+- Backport from develop a minor fix that enables import of files
+  generated by penpot library [GH #6614](https://github.com/penpot/penpot/pull/6614)
+- Fix copy in error message [GitHub #6615](https://github.com/penpot/penpot/pull/6615)
+- Fix url on invitation link [Taiga #11284](https://tree.taiga.io/project/penpot/issue/11284)
+
+## 2.7.1
+
+### :bug: Bugs fixed
+
+- Fix incorrect handling of strokes with images on importing files
+- Fix tokens disappearing after manual additions [Taiga #11063](https://tree.taiga.io/project/penpot/issue/11063)
+
+## 2.7.0
+
+### :rocket: Epics and highlights
+
+### :boom: Breaking changes & Deprecations
+
+### :heart: Community contributions (Thank you!)
+
+- Design improvements to the Invitations page with an empty state [GitHub #2608](https://github.com/penpot/penpot/issues/2608) by [@iprithvitharun](https://github.com/iprithvitharun)
+
+### :sparkles: New features
+
+- Update board presets with a newer devices [Taiga #10610](https://tree.taiga.io/project/penpot/us/10610)
+- Propagate "sharing a prototype" to editors and viewers [Taiga #8853](https://tree.taiga.io/project/penpot/us/8853)
+- Design improvements to the Invitations page with an empty state [Taiga #4554](https://tree.taiga.io/project/penpot/us/4554)
+- Duplicate token sets [Taiga #10694](https://tree.taiga.io/project/penpot/issue/10694)
+- Add set selection in create Token themes flow [Taiga #10746](https://tree.taiga.io/project/penpot/issue/10746)
+- Display indicator on not active sets [Taiga #10668](https://tree.taiga.io/project/penpot/issue/10668)
+
+### :bug: Bugs fixed
+
+- Fix "at" icon to match all icons on app [Taiga #11136](https://tree.taiga.io/project/penpot/issue/11136)
+- Fix problem in viewer with the back button [Taiga #10907](https://tree.taiga.io/project/penpot/issue/10907)
+- Fix resize bar background on tokens panel [Taiga #10811](https://tree.taiga.io/project/penpot/issue/10811)
+- Fix shortcut for history version panel [Taiga #11006](https://tree.taiga.io/project/penpot/issue/11006)
+- Fix positioning of comment drafts when near the right / bottom edges of viewport [Taiga #10534](https://tree.taiga.io/project/penpot/issue/10534)
+- Fix path having a wrong selrect [Taiga #10257](https://tree.taiga.io/project/penpot/issue/10257)
+- Fix SVG `stroke-linecap` property when importing SVGs [Taiga #9489](https://tree.taiga.io/project/penpot/issue/9489)
+- Fix position problems cutting-pasting a component [Taiga #10677](https://tree.taiga.io/project/penpot/issue/10677)
+- Fix design tab has a horizontal scroll [Taiga #10660](https://tree.taiga.io/project/penpot/issue/10660)
+- Fix long file names being clipped when longer than allowed length [Taiga #10662](https://tree.taiga.io/project/penpot/issue/10662)
+- Fix problem with error detail in toast [Taiga #10519](https://tree.taiga.io/project/penpot/issue/10519)
+- Fix view mode error when an external user tries to export something from a prototype using a shared link [Taiga #10251](https://tree.taiga.io/project/penpot/issue/10251)
+- Fix merge path nodes with only one node selected [Taiga #9626](https://tree.taiga.io/project/penpot/issue/9626)
+- Fix problem with import errors [Taiga #10040](https://tree.taiga.io/project/penpot/issue/10040)
+- Fix color gradient on texts [Taiga Issue #7488](https://tree.taiga.io/project/penpot/issue/7488)
+- Add support for self mentions [Taiga #10809](https://tree.taiga.io/project/penpot/issue/10809)
+- Fix team info settings alignment [Taiga #10869](https://tree.taiga.io/project/penpot/issue/10869)
+- Fix left sidebar horizontal scroll on nested layers [Taiga #10791](https://tree.taiga.io/project/penpot/issue/10791)
+- Improve error message details importing tokens [Taiga Issue #10772](https://tree.taiga.io/project/penpot/issue/10772)
+- Fix no selected set after Drag & Drop [GH #71](https://github.com/tokens-studio/penpot/issues/71)
+- Styledictionary v5 Update [GH #6283](https://github.com/penpot/penpot/pull/6283)
+- Fix Rename a set throws an internal error [GH #78](https://github.com/tokens-studio/penpot/issues/78)
+- Fix Out of Sync Token Value & Color Picker [GH #102](https://github.com/tokens-studio/penpot/issues/102)
+- Fix Color should preserve color space [GH #69](https://github.com/tokens-studio/penpot/issues/69)
+- Fix cannot rename Design Token Sets when group of same name exists [Taiga Issue #10773](https://tree.taiga.io/project/penpot/issue/10773)
+- Fix problem when duplicating grid layout [GH #6391](https://github.com/penpot/penpot/issues/6391)
+- Fix issue that makes workspace shortcuts stop working [Taiga #11062](https://tree.taiga.io/project/penpot/issue/11062)
+- Fix problem while syncing library colors and typographies [Taiga #11068](https://tree.taiga.io/project/penpot/issue/11068)
+- Fix problem with path edition of shapes [Taiga #9496](https://tree.taiga.io/project/penpot/issue/9496)
+- Fix exception on paste invalid html [Taiga #11047](https://tree.taiga.io/project/penpot/issue/11047)
+- Fix share button being displayed with no permissions [Taiga #11086](https://tree.taiga.io/project/penpot/issue/11086)
+- Fix inline styles in code tab [Taiga Issue #7583](https://tree.taiga.io/project/penpot/issue/7583)
+- Fix exception on returning openapi.json
+- Fix json encoding of TokensLib [Taiga #10994](https://tree.taiga.io/project/penpot/issue/10994)
+
+## 2.6.2
+
+### :bug: Bugs fixed
+
+- Increase the height of the right sidebar dropdowns [Taiga #10615](https://tree.taiga.io/project/penpot/issue/10615)
+- Fix scroll on token themes modal [Taiga #10745](https://tree.taiga.io/project/penpot/issue/10745)
+- Fix collapsing grouped sets in "edit Theme" closes the dialog [Taiga #10771](https://tree.taiga.io/project/penpot/issue/10771)
+- Fix unexpected exception on path editor on merge segments when undo stack is empty
+- Fix pricing CTA to be under a config flag [Taiga #10808](https://tree.taiga.io/project/penpot/issue/10808)
+- Fix allow moving a main component into another [Taiga #10818](https://tree.taiga.io/project/penpot/issue/10818)
+- Fix several issues with internal srepl helpers
+- Fix unexpected exception on template import from libraries
+- Fix incorrect uuid parsing from different parts of code
+- Fix update layout on component restore [Taiga #10637](https://tree.taiga.io/project/penpot/issue/10637)
+- Fix horizontal scroll in viewer [GH #6290](https://github.com/penpot/penpot/issues/6290)
+- Fix detach component in a particular case [Taiga #10837](https://tree.taiga.io/project/penpot/issue/10837)
+
+## 2.6.1
+
+### :bug: Bugs fixed
+
+- Fix webhooks not shown in list [Taiga #10763](https://tree.taiga.io/project/penpot/issue/10763)
+- Fix colorpicker scroll when dropdown displayed [Taiga #10696](https://tree.taiga.io/project/penpot/issue/10696)
+- Clean internal workspace state on exit or url changed [Taiga #10619](https://tree.taiga.io/project/penpot/issue/10619)
+
+## 2.6.0
+
+### :rocket: Epics and highlights
+
+- Design Tokens
+
+### :boom: Breaking changes & Deprecations
+
+### :heart: Community contributions (Thank you!)
+
+### :sparkles: New features
+
+- [COMMENTS] "Mark All as Read" Functionality in Dashboard [Taiga #9235](https://tree.taiga.io/project/penpot/us/9235)
+- [COMMENTS] Bubble Groups [Taiga #9236](https://tree.taiga.io/project/penpot/us/9236)
+- Change templates carrousel [Taiga #9803](https://tree.taiga.io/project/penpot/us/9803)
+- [DESIGN TOKENS] Tokens CRUD. Types added: Color, Opacity, Border radius, Dimension, Sizing, Spacing, Rotation and Stroke.
+- [DESIGN TOKENS] Create references (alias) that point to other tokens.
+- [DESIGN TOKENS] Math operations in token values.
+- [DESIGN TOKENS] Sets CRUD, grouping and reordering.
+- [DESIGN TOKENS] Multidimensional Themes and Sets management.
+- [DESIGN TOKENS] Apply/Remove tokens to/from elements from the Tokens tab.
+- [DESIGN TOKENS] Integration with components.
+- [DESIGN TOKENS] Import and export tokens from a JSON file.
+- [DESIGN TOKENS] Apply Themes and Sets at document level.
+- Add more descriptive tooltip to boards for first time users [Taiga #9426](https://tree.taiga.io/project/penpot/us/9426)
+- First State of a Project Changes Consolidation [Taia #10605](https://tree.taiga.io/project/penpot/us/10605)
+
+### :bug: Bugs fixed
+
+- Fix opacity in frame containers [GH #5858](https://github.com/penpot/penpot/pull/5858)
+- Avoid resizing on click [Taiga #10213](https://tree.taiga.io/project/penpot/issue/10213)
+- Hide horizontal scroll from dashboard sidebar [Taiga #10422](https://tree.taiga.io/project/penpot/issue/10422)
+- Fix cut and paste a copy a cmponent inside its parent [Taiga #10365](https://tree.taiga.io/project/penpot/us/10365)
+- Fix duplicate page with component over frame [Taiga #8151](https://tree.taiga.io/project/penpot/issue/8151) and [Taiga #9698](https://tree.taiga.io/project/penpot/issue/9698)
+- The plugin list in the navigation menu lacks scrolling, some plugins are not visible when a large number are installed [Taiga #9360](https://tree.taiga.io/project/penpot/us/9360)
+- Fix hidden toolbar click event still available [Taiga #10437](https://tree.taiga.io/project/penpot/us/10437)
+- Fix hovering over templates [Taiga #10545](https://tree.taiga.io/project/penpot/issue/10545)
+- Fix problem with default shadows value in plugins [Plugins #191](https://github.com/penpot/penpot-plugins/issues/191)
+- Fix problem with constraints when creating group [Taiga #10455](https://tree.taiga.io/project/penpot/issue/10455)
+- Fix opening pen with shortcut multiple times breaks toolbar [Taiga #10566](https://tree.taiga.io/project/penpot/issue/10566)
+- Fix actions when workspace is visited first time [Taiga #10548](https://tree.taiga.io/project/penpot/issue/10548)
+- Chat icon overlaps "Show" button in carrousel section [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Fix assets name on inspect tab [Taiga #10630](https://tree.taiga.io/project/penpot/issue/10630)
+- Fix chat icon overlaps "Show" button in carrousel section [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Fix incorrect handling of background task result (now task rows are properly marked as completed)
+- Fix available size of resize handler [Taiga #10639](https://tree.taiga.io/project/penpot/issue/10639)
+- Internal error when install a plugin by penpothub - Try plugin [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Add character limitation to asset inputs [Taiga #10669](https://tree.taiga.io/project/penpot/issue/10669)
+- Fix Storybook link 'list of all available icons' wrong path [Taiga #10705](https://tree.taiga.io/project/penpot/issue/10705)
+
+## 2.5.4
+
+### :heart: Community contributions (Thank you!)
+
+- Add support for WEBP format on shape export [GH #6053](https://github.com/penpot/penpot/pull/6053) and [GH #6074](https://github.com/penpot/penpot/pull/6074)
+
+### :bug: Bugs fixed
+
+- Fix feature loading on workspace when opening a file in a background
+  tab [Taiga #10377](https://tree.taiga.io/project/penpot/issue/10377)
+- Fix minor inconsistencies on RPC `get-file-libraries` and `get-file`
+  methods (add missing team-id prop)
+- Fix problem with viewer role and inspect mode [Taiga #9751](https://tree.taiga.io/project/penpot/issue/9751)
+- Fix error when clicking on a comment at the viewer's sidebar [Taiga #10465](https://tree.taiga.io/project/penpot/issue/10465)
+
+## 2.5.3
+
+### :bug: Bugs fixed
+
+- Component sync issues with multiple tabs [Taiga #10471](https://tree.taiga.io/project/penpot/issue/10471)
+
+## 2.5.2
+
+### :sparkles: New features
+
+- When the workspace is empty, set default the board creation tool [Taiga #9425](https://tree.taiga.io/project/penpot/us/9425)
+
+### :bug: Bugs fixed
+
+- Fix scroll on storybook docs [taiga #9962](https://tree.taiga.io/project/penpot/issue/9962)
+- Navigate tracking event firing multiple times [Taiga #10415](https://tree.taiga.io/project/penpot/issue/10415)
+- Fix problem with selection colors [Taiga #10376](https://tree.taiga.io/project/penpot/issue/10376)
+- Fix scroll on storybook icons list [taiga #9962](https://tree.taiga.io/project/penpot/issue/9962)
+
+## 2.5.1
+
+### :sparkles: New features
+
+- Improve Nginx entryponit to get the resolvers dinamically by default
+
+## 2.5.0
+
+### :boom: Breaking changes & Deprecations
+
+Although this is not a breaking change, we believe it's important to highlight it in this
+section:
+
+This release includes a fix for an internal bug in Penpot that caused incorrect handling
+of media assets (e.g., fill images). The issue has been resolved since version 2.4.3, so
+no new incorrect references will be generated. However, existing files may still contain
+incorrect references.
+
+To address this, we've provided a script to correct these references in existing files.
+
+While having incorrect references generally doesn't result in visible issues, there are
+rare cases where it can cause problems. For example, if a component library (containing
+images) is deleted, and that library is being used in other files, running the FileGC task
+(responsible for freeing up space and performing logical deletions) could leave those
+files with broken references to the images.
+
+To execute script:
+
+```bash
+docker exec -ti <container-name-or-id> ./run.sh app.migrations.media-refs '{:max-jobs 1}'
+```
+
+If you have a big database and many cores available, you can reduce the time of processing
+all files by increasing paralelizacion changing the `max-jobs` value from 1 to N (where N
+is a number of cores)
+
+### :sparkles: New features
+
+- [GRADIENTS] New gradients UI with multi-stop support. [Taiga #3418](https://tree.taiga.io/project/penpot/epic/3418)
+- [GRADIENTS] Radial Gradient [Taiga #8768](https://tree.taiga.io/project/penpot/us/8768)
+- Shareable link pointing to an specific board. [Taiga #3219](https://tree.taiga.io/project/penpot/us/3219)
+- Copy styles in CSS [Taiga #9401](https://tree.taiga.io/project/penpot/us/9401)
+- Copy/paste shape styles (fills, strokes, shadows, etc..) [Taiga #8937](https://tree.taiga.io/project/penpot/us/8937)
+- Copy text content to clipboard [Taiga #9970](https://tree.taiga.io/project/penpot/us/9970?milestone=424203)
+- Resize board to fit content option [Taiga #4707](https://tree.taiga.io/project/penpot/us/4707)
+- Rename selected layer via Board name [Taiga #9430](https://tree.taiga.io/project/penpot/us/9430)
+- [COMMENTS] Mention Functionality with and Sidebar Filters [Taiga #9237](https://tree.taiga.io/project/penpot/us/9237)
+- [COMMENTS] Visual Changes in Comments [Taiga #9234](https://tree.taiga.io/project/penpot/us/9234)
+- [COMMENTS] Notifications in Backend, Profile Section, and Mention Email Notification [Taiga #9233](https://tree.taiga.io/project/penpot/us/9233)
+
+### :bug: Bugs fixed
+
+- Fix menu shadow color [Taiga #10102](https://tree.taiga.io/project/penpot/issue/10102)
+- Fix missing state refresh on notifications update [Taiga #10253](https://tree.taiga.io/project/penpot/issue/10253)
+- Fix icon visualization on select component [Taiga #8889](https://tree.taiga.io/project/penpot/issue/8889)
+- Fix typo on integration tests docs [Taiga #10112](https://tree.taiga.io/project/penpot/issue/10112)
+- Fix menu shadow color [Taiga #10102](https://tree.taiga.io/project/penpot/issue/10102)
 - Fix problem with alt key measures being stuck [Taiga #9348](https://tree.taiga.io/project/penpot/issue/9348)
 - Fix error when reseting stroke cap
 - Fix problem with strokes not refreshing in Safari [Taiga #9040](https://tree.taiga.io/project/penpot/issue/9040)
 - Fix problem with multiple color changes [Taiga #9631](https://tree.taiga.io/project/penpot/issue/9631)
+- Fix create new layers in a component copy [Taiga #10037](https://tree.taiga.io/project/penpot/issue/10037)
+- Fix problem in plugins with zoomIntoView [Plugins #189](https://github.com/penpot/penpot-plugins/issues/189)
+- Fix problem in plugins with renaming components [Taiga #10060](https://tree.taiga.io/project/penpot/issue/10060)
+- Added upload svg with images method [#5489](https://github.com/penpot/penpot/issues/5489)
+- Fix problem with root frame parent reference [Taiga #9437](https://tree.taiga.io/project/penpot/issue/9437)
+- Fix change flex direction using plugins API [Taiga #9407](https://tree.taiga.io/project/penpot/issue/9407)
+- Fix problem opening url when page-id didn't exist [Taiga #10157](https://tree.taiga.io/project/penpot/issue/10157)
+- Fix problem with onboarding to a team [Taiga #10143](https://tree.taiga.io/project/penpot/issue/10143)
+- Fix problem with grid layout crashing [Taiga #10127](https://tree.taiga.io/project/penpot/issue/10127)
+- Fix rename locked boards [Taiga #10174](https://tree.taiga.io/project/penpot/issue/10174)
+- Fix update-libraries dialog disappear when clicking outside [Taiga #10238](https://tree.taiga.io/project/penpot/issue/10238)
+- Fix incorrect handling of team access requests with deleted/recreated users
+- Fix incorect handling of profile settings related to invitation notifications [Taiga #10252](https://tree.taiga.io/project/penpot/issue/10252)
 
-## 2.4.3 (Unreleased)
+## 2.4.3
 
 ### :bug: Bugs fixed
 
@@ -44,14 +1496,12 @@
 - Fix missing methods reference on API Docs
 - Fix memory usage issue on file-gc asynchronous task (related to snapshots feature)
 
-
 ## 2.4.1
 
 ### :bug: Bugs fixed
 
 - Fix error when importing files with touched components [Taiga #9625](https://tree.taiga.io/project/penpot/issue/9625)
 - Fix problem when changing color libraries [Plugins #184](https://github.com/penpot/penpot-plugins/issues/184)
-
 
 ## 2.4.0
 
@@ -106,14 +1556,12 @@
 
 - Add initial documentation for Kubernetes
 
-
 ## 2.3.1
 
 ### :bug: Bugs fixed
 
 - Fix unexpected issue on interaction between plugins sandbox and
   internal impl of promise
-
 
 ## 2.3.0
 
@@ -140,27 +1588,26 @@
 
   You can enable it with the `enable-feature-text-editor-v2` configuration flag.
 
-
 ### :bug: Bugs fixed
 
 - Fix problem with constraints buttons [Taiga #8465](https://tree.taiga.io/project/penpot/issue/8465)
 - Fix problem with go back button on error page [Taiga #8887](https://tree.taiga.io/project/penpot/issue/8887)
 - Fix problem with shadows in text for Safari [Taiga #8770](https://tree.taiga.io/project/penpot/issue/8770)
 - Fix a regression with feedback form subject and content limits [Taiga #8908](https://tree.taiga.io/project/penpot/issue/8908)
-- Fix problem with stroke and filter ordering in frames [Github #5058](https://github.com/penpot/penpot/issues/5058)
-- Fix problem with hover layers when hidden/blocked [Github #5074](https://github.com/penpot/penpot/issues/5074)
+- Fix problem with stroke and filter ordering in frames [GH #5058](https://github.com/penpot/penpot/issues/5058)
+- Fix problem with hover layers when hidden/blocked [GH #5074](https://github.com/penpot/penpot/issues/5074)
 - Fix problem with precision on boolean calculation [Taiga #8482](https://tree.taiga.io/project/penpot/issue/8482)
-- Fix problem when translating multiple path points [Github #4459](https://github.com/penpot/penpot/issues/4459)
+- Fix problem when translating multiple path points [GH #4459](https://github.com/penpot/penpot/issues/4459)
 - Fix problem on importing (and exporting) files with flows [Taiga #8914](https://tree.taiga.io/project/penpot/issue/8914)
 - Fix Internal Error page: "go to your penpot" wrong design [Taiga #8922](https://tree.taiga.io/project/penpot/issue/8922)
-- Fix problem updating layout when toggle visibility in component copy [Github #5143](https://github.com/penpot/penpot/issues/5143)
+- Fix problem updating layout when toggle visibility in component copy [GH #5143](https://github.com/penpot/penpot/issues/5143)
 - Fix "Done" button on toolbar on inspect mode should go to design mode [Taiga #8933](https://tree.taiga.io/project/penpot/issue/8933)
-- Fix problem with shortcuts in text editor [Github #5078](https://github.com/penpot/penpot/issues/5078)
-- Fix problems with show in viewer and interactions [Github #4868](https://github.com/penpot/penpot/issues/4868)
-- Add visual feedback when moving an element into a board [Github #3210](https://github.com/penpot/penpot/issues/3210)
-- Fix percent calculation on grid layout tracks [Github #4688](https://github.com/penpot/penpot/issues/4688)
-- Fix problem with caps and inner shadows [Github #4517](https://github.com/penpot/penpot/issues/4517)
-- Fix problem with horizontal/vertical lines and shadows [Github #4516](https://github.com/penpot/penpot/issues/4516)
+- Fix problem with shortcuts in text editor [GH #5078](https://github.com/penpot/penpot/issues/5078)
+- Fix problems with show in viewer and interactions [GH #4868](https://github.com/penpot/penpot/issues/4868)
+- Add visual feedback when moving an element into a board [GH #3210](https://github.com/penpot/penpot/issues/3210)
+- Fix percent calculation on grid layout tracks [GH #4688](https://github.com/penpot/penpot/issues/4688)
+- Fix problem with caps and inner shadows [GH #4517](https://github.com/penpot/penpot/issues/4517)
+- Fix problem with horizontal/vertical lines and shadows [GH #4516](https://github.com/penpot/penpot/issues/4516)
 - Fix problem with layers overflowing panel [Taiga #9021](https://tree.taiga.io/project/penpot/issue/9021)
 - Fix in workspace you can manage rulers on view mode [Taiga #8966](https://tree.taiga.io/project/penpot/issue/8966)
 - Fix problem with swap components in grid layout [Taiga #9066](https://tree.taiga.io/project/penpot/issue/9066)
@@ -180,8 +1627,8 @@
 ### :boom: Breaking changes & Deprecations
 
 - Removed "merge assets" option when exporting ".svg + .json" files. After the components changes the option wasn't
-working properly and we're planning to change the format soon. We think it's better to deprecate the option for the
-time being.
+  working properly and we're planning to change the format soon. We think it's better to deprecate the option for the
+  time being.
 
 ### :heart: Community contributions (Thank you!)
 
@@ -197,7 +1644,7 @@ time being.
   freeing up space in the database. It can be enabled with the
   `enable-enable-tiered-file-data-storage` flag.
 
-  *(On-Premise feature, EXPERIMENTAL).*
+  _(On-Premise feature, EXPERIMENTAL)._
 
 - **JSON Interoperability for HTTP API** [Taiga #8372](https://tree.taiga.io/project/penpot/us/8372)
 
@@ -240,7 +1687,7 @@ time being.
 
 - **Design System**
 
-  We implemented and subbed in new components from our Design System: `loader*` ([Taiga #8355](https://tree.taiga.io/project/penpot/task/8355))  and `tab-switcher*` ([Taiga #8518](https://tree.taiga.io/project/penpot/task/8518)).
+  We implemented and subbed in new components from our Design System: `loader*` ([Taiga #8355](https://tree.taiga.io/project/penpot/task/8355)) and `tab-switcher*` ([Taiga #8518](https://tree.taiga.io/project/penpot/task/8518)).
 
 - **Storybook** [Taiga #6329](https://tree.taiga.io/project/penpot/us/6329)
 
@@ -253,10 +1700,10 @@ time being.
 - Fix fill collapsed options [Taiga #8351](https://tree.taiga.io/project/penpot/issue/8351)
 - Fix scroll on color picker modal [Taiga #8353](https://tree.taiga.io/project/penpot/issue/8353)
 - Fix components are not dragged from the group to the assets tab [Taiga #8273](https://tree.taiga.io/project/penpot/issue/8273)
-- Fix problem with SVG import [Github #4888](https://github.com/penpot/penpot/issues/4888)
+- Fix problem with SVG import [GH #4888](https://github.com/penpot/penpot/issues/4888)
 - Fix problem with overlay positions in viewer [Taiga #8464](https://tree.taiga.io/project/penpot/issue/8464)
 - Fix layer panel overflowing [Taiga #8665](https://tree.taiga.io/project/penpot/issue/8665)
-- Fix problem when creating a component instance from grid layout [Github #4881](https://github.com/penpot/penpot/issues/4881)
+- Fix problem when creating a component instance from grid layout [GH #4881](https://github.com/penpot/penpot/issues/4881)
 - Fix problem when dismissing shared library update [Taiga #8669](https://tree.taiga.io/project/penpot/issue/8669)
 - Fix visual problem with stroke cap menu [Taiga #8730](https://tree.taiga.io/project/penpot/issue/8730)
 - Fix issue when exporting libraries when merging libraries [Taiga #8758](https://tree.taiga.io/project/penpot/issue/8758)
@@ -281,25 +1728,25 @@ time being.
 
 ## 2.1.3
 
-- Don't allow registration when registration is disabled and invitation token is used [Github #4975](https://github.com/penpot/penpot/issues/4975)
+- Don't allow registration when registration is disabled and invitation token is used [GH #4975](https://github.com/penpot/penpot/issues/4975)
 
 ## 2.1.2
 
 ### :bug: Bugs fixed
 
-- User switch language to "zh_hant" will get 400 [Github #4884](https://github.com/penpot/penpot/issues/4884)
-- Smtp config ignoring port if ssl is set [Github #4872](https://github.com/penpot/penpot/issues/4872)
-- Ability to let users to authenticate with a private oidc provider only [Github #4963](https://github.com/penpot/penpot/issues/4963)
+- User switch language to "zh_hant" will get 400 [GH #4884](https://github.com/penpot/penpot/issues/4884)
+- Smtp config ignoring port if ssl is set [GH #4872](https://github.com/penpot/penpot/issues/4872)
+- Ability to let users to authenticate with a private oidc provider only [GH #4963](https://github.com/penpot/penpot/issues/4963)
 
 ## 2.1.1
 
 ### :sparkles: New features
 
-- Consolidate templates new order and naming  [Taiga #8392](https://tree.taiga.io/project/penpot/task/8392)
+- Consolidate templates new order and naming [Taiga #8392](https://tree.taiga.io/project/penpot/task/8392)
 
 ### :bug: Bugs fixed
 
-- Fix the “search” label in translations [Taiga #8402](https://tree.taiga.io/project/penpot/issue/8402)
+- Fix the "search" label in translations [Taiga #8402](https://tree.taiga.io/project/penpot/issue/8402)
 - Fix pencil loader [Taiga #8348](https://tree.taiga.io/project/penpot/issue/8348)
 - Fix several issues on the OIDC.
 - Fix regression on the `email-verification` flag [Taiga #8398](https://tree.taiga.io/project/penpot/issue/8398)
@@ -332,7 +1779,7 @@ time being.
 - Layout and scrollign fixes for the bottom palette [Taiga #7559](https://tree.taiga.io/project/penpot/issue/7559)
 - Fix expand libraries when search results are present [Taiga #7876](https://tree.taiga.io/project/penpot/issue/7876)
 - Fix color palette default library [Taiga #8029](https://tree.taiga.io/project/penpot/issue/8029)
-- Component Library is lost after exporting/importing in .zip format [Github #4672](https://github.com/penpot/penpot/issues/4672)
+- Component Library is lost after exporting/importing in .zip format [GH #4672](https://github.com/penpot/penpot/issues/4672)
 - Fix problem with moving+selection not working properly [Taiga #7943](https://tree.taiga.io/project/penpot/issue/7943)
 - Fix problem with flex layout fit to content not positioning correctly children [Taiga #7537](https://tree.taiga.io/project/penpot/issue/7537)
 - Fix black line is displaying after show main [Taiga #7653](https://tree.taiga.io/project/penpot/issue/7653)
@@ -365,7 +1812,7 @@ time being.
 ### :bug: Bugs fixed
 
 - Fix chrome scrollbar styling [Taiga #7852](https://tree.taiga.io/project/penpot/issue/7852)
-- Fix incorrect password encoding on create-profile manage scritp [Github #3651](https://github.com/penpot/penpot/issues/3651)
+- Fix incorrect password encoding on create-profile manage scritp [GH #3651](https://github.com/penpot/penpot/issues/3651)
 
 ## 2.0.2
 
@@ -379,22 +1826,21 @@ time being.
 - Fix color palette sorting [Taiga #7458](https://tree.taiga.io/project/penpot/issue/7458)
 - Fix style scoping problem with imported SVG [Taiga #7671](https://tree.taiga.io/project/penpot/issue/7671)
 
-
 ## 2.0.1
 
 ### :bug: Bugs fixed
 
-- Fix different issues related to components v2 migrations including [Github #4443](https://github.com/penpot/penpot/issues/4443)
-
+- Fix different issues related to components v2 migrations including [GH #4443](https://github.com/penpot/penpot/issues/4443)
 
 ## 2.0.0 - I Just Can't Get Enough
 
 ### :rocket: Epics and highlights
+
 - Grid CSS layout [Taiga #4915](https://tree.taiga.io/project/penpot/epic/4915)
 - UI redesign [Taiga #4958](https://tree.taiga.io/project/penpot/epic/4958)
 - New components System [Taiga #2662](https://tree.taiga.io/project/penpot/epic/2662)
 - Swap components [Taiga #1331](https://tree.taiga.io/project/penpot/us/1331)
-- Images as fill  [Taiga #2983](https://tree.taiga.io/project/penpot/us/2983)
+- Images as fill [Taiga #2983](https://tree.taiga.io/project/penpot/us/2983)
 - HTML code generation [Taiga #5277](https://tree.taiga.io/project/penpot/us/5277)
 - Light and dark themes [Taiga #2287](https://tree.taiga.io/project/penpot/us/2287)
 
@@ -403,9 +1849,9 @@ time being.
 - New strokes default to inside border [Taiga #6847](https://tree.taiga.io/project/penpot/issue/6847)
 - Change default z ordering on layers in flex layout. The previous behavior was inconsistent with how HTML works and we changed it to be more consistent. Previous layers that overlapped could be hidden, the fastest way to fix this is changing the z-index property but a better way is to change the order of your layers.
 
-
 ### :heart: Community contributions (Thank you!)
-- New Hausa, Yoruba and Igbo translations and  update translation files (by All For Tech Empowerment Foundation) [Taiga #6950](https://tree.taiga.io/project/penpot/us/6950), [Taiga #6534](https://tree.taiga.io/project/penpot/us/6534)
+
+- New Hausa, Yoruba and Igbo translations and update translation files (by All For Tech Empowerment Foundation) [Taiga #6950](https://tree.taiga.io/project/penpot/us/6950), [Taiga #6534](https://tree.taiga.io/project/penpot/us/6534)
 - Hide bounding-box when editing shape (by @VasilevsVV) [#3930](https://github.com/penpot/penpot/pull/3930)
 - CTRL + "+" to zoom into canvas instead of browser (by @audriu) [#3848](https://github.com/penpot/penpot/pull/3848)
 - Add dev deps.edn in the project root (by @PEZ) [#3794](https://github.com/penpot/penpot/pull/3794)
@@ -414,6 +1860,7 @@ time being.
 - Typo (by StephanEggermont) [#157](https://github.com/penpot/penpot-docs/pull/157)
 
 ### :sparkles: New features
+
 - Send comments with Ctrl+Enter / Cmd + Enter [Taiga #6085](https://tree.taiga.io/project/penpot/issue/6085)
 - Select through stroke only rectangle [Taiga #5484](https://tree.taiga.io/project/penpot/issue/5484)
 - Stroke default position [Taiga #6847](https://tree.taiga.io/project/penpot/issue/6847)
@@ -481,15 +1928,16 @@ time being.
 - [REDESIGN] Onboarding slides [Taiga #6678](https://tree.taiga.io/project/penpot/us/6678)
 
 ### :bug: Bugs fixed
-- Fix pixelated thumbnails [Github #3681](https://github.com/penpot/penpot/issues/3681), [Github #3661](https://github.com/penpot/penpot/issues/3661)
-- Fix problem with not applying colors to boards [Github #3941](https://github.com/penpot/penpot/issues/3941)
-- Fix problem with path editor undoing changes [Github #3998](https://github.com/penpot/penpot/issues/3998)
+
+- Fix pixelated thumbnails [GH #3681](https://github.com/penpot/penpot/issues/3681), [GH #3661](https://github.com/penpot/penpot/issues/3661)
+- Fix problem with not applying colors to boards [GH #3941](https://github.com/penpot/penpot/issues/3941)
+- Fix problem with path editor undoing changes [GH #3998](https://github.com/penpot/penpot/issues/3998)
 - [View mode] Open overlay places frame in the wrong position when paired with a fixed element [Taiga #6385](https://tree.taiga.io/project/penpot/issue/6385)
 - Flex Layout: Fit-content not recalculated after deleting an element [Taiga #5968](https://tree.taiga.io/project/penpot/issue/5968)
 - Selecting from Color Palette does not work for board when there is no existing fill [Taiga #6464](https://tree.taiga.io/project/penpot/issue/6464)
 - Color thumbnails are consistently rounded in the inspect code mode [Taiga #5886](https://tree.taiga.io/project/penpot/issue/5886)
 - Adding vector path points before first point of existing open path not working [Taiga #6593](https://tree.taiga.io/project/penpot/issue/6593)
-- Some image formats include the extension when importing  [Taiga #5485](https://tree.taiga.io/project/penpot/issue/5485)
+- Some image formats include the extension when importing [Taiga #5485](https://tree.taiga.io/project/penpot/issue/5485)
 - Gradient color tool doesn't work properly with flipped items [Taiga #6485](https://tree.taiga.io/project/penpot/issue/6485)
 - [TEXT] Align options are not shown when several text are selected [Taiga #5948](https://tree.taiga.io/project/penpot/issue/5948)
 - [VIEW MODE] Comments not working properly on multiple pages [Taiga #6281](https://tree.taiga.io/project/penpot/issue/6281)
@@ -514,11 +1962,11 @@ time being.
 - [VIEWER] Cannot scroll down in code </> mode [Taiga #4655](https://tree.taiga.io/project/penpot/issue/4655)
 - Strange cursor behavior after clicking viewport with text tool [Taiga #4363](https://tree.taiga.io/project/penpot/issue/4363)
 - Selected color affects all of them [Taiga #5285](https://tree.taiga.io/project/penpot/issue/5285)
-- Fix problem with shadow negative spread [Github #3421](https://github.com/penpot/penpot/issues/3421)
-- Fix problem with linked colors to strokes [Github #3522](https://github.com/penpot/penpot/issues/3522)
-- Fix problem with hand tool stuck [Github #3318](https://github.com/penpot/penpot/issues/3318)
-- Fix problem with fix scrolling on nested elements [Github #3508](https://github.com/penpot/penpot/issues/3508)
-- Fix problem when changing typography assets [Github #3683](https://github.com/penpot/penpot/issues/3683)
+- Fix problem with shadow negative spread [GH #3421](https://github.com/penpot/penpot/issues/3421)
+- Fix problem with linked colors to strokes [GH #3522](https://github.com/penpot/penpot/issues/3522)
+- Fix problem with hand tool stuck [GH #3318](https://github.com/penpot/penpot/issues/3318)
+- Fix problem with fix scrolling on nested elements [GH #3508](https://github.com/penpot/penpot/issues/3508)
+- Fix problem when changing typography assets [GH #3683](https://github.com/penpot/penpot/issues/3683)
 - Internal error when you copy and paste some main components between files [Taiga #7397](https://tree.taiga.io/project/penpot/issue/7397)
 - Fix toolbar disappearing [Taiga #7411](https://tree.taiga.io/project/penpot/issue/7411)
 - Fix long text on tab breaks UI [Taiga #7421](https://tree.taiga.io/project/penpot/issue/7421)
@@ -533,7 +1981,7 @@ time being.
 
 ### :sparkles: New features
 
-- Improve selected colors [Taiga #5805]( https://tree.taiga.io/project/penpot/us/5805)
+- Improve selected colors [Taiga #5805](https://tree.taiga.io/project/penpot/us/5805)
 
 ### :bug: Bugs fixed
 
@@ -544,12 +1992,12 @@ time being.
 ### :sparkles: New features
 
 - Remember last color mode in colorpicker [Taiga #5508](https://tree.taiga.io/project/penpot/issue/5508)
-- Improve layers multiselection behaviour [Github #5741](https://github.com/penpot/penpot/issues/5741)
-- Remember last active team across logouts / sessions [Github #3325](https://github.com/penpot/penpot/issues/3325)
+- Improve layers multiselection behaviour [GH #5741](https://github.com/penpot/penpot/issues/5741)
+- Remember last active team across logouts / sessions [GH #3325](https://github.com/penpot/penpot/issues/3325)
 
 ### :bug: Bugs fixed
 
-- List view is discarded on tab change on Workspace Assets Sidebar tab [Github #3547](https://github.com/penpot/penpot/issues/3547)
+- List view is discarded on tab change on Workspace Assets Sidebar tab [GH #3547](https://github.com/penpot/penpot/issues/3547)
 - Fix message popup remains open when exiting workspace with browser back button [Taiga #5747](https://tree.taiga.io/project/penpot/issue/5747)
 - When editing text if font is changed, the proportions of the rendered shape are wrong [Taiga #5786](https://tree.taiga.io/project/penpot/issue/5786)
 
@@ -563,11 +2011,10 @@ time being.
 
 ### :bug: Bugs fixed
 
-- Fix unexpected output on get-page rpc method when invalid object-id is provided [Github #3546](https://github.com/penpot/penpot/issues/3546)
+- Fix unexpected output on get-page rpc method when invalid object-id is provided [GH #3546](https://github.com/penpot/penpot/issues/3546)
 - Fix Invalid files amount after moving file from Project to Drafts [Taiga #5638](https://tree.taiga.io/project/penpot/us/5638)
 - Fix deleted pages comments shown in right sidebar [Taiga #5648](https://tree.taiga.io/project/penpot/us/5648)
 - Fix tooltip on toggle visibility and toggle lock buttons [Taiga #5141](https://tree.taiga.io/project/penpot/issue/5141)
-
 
 ## 1.19.1
 
@@ -590,7 +2037,7 @@ time being.
   rendered as bitmap images.
 - Add the ability to disable google fonts provider with the `disable-google-fonts-provider` flag
 - Add the ability to disable dashboard templates section with the `disable-dashboard-templates-section` flag
-- Add the ability to use the registration whitelist with OICD [Github #3348](https://github.com/penpot/penpot/issues/3348)
+- Add the ability to use the registration whitelist with OICD [GH #3348](https://github.com/penpot/penpot/issues/3348)
 - Add support for local caching of google fonts (this avoids exposing the final user IP to
   goolge and reduces the amount of request sent to google)
 - Set smooth/instant autoscroll depending on distance [GitHub #3377](https://github.com/penpot/penpot/issues/3377)
@@ -682,23 +2129,22 @@ time being.
 
 - Update google fonts catalog (at 2023/07/06) [Taiga #5592](https://tree.taiga.io/project/penpot/issue/5592)
 
-
 ### :heart: Community contributions by (Thank you!)
 
-- Update Typography palette order (by @akshay-gupta7) [Github #3156](https://github.com/penpot/penpot/pull/3156)
-- Palettes (color, typographies) empty state (by @akshay-gupta7) [Github #3160](https://github.com/penpot/penpot/pull/3160)
-- Duplicate objects via drag + alt (by @akshay-gupta7) [Github #3147](https://github.com/penpot/penpot/pull/3147)
-- Set line-height to auto as 1.2 (by @akshay-gupta7) [Github #3185](https://github.com/penpot/penpot/pull/3185)
-- Click to select full values at the design sidebar (by @akshay-gupta7) [Github #3179](https://github.com/penpot/penpot/pull/3179)
-- Fix rect filter bounds math (by @ryanbreen) [Github #3180](https://github.com/penpot/penpot/pull/3180)
-- Removed sizing variables from radius (by @ondrejkonec) [Github #3184](https://github.com/penpot/penpot/pull/3184)
-- Dashboard search, set focus after shortcut (by @akshay-gupta7) [Github #3196](https://github.com/penpot/penpot/pull/3196)
+- Update Typography palette order (by @akshay-gupta7) [GH #3156](https://github.com/penpot/penpot/pull/3156)
+- Palettes (color, typographies) empty state (by @akshay-gupta7) [GH #3160](https://github.com/penpot/penpot/pull/3160)
+- Duplicate objects via drag + alt (by @akshay-gupta7) [GH #3147](https://github.com/penpot/penpot/pull/3147)
+- Set line-height to auto as 1.2 (by @akshay-gupta7) [GH #3185](https://github.com/penpot/penpot/pull/3185)
+- Click to select full values at the design sidebar (by @akshay-gupta7) [GH #3179](https://github.com/penpot/penpot/pull/3179)
+- Fix rect filter bounds math (by @ryanbreen) [GH #3180](https://github.com/penpot/penpot/pull/3180)
+- Removed sizing variables from radius (by @ondrejkonec) [GH #3184](https://github.com/penpot/penpot/pull/3184)
+- Dashboard search, set focus after shortcut (by @akshay-gupta7) [GH #3196](https://github.com/penpot/penpot/pull/3196)
 - Library name dropdown arrow is overlapped by library name (by @ondrejkonec) [Taiga #5200](https://tree.taiga.io/project/penpot/issue/5200)
-- Reorder shadows (by @akshay-gupta7) [Github #3236](https://github.com/penpot/penpot/pull/3236)
-- Open project in new tab from workspace (by @akshay-gupta7) [Github #3246](https://github.com/penpot/penpot/pull/3246)
-- Distribute fix enabled when two elements were selected (by @dfelinto) [Github #3266](https://github.com/penpot/penpot/pull/3266)
-- Distribute vertical spacing failing for overlapped text (by @dfelinto) [Github #3267](https://github.com/penpot/penpot/pull/3267)
-- bug Change independent corner radius input tooltips #3332 (by @astudentinearth) [Github #3332](https://github.com/penpot/penpot/pull/3332)
+- Reorder shadows (by @akshay-gupta7) [GH #3236](https://github.com/penpot/penpot/pull/3236)
+- Open project in new tab from workspace (by @akshay-gupta7) [GH #3246](https://github.com/penpot/penpot/pull/3246)
+- Distribute fix enabled when two elements were selected (by @dfelinto) [GH #3266](https://github.com/penpot/penpot/pull/3266)
+- Distribute vertical spacing failing for overlapped text (by @dfelinto) [GH #3267](https://github.com/penpot/penpot/pull/3267)
+- bug Change independent corner radius input tooltips #3332 (by @astudentinearth) [GH #3332](https://github.com/penpot/penpot/pull/3332)
 
 ## 1.18.6
 
@@ -728,7 +2174,7 @@ time being.
 - Fix problem with layout not reflowing on shape deletion [Taiga #5289](https://tree.taiga.io/project/penpot/issue/5289)
 - Fix extra long typography names on assets and palette [Taiga #5199](https://tree.taiga.io/project/penpot/issue/5199)
 - Fix background-color property on inspect code [Taiga #5300](https://tree.taiga.io/project/penpot/issue/5300)
-- Preview layer blend modes (by @akshay-gupta7) [Github #3235](https://github.com/penpot/penpot/pull/3235)
+- Preview layer blend modes (by @akshay-gupta7) [GH #3235](https://github.com/penpot/penpot/pull/3235)
 
 ## 1.18.3
 
@@ -780,7 +2226,7 @@ time being.
 - Improve deeps selection of nested arboards [Taiga #4913](https://tree.taiga.io/project/penpot/issue/4913)
 - Fix problem on selection numeric inputs on Firefox [#2991](https://github.com/penpot/penpot/issues/2991)
 - Changed the text dominant-baseline to use ideographic [Taiga #4791](https://tree.taiga.io/project/penpot/issue/4791)
-- Viewer wrong translations [Github #3035](https://github.com/penpot/penpot/issues/3035)
+- Viewer wrong translations [GH #3035](https://github.com/penpot/penpot/issues/3035)
 - Fix problem with text editor in Safari
 - Fix unlink library color when blur color picker input [#3026](https://github.com/penpot/penpot/issues/3026)
 - Fix snap pixel when moving path points on high zoom [#2930](https://github.com/penpot/penpot/issues/2930)
@@ -832,16 +2278,18 @@ time being.
 - Fix view mode header buttons overlapping in small resolutions [Taiga #5058](https://tree.taiga.io/project/penpot/issue/5058)
 - Fix precision for wrap in flex [Taiga #5072](https://tree.taiga.io/project/penpot/issue/5072)
 - Fix relative position overlay positioning [Taiga #5092](https://tree.taiga.io/project/penpot/issue/5092)
-- Fix hide grid keyboard shortcut [Github #3071](https://github.com/penpot/penpot/pull/3071)
+- Fix hide grid keyboard shortcut [GH #3071](https://github.com/penpot/penpot/pull/3071)
 - Fix problem with opacity in imported SVG's [Taiga #4923](https://tree.taiga.io/project/penpot/issue/4923)
 
 ### :heart: Community contributions by (Thank you!)
+
 - To @ondrejkonec: for contributing to the code with:
-- Refactor CSS variables [Github #2948](https://github.com/penpot/penpot/pull/2948)
+- Refactor CSS variables [GH #2948](https://github.com/penpot/penpot/pull/2948)
 
 ## 1.17.3
 
 ### :bug: Bugs fixed
+
 - Fix copy and paste very nested inside itself [Taiga #4848](https://tree.taiga.io/project/penpot/issue/4848)
 - Fix custom fonts not rendered correctly [Taiga #4874](https://tree.taiga.io/project/penpot/issue/4874)
 - Fix problem with shadows and blur on multiple selection
@@ -853,7 +2301,7 @@ time being.
 
 ### :sparkles: Enhancements
 
-- Adds environment variables for specifying the export and backend URI for the frontend docker image, thanks to @Supernova3339 for the initial PR and suggestion [Github #2984](https://github.com/penpot/penpot/issues/2984)
+- Adds environment variables for specifying the export and backend URI for the frontend docker image, thanks to @Supernova3339 for the initial PR and suggestion [GH #2984](https://github.com/penpot/penpot/issues/2984)
 
 ## 1.17.2
 
@@ -874,6 +2322,7 @@ time being.
 ## 1.17.1
 
 ### :bug: Bugs fixed
+
 - Fix components groups items show the component name in list mode [Taiga #4770](https://tree.taiga.io/project/penpot/issue/4770)
 - Fix typing CMD+Z on MacOS turns the cursor into a Zoom cursor [Taiga #4778](https://tree.taiga.io/project/penpot/issue/4778)
 - Fix white space on small screens [Taiga #4774](https://tree.taiga.io/project/penpot/issue/4774)
@@ -920,13 +2369,13 @@ time being.
 - Fix problem with text edition in Safari [Taiga #4046](https://tree.taiga.io/project/penpot/issue/4046)
 - Fix show outline with rounded corners on rects [Taiga #4053](https://tree.taiga.io/project/penpot/issue/4053)
 - Fix wrong interaction between comments and panning modes [Taiga #4297](https://tree.taiga.io/project/penpot/issue/4297)
-- Fix bad element positioning on interaction with fixed scroll [Github #2660](https://github.com/penpot/penpot/issues/2660)
+- Fix bad element positioning on interaction with fixed scroll [GH #2660](https://github.com/penpot/penpot/issues/2660)
 - Fix display type of component library not persistent [Taiga #4512](https://tree.taiga.io/project/penpot/issue/4512)
 - Fix problem when moving texts with keyboard [#2690](https://github.com/penpot/penpot/issues/2690)
 - Fix problem when drawing boxes won't detect mouse-up [Taiga #4618](https://tree.taiga.io/project/penpot/issue/4618)
 - Fix missing loading icon on shared libraries [Taiga #4148](https://tree.taiga.io/project/penpot/issue/4148)
 - Fix selection stroke missing in properties of multiple texts [Taiga #4048](https://tree.taiga.io/project/penpot/issue/4048)
-- Fix missing create component menu for frames [Github #2670](https://github.com/penpot/penpot/issues/2670)
+- Fix missing create component menu for frames [GH #2670](https://github.com/penpot/penpot/issues/2670)
 - Fix "currentColor" is not converted when importing SVG [Github 2276](https://github.com/penpot/penpot/issues/2276)
 - Fix incorrect color in properties of multiple bool shapes [Taiga #4355](https://tree.taiga.io/project/penpot/issue/4355)
 - Fix pressing the enter key gives you an internal error [Github 2675](https://github.com/penpot/penpot/issues/2675) [Github 2577](https://github.com/penpot/penpot/issues/2577)
@@ -935,10 +2384,10 @@ time being.
 - Fix wrong update of text in components [Taiga #4646](https://tree.taiga.io/project/penpot/issue/4646)
 - Fix problem with SVG imports with style [#2605](https://github.com/penpot/penpot/issues/2605)
 - Fix ghost shapes after sync groups in components [Taiga #4649](https://tree.taiga.io/project/penpot/issue/4649)
-- Fix layer orders messed up on move, group, reparent and undo [Github #2672](https://github.com/penpot/penpot/issues/2672)
-- Fix max height in library dialog [Github #2335](https://github.com/penpot/penpot/issues/2335)
+- Fix layer orders messed up on move, group, reparent and undo [GH #2672](https://github.com/penpot/penpot/issues/2672)
+- Fix max height in library dialog [GH #2335](https://github.com/penpot/penpot/issues/2335)
 - Fix undo ungroup (shift+g) scrambles positions [Taiga #4674](https://tree.taiga.io/project/penpot/issue/4674)
-- Fix justified text is stretched [Github #2539](https://github.com/penpot/penpot/issues/2539)
+- Fix justified text is stretched [GH #2539](https://github.com/penpot/penpot/issues/2539)
 - Fix mousewheel on viewer inspector [Taiga #4221](https://tree.taiga.io/project/penpot/issue/4221)
 - Fix path edition activated on boards [Taiga #4105](https://tree.taiga.io/project/penpot/issue/4105)
 - Fix hidden layers inside groups become visible after the group visibility is changed[Taiga #4710](https://tree.taiga.io/project/penpot/issue/4710)
@@ -961,7 +2410,7 @@ time being.
 
 ### :bug: Bugs fixed
 
-- Fix strage cursor behaviour after clicking viewport with text pool [Github #2447](https://github.com/penpot/penpot/issues/2447)
+- Fix strage cursor behaviour after clicking viewport with text pool [GH #2447](https://github.com/penpot/penpot/issues/2447)
 
 ## 1.16.1-beta
 
@@ -972,7 +2421,7 @@ time being.
 - Fix justify alignes text left [Taiga #4322](https://tree.taiga.io/project/penpot/issue/4322)
 - Fix text out of borders with "auto width" and center align [Taiga #4308](https://tree.taiga.io/project/penpot/issue/4308)
 - Fix wrong validation text after interaction with 2 and more files [Taiga #4276](https://tree.taiga.io/project/penpot/issue/4276)
-- Fix auto-width for texts can make text appear stretched [Github #2482](https://github.com/penpot/penpot/issues/2482)
+- Fix auto-width for texts can make text appear stretched [GH #2482](https://github.com/penpot/penpot/issues/2482)
 - Fix boards name do not disappear in focus mode [#4272](https://tree.taiga.io/project/penpot/issue/4272)
 - Fix wrong email in the info message at change email [Taiga #4274](https://tree.taiga.io/project/penpot/issue/4274)
 - Fix transform to path RMB menu item is not relevant if shape is already path [Taiga #4302](https://tree.taiga.io/project/penpot/issue/4302)
@@ -988,7 +2437,7 @@ time being.
 
 ### :boom: Breaking changes & Deprecations
 
-- Removed the support for v2 internal file data blob format.  This
+- Removed the support for v2 internal file data blob format. This
   version has never been documented nor set as default value so
   technically this is not a breaking change because we are removing
   a "private API".
@@ -1093,7 +2542,6 @@ time being.
 - Fix when ungrouping, the items previously grouped should ALWAYS remain selected [Taiga #4064](https://tree.taiga.io/project/penpot/issue/4064)
 - Change shortcut for "Clear undo" [#2219](https://github.com/penpot/penpot/issues/2219)
 
-
 ## 1.15.2-beta
 
 ### :bug: Bugs fixed
@@ -1112,7 +2560,7 @@ time being.
 - Fix problems with double-click and selection [Taiga #4005](https://tree.taiga.io/project/penpot/issue/4005)
 - Fix mismatch between editor and displayed text in workspace [Taiga #3975](https://tree.taiga.io/project/penpot/issue/3975)
 - Fix validation error on text position [Taiga #4010](https://tree.taiga.io/project/penpot/issue/4010)
-- Fix objects jitter while scrolling [Github #2167](https://github.com/penpot/penpot/issues/2167)
+- Fix objects jitter while scrolling [GH #2167](https://github.com/penpot/penpot/issues/2167)
 - Fix on color-picker, click+drag adds lots of recent colors [Taiga #4013](https://tree.taiga.io/project/penpot/issue/4013)
 - Fix opening profile URL while signed out takes to "your account" section[Taiga #3976](https://tree.taiga.io/project/penpot/issue/3976)
 
@@ -1177,6 +2625,7 @@ time being.
 - Fix bringing complete file data when launching the export dialog [Taiga #4006](https://tree.taiga.io/project/penpot/issue/4006)
 
 ### :arrow_up: Deps updates
+
 ### :heart: Community contributions by (Thank you!)
 
 ## 1.14.2-beta
@@ -1217,10 +2666,10 @@ time being.
 - Prototype connection should be under the rules [Taiga #3384](https://tree.taiga.io/project/penpot/issue/3384)
 - Fix problem with empty text boxes events [Taiga #3627](https://tree.taiga.io/project/penpot/issue/3627)
 
-
 ## 1.13.5-beta
 
 ### :bug: Bugs fixed
+
 - Fix orientation artboard preset not working with differently sized artboards [Taiga #3548](https://tree.taiga.io/project/penpot/issue/3548)
 - Fix background on export arboards [Taiga #1991](https://tree.taiga.io/project/penpot/issue/1991)
 
@@ -1364,6 +2813,7 @@ time being.
 - Fix problem when resizing a group with texts with auto-width/height [#3171](https://tree.taiga.io/project/penpot/issue/3171)
 
 ### :arrow_up: Deps updates
+
 ### :heart: Community contributions by (Thank you!)
 
 ## 1.12.4-beta
@@ -1381,7 +2831,7 @@ time being.
 ### :bug: Bugs fixed
 
 - Fix issue with shift+select to deselect shapes [Taiga #3154](https://tree.taiga.io/project/penpot/issue/3154)
-- Fix issue with drag-select shapes  [Taiga #3165](https://tree.taiga.io/project/penpot/issue/3165)
+- Fix issue with drag-select shapes [Taiga #3165](https://tree.taiga.io/project/penpot/issue/3165)
 - Fix issue on password persistence after registration process on private instances
 
 ## 1.12.2-beta
@@ -1398,7 +2848,6 @@ time being.
 
 - Fix length of names in sidebar [Taiga #2962](https://tree.taiga.io/project/penpot/issue/2962)
 - Fix issues on loki integration
-
 
 ## 1.12.0-beta
 
@@ -1421,7 +2870,7 @@ time being.
 - Scroll bars [Taiga #2550](https://tree.taiga.io/project/penpot/task/2550)
 - Add select layer option to context menu [Taiga #2474](https://tree.taiga.io/project/penpot/us/2474)
 - Guides [Taiga #290](https://tree.taiga.io/project/penpot/us/290)
-- Improve file menu by adding semantically groups [Github #1203](https://github.com/penpot/penpot/issues/1203)
+- Improve file menu by adding semantically groups [GH #1203](https://github.com/penpot/penpot/issues/1203)
 - Add update components in bulk option in context menu [Taiga #1975](https://tree.taiga.io/project/penpot/us/1975)
 - Create first E2E tests [Taiga #2608](https://tree.taiga.io/project/penpot/task/2608), [Taiga #2608](https://tree.taiga.io/project/penpot/task/2608)
 - Redesign of workspace toolbars [Taiga #2319](https://tree.taiga.io/project/penpot/us/2319)
@@ -1489,7 +2938,7 @@ time being.
 - Add shortcut to create artboard from selected objects [Taiga #2412](https://tree.taiga.io/project/penpot/us/2412)
 - Add shortcut for opacity [Taiga #2442](https://tree.taiga.io/project/penpot/us/2442)
 - Setting fill automatically for new texts [Taiga #2441](https://tree.taiga.io/project/penpot/us/2441)
-- Add shortcut to move action [Github #1213](https://github.com/penpot/penpot/issues/1213)
+- Add shortcut to move action [GH #1213](https://github.com/penpot/penpot/issues/1213)
 - Add alt as mod key to add stroke color from library menu [Taiga #2207](https://tree.taiga.io/project/penpot/us/2207)
 - Add detach in bulk option to context menu [Taiga #2210](https://tree.taiga.io/project/penpot/us/2210)
 - Add penpot look and feel to multiuser cursors [Taiga #1387](https://tree.taiga.io/project/penpot/us/1387)
@@ -1763,7 +3212,7 @@ time being.
 - Enable penpot SVG metadata only when exporting complete files [Taiga #1914](https://tree.taiga.io/project/penpot/us/1914?milestone=295883)
 - Export to PDF all artboards of one page [Taiga #1895](https://tree.taiga.io/project/penpot/us/1895)
 - Go to a undo step clicking on a history element of the list [Taiga #1374](https://tree.taiga.io/project/penpot/us/1374)
-- Increment font size by 10 with shift+arrows [1047](https://github.com/penpot/penpot/issues/1047)
+- Increment font size by 10 with shift+arrows [#1047](https://github.com/penpot/penpot/issues/1047)
 - New shortcut to detach components Ctrl+Shift+K [Taiga #1799](https://tree.taiga.io/project/penpot/us/1799)
 - Set email inputs to type "email", to aid keyboard entry [Taiga #1921](https://tree.taiga.io/project/penpot/issue/1921)
 - Use shift+move to move element orthogonally [#823](https://github.com/penpot/penpot/issues/823)

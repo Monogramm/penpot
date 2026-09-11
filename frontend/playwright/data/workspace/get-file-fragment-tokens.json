@@ -1,6 +1,6 @@
 {
   "~:id": "~u51e13852-1a8e-8037-8005-9eabb500f7c7",
-  "~:file-id": "~u51e13852-1a8e-8037-8005-9e9413a1f1f6",
+  "~:file-id": "~uc7ce0794-0992-8105-8004-38f280443849",
   "~:created-at": "~m1737542758401",
   "~:data": {
     "~:options": {},
@@ -186,7 +186,8 @@
           },
           "~:fills": [
             {
-              "~:fill-color": "#7f9cf5"
+              "~:fill-color": "#7f9cf5",
+              "~:fill-opacity": 1
             }
           ],
           "~:flip-x": null,
@@ -235,7 +236,8 @@
                         "~:letter-spacing": "0",
                         "~:fills": [
                           {
-                            "~:fill-color": "#ffffff"
+                            "~:fill-color": "#ffffff",
+                            "~:fill-opacity": 1
                           }
                         ],
                         "~:font-family": "sourcesanspro",
@@ -257,7 +259,8 @@
                     "~:letter-spacing": "0",
                     "~:fills": [
                       {
-                        "~:fill-color": "#ffffff"
+                        "~:fill-color": "#ffffff",
+                        "~:fill-opacity": 1
                       }
                     ],
                     "~:font-family": "sourcesanspro"
@@ -328,7 +331,8 @@
                 "~:y2": 37.33333456516266,
                 "~:fills": [
                   {
-                    "~:fill-color": "#ffffff"
+                    "~:fill-color": "#ffffff",
+                    "~:fill-opacity": 1
                   }
                 ],
                 "~:x2": 86.60417175292969,
@@ -445,7 +449,8 @@
           },
           "~:fills": [
             {
-              "~:fill-color": "#ffffff"
+              "~:fill-color": "#ffffff",
+              "~:fill-opacity": 1
             }
           ],
           "~:flip-x": null,
@@ -454,7 +459,7 @@
         }
       }
     },
-    "~:id": "~u51e13852-1a8e-8037-8005-9e9413a1f1f7",
+    "~:id": "~u66697432-c33d-8055-8006-2c62cc084cad",
     "~:name": "Page 1",
     "~:background": "#e8eae9",
     "~:guides": {

@@ -2,35 +2,36 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.assets.file-library
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.common.files.variant :as cfv]
+   [app.common.types.component :as ctc]
    [app.common.types.components-list :as ctkl]
    [app.main.data.event :as ev]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.libraries :as dwl]
+   [app.main.data.workspace.shapes :as dwsh]
    [app.main.data.workspace.undo :as dwu]
    [app.main.refs :as refs]
    [app.main.router :as rt]
    [app.main.store :as st]
-   [app.main.ui.components.title-bar :refer [title-bar]]
+   [app.main.ui.components.title-bar :refer [title-bar*]]
    [app.main.ui.context :as ctx]
-   [app.main.ui.icons :as i]
-   [app.main.ui.workspace.sidebar.assets.colors :refer [colors-section]]
+   [app.main.ui.icons :as deprecated-icon]
+   [app.main.ui.workspace.sidebar.assets.colors :refer [colors-section*]]
    [app.main.ui.workspace.sidebar.assets.common :as cmm]
-   [app.main.ui.workspace.sidebar.assets.components :refer [components-section]]
-   [app.main.ui.workspace.sidebar.assets.graphics :refer [graphics-section]]
-   [app.main.ui.workspace.sidebar.assets.typographies :refer [typographies-section]]
+   [app.main.ui.workspace.sidebar.assets.components :refer [components-section*]]
+   [app.main.ui.workspace.sidebar.assets.typographies :refer [typographies-section*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [cuerdas.core :as str]
    [okulary.core :as l]
-   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -92,28 +93,27 @@
         (mf/use-fn
          (fn [ev]
            (dom/stop-propagation ev)
-           (st/emit! (ptk/data-event ::ev/event {::ev/name "navigate-to-library-file"}))))]
+           (st/emit! (ev/event {::ev/name "navigate-to-library-file"}))))]
 
     [:div {:class (stl/css-case
                    :library-title true
                    :open is-open)}
-     [:& title-bar {:collapsable    true
-                    :collapsed      (not is-open)
-                    :all-clickable  true
-                    :on-collapsed   toggle-open
-                    :title          (if is-local
-                                      (mf/html [:div {:class (stl/css :special-title)}
-                                                (tr "workspace.assets.local-library")])
-                                      ;; Do we need to add shared info here?
-                                      (mf/html [:div {:class (stl/css :special-title)}
-                                                file-name]))}
+     [:> title-bar* {:collapsable    true
+                     :collapsed      (not is-open)
+                     :on-collapsed   toggle-open
+                     :title          (if is-local
+                                       (mf/html [:div {:class (stl/css :special-title)}
+                                                 (tr "workspace.assets.local-library")])
+                                       ;; Do we need to add shared info here?
+                                       (mf/html [:div {:class (stl/css :special-title)}
+                                                 file-name]))}
       (when-not ^boolean is-local
         [:span {:title (tr "workspace.assets.open-library")}
          [:a {:class (stl/css :file-link)
               :href (str "#" url)
               :target "_blank"
               :on-click on-click}
-          i/open-link]])]]))
+          deprecated-icon/open-link]])]]))
 
 (defn- extend-selected
   [selected type asset-groups asset-id file-id]
@@ -144,11 +144,10 @@
 
 (mf/defc file-library-content*
   {::mf/private true}
-  [{:keys [file is-local open-status-ref on-clear-selection filters colors media typographies components]}]
+  [{:keys [file is-local is-loaded open-status-ref on-clear-selection filters colors typographies components count-variants]}]
   (let [open-status       (mf/deref open-status-ref)
 
         file-id           (:id file)
-        project-id        (:project-id file)
 
         filters-section   (:section filters)
         has-filters-term? (not ^boolean (str/empty? (:term filters)))
@@ -163,11 +162,6 @@
                  (= filters-section "components"))
              (or (pos? (count components))
                  (not has-filters-term?)))
-
-        show-graphics?
-        (and (or (= filters-section "all")
-                 (= filters-section "graphics"))
-             (pos? (count media)))
 
         show-colors?
         (and (or (= filters-section "all")
@@ -186,9 +180,6 @@
 
         force-open-colors?
         (when ^boolean has-filters-term? (> 60 (count colors)))
-
-        force-open-graphics?
-        (when ^boolean has-filters-term? (> 60 (count media)))
 
         force-open-typographies?
         (when ^boolean has-filters-term? (> 60 (count typographies)))
@@ -213,14 +204,21 @@
         on-component-click
         (mf/use-fn (mf/deps on-asset-click) (partial on-asset-click :components))
 
-        on-graphics-click
-        (mf/use-fn (mf/deps on-asset-click) (partial on-asset-click :graphics))
-
         on-colors-click
         (mf/use-fn (mf/deps on-asset-click) (partial on-asset-click :colors))
 
         on-typography-click
         (mf/use-fn (mf/deps on-asset-click) (partial on-asset-click :typographies))
+
+        delete-component
+        (mf/use-fn
+         (mf/deps components)
+         (fn [component-id]
+           (let [component (some #(when (= (:id %) component-id) %) components)]
+             (if (ctc/is-variant? component)
+               ;; If the component is a variant, delete its variant container
+               (dwsh/delete-shapes (:main-instance-page component) #{(:variant-id component)})
+               (dwl/delete-component {:id component-id})))))
 
         on-assets-delete
         (mf/use-fn
@@ -228,7 +226,7 @@
          (fn []
            (let [undo-id (js/Symbol)]
              (st/emit! (dwu/start-undo-transaction undo-id))
-             (run! st/emit! (map #(dwl/delete-component {:id %})
+             (run! st/emit! (map delete-component
                                  (:components selected)))
              (run! st/emit! (map #(dwl/delete-media {:id %})
                                  (:graphics selected)))
@@ -245,82 +243,69 @@
              (st/emit! (dwu/commit-undo-transaction undo-id)))))]
 
     [:div {:class (stl/css :library-content)}
-     (when ^boolean show-components?
-       [:& components-section
-        {:file-id file-id
-         :is-local is-local
-         :components components
-         :listing-thumbs? listing-thumbs?
-         :open? (or ^boolean force-open-components?
-                    ^boolean (get open-status :components false))
-         :force-open? force-open-components?
-         :open-status-ref open-status-ref
-         :reverse-sort? reverse-sort?
-         :selected selected
-         :on-asset-click on-component-click
-         :on-assets-delete on-assets-delete
-         :on-clear-selection on-clear-selection}])
+     (if-not is-loaded
+       [:span {:class (stl/css :loading)} (tr "labels.loading")]
+       [:*
+        (when ^boolean show-components?
+          [:> components-section*
+           {:file-id file-id
+            :is-local is-local
+            :components components
+            :is-listing-thumbs listing-thumbs?
+            :is-open (or ^boolean force-open-components?
+                         ^boolean (get open-status :components false))
+            :is-force-open force-open-components?
+            :open-status-ref open-status-ref
+            :is-reverse-sort reverse-sort?
+            :selected selected
+            :on-asset-click on-component-click
+            :on-assets-delete on-assets-delete
+            :on-clear-selection on-clear-selection
+            :delete-component delete-component
+            :count-variants count-variants}])
 
-     (when ^boolean show-graphics?
-       [:& graphics-section
-        {:file-id file-id
-         :project-id project-id
-         :local? is-local
-         :objects media
-         :listing-thumbs? listing-thumbs?
-         :open? (or ^boolean force-open-graphics?
-                    ^boolean (get open-status :graphics false))
-         :force-open? force-open-graphics?
-         :open-status-ref open-status-ref
-         :reverse-sort? reverse-sort?
-         :selected selected
-         :on-asset-click on-graphics-click
-         :on-assets-delete on-assets-delete
-         :on-clear-selection on-clear-selection}])
+        (when ^boolean show-colors?
+          [:> colors-section*
+           {:file-id file-id
+            :is-local is-local
+            :colors colors
+            :is-open (or ^boolean force-open-colors?
+                         ^boolean (get open-status :colors false))
+            :is-force-open force-open-colors?
+            :open-status-ref open-status-ref
+            :is-reverse-sort reverse-sort?
+            :selected selected
+            :on-asset-click on-colors-click
+            :on-assets-delete on-assets-delete
+            :on-clear-selection on-clear-selection}])
 
-     (when ^boolean show-colors?
-       [:& colors-section
-        {:file-id file-id
-         :local? is-local
-         :colors colors
-         :open? (or ^boolean force-open-colors?
-                    ^boolean (get open-status :colors false))
-         :force-open? force-open-colors?
-         :open-status-ref open-status-ref
-         :reverse-sort? reverse-sort?
-         :selected selected
-         :on-asset-click on-colors-click
-         :on-assets-delete on-assets-delete
-         :on-clear-selection on-clear-selection}])
+        (when ^boolean show-typography?
+          [:> typographies-section*
+           {:file file
+            :file-id (:id file)
+            :is-local is-local
+            :typographies typographies
+            :is-open (or ^boolean force-open-typographies?
+                         ^boolean (get open-status :typographies false))
+            :is-force-open force-open-typographies?
+            :open-status-ref open-status-ref
+            :is-reverse-sort reverse-sort?
+            :selected selected
+            :on-asset-click on-typography-click
+            :on-assets-delete on-assets-delete
+            :on-clear-selection on-clear-selection}])
 
-     (when ^boolean show-typography?
-       [:& typographies-section
-        {:file file
-         :file-id (:id file)
-         :local? is-local
-         :typographies typographies
-         :open? (or ^boolean force-open-typographies?
-                    ^boolean (get open-status :typographies false))
-         :force-open? force-open-typographies?
-         :open-status-ref open-status-ref
-         :reverse-sort? reverse-sort?
-         :selected selected
-         :on-asset-click on-typography-click
-         :on-assets-delete on-assets-delete
-         :on-clear-selection on-clear-selection}])
-
-     (when (and (not ^boolean show-components?)
-                (not ^boolean show-graphics?)
-                (not ^boolean show-colors?)
-                (not ^boolean show-typography?))
-       [:div  {:class (stl/css :asset-title)}
-        [:span {:class (stl/css :no-found-icon)}
-         i/search]
-        [:span {:class (stl/css :no-found-text)}
-         (tr "workspace.assets.not-found")]])]))
+        (when (and (not ^boolean show-components?)
+                   (not ^boolean show-colors?)
+                   (not ^boolean show-typography?))
+          [:div  {:class (stl/css :asset-title)}
+           [:span {:class (stl/css :no-found-icon)}
+            deprecated-icon/search]
+           [:span {:class (stl/css :no-found-text)}
+            (tr "workspace.assets.not-found")]])])]))
 
 (mf/defc file-library*
-  [{:keys [file is-local is-default-open? filters]}]
+  [{:keys [file is-local is-default-open filters]}]
   (let [file-id      (:id file)
         file-name    (:name file)
         page-id      (dm/get-in file [:data :pages 0])
@@ -328,13 +313,10 @@
         library      (use-library-ref file-id)
 
         colors       (:colors library)
-        media        (:media library)
         typographies (:typographies library)
 
         filters-term (:term filters)
-
-        ;; FIXME: maybe unused
-        ;; has-term?    (not (str/blank? filters-term))
+        is-loaded    (some? library)
 
         filtered-colors
         (mf/with-memo [filters colors]
@@ -343,13 +325,9 @@
 
         filtered-components
         (mf/with-memo [filters library]
-          (-> (into [] (ctkl/components-seq library))
-              (cmm/apply-filters filters)))
-
-        filtered-media
-        (mf/with-memo [filters media]
-          (-> (vals media)
-              (cmm/apply-filters filters)))
+          (as-> (into [] (ctkl/components-seq library)) $
+            (cmm/apply-filters $ filters)
+            (remove #(cfv/is-secondary-variant? % library) $)))
 
         filtered-typographies
         (mf/with-memo [filters typographies]
@@ -368,7 +346,6 @@
         (and (not (str/blank? filters-term))
              (or (> 60 (count filtered-colors))
                  (> 60 (count filtered-components))
-                 (> 60 (count filtered-media))
                  (> 60 (count filtered-typographies))))
 
         open?
@@ -376,13 +353,24 @@
           ;; if the user has closed it specifically, respect that
           false
           (or force-lib-open?
-              (d/nilv (:library open-status) is-default-open?)))
+              (d/nilv (:library open-status) is-default-open)))
 
         unselect-all
         (mf/use-fn
          (mf/deps file-id)
          (fn []
-           (st/emit! (dw/unselect-all-assets file-id))))]
+           (st/emit! (dw/unselect-all-assets file-id))))
+
+        variants-counter
+        (mf/with-memo [library]
+          (-> (group-by :variant-id (ctkl/components-seq library))
+              (update-vals count)))
+
+        count-variants
+        (mf/use-fn
+         (mf/deps variants-counter)
+         (fn [variant-id]
+           (get variants-counter variant-id)))]
 
     [:div {:class (stl/css :tool-window)
            :on-context-menu dom/prevent-default
@@ -399,10 +387,11 @@
        [:> file-library-content*
         {:file file
          :is-local is-local
+         :is-loaded is-loaded
          :filters filters
          :colors filtered-colors
          :components filtered-components
-         :media filtered-media
          :typographies filtered-typographies
          :on-clear-selection unselect-all
-         :open-status-ref open-status-ref}])]))
+         :open-status-ref open-status-ref
+         :count-variants count-variants}])]))

@@ -2,38 +2,48 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
+@use "../../../sidebar/common/sidebar.scss" as sidebar;
 
 .element-set {
-  margin: 0;
+  @include sidebar.option-grid-structure;
+}
+
+.element-title {
+  grid-column: span 8;
 }
 
 .title-spacing-export {
-  padding-left: $s-2;
+  padding-left: deprecated.$s-2;
   margin: 0;
 }
 
 .element-set-content {
-  @include flexColumn;
-  margin: $s-4 0 $s-8 0;
+  @include sidebar.option-grid-structure;
+
+  gap: var(--sp-xs);
 }
 
 .multiple-exports {
-  @include flexRow;
+  @include deprecated.flex-row;
+
+  grid-column: 1 / span 9;
+
   .label {
-    @extend .mixed-bar;
+    @extend %mixed-bar;
   }
+
   .actions {
-    @include flexRow;
+    @include deprecated.flex-row;
   }
 }
 
 .element-group {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  column-gap: $s-4;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
 }
 
 .input-wrapper {
@@ -47,8 +57,8 @@
   padding: 0;
 
   .dropdown-upwards {
-    bottom: $s-36;
-    width: $s-80;
+    bottom: deprecated.$s-36;
+    width: deprecated.$s-80;
     top: unset;
   }
 }
@@ -56,22 +66,25 @@
 .size-select {
   grid-column: span 2;
   padding: 0;
+
   .dropdown-upwards {
-    bottom: $s-36;
+    bottom: deprecated.$s-36;
     top: unset;
-    width: $s-80;
+    width: deprecated.$s-80;
   }
 }
 
 .suffix-input {
   grid-column: span 3;
-  @extend .input-element;
-  @include bodySmallTypography;
+
+  @extend %input-element;
+  @include deprecated.body-small-typography;
 }
 
 .export-btn {
-  @extend .button-secondary;
-  @include uppercaseTitleTipography;
-  height: $s-32;
-  width: $s-252;
+  @extend %button-secondary;
+  @include deprecated.uppercase-title-typography;
+
+  grid-column: 1 / span 9;
+  height: deprecated.$s-32;
 }

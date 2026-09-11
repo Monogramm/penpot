@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.shapes.frame
   (:require
@@ -47,7 +47,7 @@
         [:& shape-container {:shape shape :ref ref}
          [:& frame-shape {:shape shape :childs childs}]
          (when *assert*
-           [:& wsd/shape-debug {:shape shape}])]))))
+           [:> wsd/shape-debug* {:shape shape}])]))))
 
 (defn check-props
   [new-props old-props]
@@ -136,10 +136,11 @@
             width          (dm/get-prop bounds :width)
             height         (dm/get-prop bounds :height)
 
-            thumbnail-uri* (mf/with-memo [file-id page-id frame-id]
-                             (let [object-id (thc/fmt-object-id file-id page-id frame-id "frame")]
-                               (refs/workspace-thumbnail-by-id object-id)))
-            thumbnail-uri  (mf/deref thumbnail-uri*)
+            thumbnail-data* (mf/with-memo [file-id page-id frame-id]
+                              (let [object-id (thc/fmt-object-id file-id page-id frame-id "frame")]
+                                (refs/workspace-thumbnail-by-id object-id)))
+            thumbnail-data  (mf/deref thumbnail-data*)
+            thumbnail-uri   (:uri thumbnail-data)
 
             modifiers-ref  (mf/with-memo [frame-id]
                              (refs/workspace-modifiers-by-frame-id frame-id))
@@ -185,14 +186,13 @@
             (d/close! task)))
 
         (fdm/use-dynamic-modifiers objects (mf/ref-val content-ref) modifiers)
-
         [:& shape-container {:shape shape}
          [:g.frame-container
           {:id (dm/str "frame-container-" frame-id)
            :key "frame-container"
            :opacity (when ^boolean hidden? 0)}
 
-           ;; When there is no thumbnail, we generate a empty rect.
+          ;; When there is no thumbnail, we generate a empty rect.
           (when (and (not ^boolean content-visible?) (not @imposter-loaded))
             [:g.frame-placeholder
              [:rect {:x x
@@ -231,5 +231,5 @@
              [:& frame-shape {:shape shape :ref content-ref}]])]
 
          (when *assert*
-           [:& wsd/shape-debug {:shape shape}])]))))
+           [:> wsd/shape-debug* {:shape shape}])]))))
 

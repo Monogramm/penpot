@@ -1,628 +1,890 @@
-use skia_safe as skia;
-
-mod debug;
+#[cfg(target_arch = "wasm32")]
+mod emscripten;
+mod error;
+mod globals;
 mod math;
 mod mem;
+mod performance;
 mod render;
 mod shapes;
 mod state;
+mod tiles;
+mod ui;
 mod utils;
+mod uuid;
 mod view;
+mod wapi;
+mod wasm;
 
-use crate::shapes::{BoolType, Kind, Path};
+use std::collections::HashMap;
 
-use crate::state::State;
-use crate::utils::uuid_from_u32_quartet;
+#[allow(unused_imports)]
+use crate::error::{Error, Result};
+use crate::render::raster::RasterFormat;
+use crate::render::{FrameType, RenderFlag};
 
-static mut STATE: Option<Box<State>> = None;
+use globals::{get_design_state, get_gpu_state, get_render_state, get_resources, has_render_state};
 
-extern "C" {
-    fn emscripten_GetProcAddress(
-        name: *const ::std::os::raw::c_char,
-    ) -> *const ::std::os::raw::c_void;
-}
+use macros::wasm_error;
+use math::{Bounds, Matrix};
+use mem::SerializableResult;
+use shapes::{StructureEntry, StructureEntryType, TransformEntry};
+use skia_safe as skia;
+use utils::uuid_from_u32_quartet;
+use uuid::Uuid;
 
-fn init_gl() {
-    unsafe {
-        gl::load_with(|addr| {
-            let addr = std::ffi::CString::new(addr).unwrap();
-            emscripten_GetProcAddress(addr.into_raw() as *const _) as *const _
-        });
-    }
-}
-
-/// This is called from JS after the WebGL context has been created.
 #[no_mangle]
-pub extern "C" fn init(width: i32, height: i32) {
-    let state_box = Box::new(State::new(width, height, 2048));
-    unsafe {
-        STATE = Some(state_box);
-    }
+#[wasm_error]
+pub extern "C" fn set_browser(browser: u8) -> Result<()> {
+    with_state!(state, {
+        state.set_browser(browser);
+    });
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn clean_up() {
-    unsafe { STATE = None }
-    mem::free_bytes();
-}
-
-#[no_mangle]
-pub extern "C" fn set_render_options(debug: u32, dpr: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    let render_state = state.render_state();
-
+#[wasm_error]
+pub extern "C" fn set_render_options(debug: u32, dpr: f32) -> Result<()> {
+    let render_state = get_render_state();
     render_state.set_debug_flags(debug);
-    render_state.set_dpr(dpr);
+    render_state.set_dpr(dpr)?;
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn set_canvas_background(raw_color: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-
-    let color = skia::Color::new(raw_color);
-    state.set_background_color(color);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn render() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_all(true);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn render_without_cache() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_all(false);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn zoom() {
-    let state: &mut Box<State<'_>> =
-        unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    state.zoom();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pan() {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    state.pan();
-}
-
-#[no_mangle]
-pub extern "C" fn reset_canvas() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_state().reset_canvas();
-}
-
-#[no_mangle]
-pub extern "C" fn resize_viewbox(width: i32, height: i32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.resize(width, height);
-}
-
-#[no_mangle]
-pub extern "C" fn set_view(zoom: f32, x: f32, y: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_state().viewbox.set_all(zoom, x, y);
-}
-
-#[no_mangle]
-pub extern "C" fn set_view_zoom(zoom: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_state().viewbox.set_zoom(zoom);
-}
-
-#[no_mangle]
-pub extern "C" fn set_view_xy(x: f32, y: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    state.render_state().viewbox.set_pan_xy(x, y);
-}
-
-#[no_mangle]
-pub extern "C" fn use_shape(a: u32, b: u32, c: u32, d: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    let id = uuid_from_u32_quartet(a, b, c, d);
-    state.use_shape(id);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_kind_circle() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-
-    if let Some(shape) = state.current_shape() {
-        shape.set_kind(Kind::Circle(math::Rect::new_empty()));
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_kind_rect() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-
-    if let Some(shape) = state.current_shape() {
-        match shape.kind() {
-            Kind::Rect(_, _) => {}
-            _ => shape.set_kind(Kind::Rect(math::Rect::new_empty(), None)),
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_kind_path() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_kind(Kind::Path(Path::default()));
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_kind_bool() {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        match shape.kind() {
-            Kind::Bool(_, _) => {}
-            _ => shape.set_kind(Kind::Bool(BoolType::default(), Path::default())),
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_bool_type(raw_bool_type: u8) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_bool_type(BoolType::from(raw_bool_type))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn set_shape_selrect(left: f32, top: f32, right: f32, bottom: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_selrect(left, top, right, bottom);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_clip_content(clip_content: bool) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_clip(clip_content);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn set_shape_rotation(rotation: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_rotation(rotation);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn set_shape_transform(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_transform(a, b, c, d, e, f);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_child(a: u32, b: u32, c: u32, d: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    let id = uuid_from_u32_quartet(a, b, c, d);
-    if let Some(shape) = state.current_shape() {
-        shape.add_child(id);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn clear_shape_children() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.clear_children();
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_solid_fill(raw_color: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
+#[wasm_error]
+pub extern "C" fn set_canvas_background(raw_color: u32) -> Result<()> {
+    with_state!(state, {
         let color = skia::Color::new(raw_color);
-        shape.add_fill(shapes::Fill::Solid(color));
-    }
+        state.set_background_color(color);
+        state.rebuild_tiles_shallow();
+    });
+
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn add_shape_linear_fill(
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
-    opacity: f32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.add_fill(shapes::Fill::new_linear_gradient(
-            (start_x, start_y),
-            (end_x, end_y),
-            opacity,
-        ))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_radial_fill(
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
-    opacity: f32,
-    width: f32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.add_fill(shapes::Fill::new_radial_gradient(
-            (start_x, start_y),
-            (end_x, end_y),
-            opacity,
-            width,
-        ))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_fill_stops(ptr: *mut shapes::RawStopData, n_stops: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-
-    if let Some(shape) = state.current_shape() {
-        let len = n_stops as usize;
-
-        unsafe {
-            let buffer = Vec::<shapes::RawStopData>::from_raw_parts(ptr, len, len);
-            shape
-                .add_fill_gradient_stops(buffer)
-                .expect("could not add gradient stops");
-            mem::free_bytes();
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn store_font(family_name_size: u32, font_size: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    unsafe {
-        let font_bytes =
-            Vec::<u8>::from_raw_parts(mem::buffer_ptr(), font_size as usize, font_size as usize);
-        let family_name = String::from_raw_parts(
-            mem::buffer_ptr().add(font_size as usize),
-            family_name_size as usize,
-            family_name_size as usize,
-        );
-        match state.render_state().add_font(family_name, &font_bytes) {
-            Err(msg) => {
-                eprintln!("{}", msg);
+#[wasm_error]
+pub extern "C" fn render(timestamp: i32, flags: u8) -> Result<FrameType> {
+    with_state!(state, {
+        let render_state = get_render_state();
+        state.rebuild_touched_tiles();
+        // Drain the throttled modifier-tile invalidation accumulated
+        // since the previous rAF. set_modifiers skips this work during
+        // interactive_transform; we do it once here, with the current
+        // modifier set, so the cost is paid once per rAF rather than
+        // once per pointer move.
+        if render_state.options.is_interactive_transform() {
+            // Collect into an owned Vec to release the immutable borrow on
+            // `state.shapes` before the mutable `rebuild_modifier_tiles` call.
+            let ids = state.shapes.modifier_ids().to_vec();
+            if !ids.is_empty() {
+                state.rebuild_modifier_tiles(&ids)?;
             }
-            _ => {}
         }
-        mem::free_bytes();
-    }
+        let is_partial = flags & RenderFlag::Partial as u8 == RenderFlag::Partial as u8;
+        if flags & RenderFlag::SyncTiles as u8 != 0 {
+            render_state.preserve_target_during_render = true;
+        }
+        let frame_type = if is_partial && !render_state.preserve_target_during_render {
+            state
+                .continue_render_loop(timestamp)
+                .map_err(|_| Error::RecoverableError("Error rendering".to_string()))?
+        } else {
+            state
+                .start_render_loop(timestamp)
+                .map_err(|_| Error::RecoverableError("Error rendering".to_string()))?
+        };
+        return Ok(frame_type);
+    });
 }
 
 #[no_mangle]
-pub extern "C" fn store_image(a: u32, b: u32, c: u32, d: u32, size: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    let id = uuid_from_u32_quartet(a, b, c, d);
+#[wasm_error]
+pub extern "C" fn render_ui_only() -> Result<()> {
+    with_state!(state, {
+        state.render_ui_only();
+    });
+    Ok(())
+}
 
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_blurred_snapshot(blur_radius: f32) -> Result<()> {
+    with_state!(state, {
+        state.render_blurred_snapshot(blur_radius);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn clear_render_include_filter() -> Result<()> {
+    with_state!(state, {
+        state.clear_include_filter();
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_render_include_filter() -> Result<()> {
+    let bytes = mem::bytes();
+
+    let entries: Vec<Uuid> = bytes
+        .chunks(size_of::<<Uuid as SerializableResult>::BytesType>())
+        .map(|data| Uuid::try_from(data).map_err(|e| Error::RecoverableError(e.to_string())))
+        .collect::<Result<Vec<Uuid>>>()?;
+
+    with_state!(state, {
+        state.set_include_filter(entries);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_sync() -> Result<()> {
+    with_state!(state, {
+        state.rebuild_tiles();
+        state
+            .render_sync(0)
+            .map_err(|_| Error::RecoverableError("Error rendering".to_string()))?;
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_sync_shape(a: u32, b: u32, c: u32, d: u32) -> Result<()> {
+    with_state!(state, {
+        let id = uuid_from_u32_quartet(a, b, c, d);
+        state.use_shape(id);
+
+        // look for an existing root shape, and create it if missing
+        let mut was_root_missing = false;
+        if !state.shapes.has(&Uuid::nil()) {
+            state.shapes.add_shape(Uuid::nil());
+            was_root_missing = true;
+        }
+
+        if was_root_missing {
+            state.set_parent_for_current_shape(Uuid::nil());
+        }
+
+        state.rebuild_tiles_from(Some(&id));
+        state
+            .render_sync_shape(&id, 0)
+            .map_err(|e| Error::RecoverableError(e.to_string()))?;
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_from_cache(_: i32) -> Result<()> {
+    with_state!(state, {
+        // Don't cancel the animation frame — let the async render
+        // continue populating the tile HashMap in the background.
+        // `continue_render_loop` skips flush_and_submit in fast
+        // mode so it won't present stale Target content.  The
+        // tile HashMap is position-independent, so tiles rendered
+        // for the old viewport can be reused by the next full
+        // render at the new viewport position.
+        state.render_from_cache();
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_from_backbuffer() -> Result<()> {
+    with_state!(state, {
+        // Re-present the last fully rendered frame from the Backbuffer with the
+        // UI overlay (rulers) redrawn on top. Unlike `render_from_cache`, it does
+        // NOT rebuild the Backbuffer from the document tile atlas — that atlas is
+        // capped at scale <= 1.0, so on a zoomed-in view its blit is a blurry
+        // upscale and swapping it in reads as a flash. Reusing the Backbuffer is
+        // pixel-identical at any zoom. Only valid on a stable viewbox (the
+        // Backbuffer must still match the current view); pan/zoom keeps using
+        // `render_from_cache`.
+        state.present_frame();
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_preview_mode(enabled: bool) -> Result<()> {
+    get_render_state().set_preview_mode(enabled);
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_preview() -> Result<()> {
+    with_state!(state, {
+        state.render_preview(performance::get_time());
+    });
+    Ok(())
+}
+
+/// Enter bulk-loading mode. While active, `state.loading` is `true`.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn begin_loading() -> Result<()> {
+    with_state!(state, {
+        state.loading = true;
+    });
+    Ok(())
+}
+
+/// Leave bulk-loading mode. Should be called after the first
+/// render so the loading flag is available during that render.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn end_loading() -> Result<()> {
+    with_state!(state, {
+        state.loading = false;
+    });
+    Ok(())
+}
+
+/// Draw a full-screen loading overlay (background + "Loading…" text).
+/// Called from CLJS right after begin_loading so the user sees
+/// immediate feedback while shapes are being processed.
+/// NOTE:
+/// This is currently not being used, but it's set there for testing purposes on
+/// upcoming tasks
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_loading_overlay() -> Result<()> {
+    get_render_state().render_loading_overlay();
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn reset_canvas() -> Result<()> {
+    get_render_state().reset_canvas();
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn resize_viewbox(width: i32, height: i32) -> Result<()> {
+    get_render_state().resize(width, height)?;
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_view(zoom: f32, x: f32, y: f32) -> Result<()> {
+    performance::begin_measure!("set_view");
+    let render_state = get_render_state();
+    render_state.set_view(zoom, x, y);
+    performance::end_measure!("set_view");
+    Ok(())
+}
+
+#[cfg(feature = "profile-macros")]
+static mut VIEW_INTERACTION_START: i32 = 0;
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_view_start() -> Result<()> {
+    #[cfg(feature = "profile-macros")]
     unsafe {
-        let image_bytes =
-            Vec::<u8>::from_raw_parts(mem::buffer_ptr(), size as usize, size as usize);
-        match state.render_state().add_image(id, &image_bytes) {
-            Err(msg) => {
-                eprintln!("{}", msg);
-            }
-            _ => {}
-        }
-        mem::free_bytes();
+        VIEW_INTERACTION_START = performance::get_time();
     }
+    performance::begin_measure!("set_view_start");
+    get_render_state().options.set_fast_mode(true);
+    performance::end_measure!("set_view_start");
+    Ok(())
+}
+
+/// Finishes a view interaction (zoom or pan). Rebuilds the tile index
+/// and, for zoom changes, invalidates the tile texture cache so the
+/// subsequent render re-draws tiles at full quality.
+/// For pure pan (same zoom), cached tiles are preserved so only
+/// newly-visible tiles need rendering.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_view_end() -> Result<()> {
+    with_state!(state, {
+        performance::begin_measure!("set_view_end");
+        let render_state = get_render_state();
+        render_state.options.set_fast_mode(false);
+        render_state.tile_viewbox.update(&render_state.viewbox);
+
+        if render_state.options.is_profile_rebuild_tiles() {
+            state.rebuild_tiles();
+        } else if render_state.zoom_changed() {
+            // Zoom changed: tile sizes differ so all cached tile
+            // textures are invalid (wrong scale).  Rebuild the tile
+            // index and clear the tile texture cache, but *preserve*
+            // the cache canvas so render_from_cache can show a scaled
+            // preview of the old content while new tiles render.
+            render_state.rebuild_tile_index(&state.shapes);
+            render_state.surfaces.invalidate_tile_cache();
+        } else {
+            // Pure pan at the same zoom level: tile contents have not
+            // changed — only the viewport position moved. Update the
+            // tile index (which tiles are in the interest area) but
+            // keep cached tile textures so the render can blit them
+            // instead of re-drawing every visible tile from scratch.
+            render_state.rebuild_tile_index(&state.shapes);
+        }
+        // Avoid `reset_canvas` on the post-gesture render (pan at stable zoom).
+        if !render_state.options.is_profile_rebuild_tiles() {
+            render_state.preserve_target_during_render = true;
+        }
+        performance::end_measure!("set_view_end");
+    });
+    Ok(())
+}
+
+/// Enter interactive transform mode (drag / resize / rotate of a
+/// shape). Activates the same expensive-effect skipping as pan/zoom
+/// (`fast_mode`) but keeps per-frame flushing enabled so the Target is
+/// presented every rAF, and triggers atlas-backed backdrops so
+/// invalidated tiles do not appear sequentially or flicker.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_modifiers_start() -> Result<()> {
+    performance::begin_measure!("set_modifiers_start");
+    let render_state = get_render_state();
+    render_state.options.set_fast_mode(true);
+    render_state.options.set_interactive_transform(true);
+    performance::end_measure!("set_modifiers_start");
+    Ok(())
+}
+
+/// Leave interactive transform mode and cancel any pending async
+/// render scheduled under it. The caller is responsible for triggering
+/// a final full-quality render (typically via `_render`) once the
+/// modifiers have been committed.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_modifiers_end() -> Result<()> {
+    performance::begin_measure!("set_modifiers_end");
+    let render_state = get_render_state();
+    render_state.options.set_fast_mode(false);
+    render_state.options.set_interactive_transform(false);
+    performance::end_measure!("set_modifiers_end");
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn is_image_cached(a: u32, b: u32, c: u32, d: u32) -> bool {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    let id = uuid_from_u32_quartet(a, b, c, d);
-    state.render_state().has_image(&id)
+#[wasm_error]
+pub extern "C" fn clear_focus_mode() -> Result<()> {
+    with_state!(state, {
+        state.clear_focus_mode();
+    });
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn add_shape_image_fill(
+#[wasm_error]
+pub extern "C" fn set_focus_mode() -> Result<()> {
+    let bytes = mem::bytes();
+
+    let entries: Vec<Uuid> = bytes
+        .chunks(size_of::<<Uuid as SerializableResult>::BytesType>())
+        .map(|data| Uuid::try_from(data).map_err(|e| Error::RecoverableError(e.to_string())))
+        .collect::<Result<Vec<Uuid>>>()?;
+
+    with_state!(state, {
+        state.set_focus_mode(entries);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn init_shapes_pool(capacity: usize) -> Result<()> {
+    with_state!(state, {
+        state.init_shapes_pool(capacity);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn use_shape(a: u32, b: u32, c: u32, d: u32) -> Result<()> {
+    with_state!(state, {
+        let id = uuid_from_u32_quartet(a, b, c, d);
+        state.use_shape(id);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn has_shape(a: u32, b: u32, c: u32, d: u32) -> Result<bool> {
+    with_state!(state, {
+        let id = uuid_from_u32_quartet(a, b, c, d);
+        return Ok(state.has_shape(id));
+    });
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_parent(a: u32, b: u32, c: u32, d: u32) -> Result<()> {
+    with_state!(state, {
+        let id = uuid_from_u32_quartet(a, b, c, d);
+        state.set_parent_for_current_shape(id);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_shape_masked_group(masked: bool) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_masked(masked);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_shape_selrect(left: f32, top: f32, right: f32, bottom: f32) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_selrect(left, top, right, bottom);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_shape_clip_content(clip_content: bool) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_clip(clip_content);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_shape_rotation(rotation: f32) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_rotation(rotation);
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_shape_transform(
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+    f: f32,
+) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_transform(a, b, c, d, e, f);
+    });
+    Ok(())
+}
+
+fn set_children_set(entries: Vec<Uuid>) -> Result<()> {
+    with_state!(state, {
+        state.set_current_shape_children(entries)?;
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_children_0() -> Result<()> {
+    let entries = vec![];
+    set_children_set(entries)?;
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_children() -> Result<()> {
+    let bytes = mem::bytes_or_empty();
+
+    let entries: Vec<Uuid> = bytes
+        .chunks(size_of::<<Uuid as SerializableResult>::BytesType>())
+        .map(|data| Uuid::try_from(data).map_err(|e| Error::CriticalError(e.to_string())))
+        .collect::<Result<Vec<Uuid>>>()?;
+
+    set_children_set(entries)?;
+
+    if !bytes.is_empty() {
+        mem::free_bytes()?;
+    }
+
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn is_image_cached(
     a: u32,
     b: u32,
     c: u32,
     d: u32,
-    alpha: f32,
-    width: i32,
-    height: i32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
+    is_thumbnail: bool,
+) -> Result<bool> {
     let id = uuid_from_u32_quartet(a, b, c, d);
-    if let Some(shape) = state.current_shape() {
-        shape.add_fill(shapes::Fill::new_image_fill(
-            id,
-            (alpha * 0xff as f32).floor() as u8,
-            (width, height),
-        ));
-    }
+    let result = get_resources().images.contains(&id, is_thumbnail);
+    Ok(result)
+}
+
+/// Evicts least-recently-used images until the store retains at most
+/// `max_bytes` bytes of image data. Called by the headless exporter between
+/// requests — never mid-render, so an image can't disappear under a running
+/// export; evicted images are re-provisioned by later requests that need
+/// them. Returns the number of evicted images.
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn evict_images_to_budget(max_bytes: u32) -> Result<u32> {
+    let evicted = get_resources().images.evict_to_budget(max_bytes as usize);
+    Ok(evicted as u32)
 }
 
 #[no_mangle]
-pub extern "C" fn clear_shape_fills() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.clear_fills();
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn set_shape_svg_raw_content() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
+#[wasm_error]
+pub extern "C" fn set_shape_svg_raw_content() -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
         let bytes = mem::bytes();
         let svg_raw_content = String::from_utf8(bytes)
-            .unwrap()
+            .map_err(|e| Error::RecoverableError(e.to_string()))?
             .trim_end_matches('\0')
             .to_string();
-        shape
-            .set_svg_raw_content(svg_raw_content)
-            .expect("Failed to set svg raw content");
-    }
+
+        let font_manager = skia::FontMgr::from(get_resources().fonts.font_provider().clone());
+        shape.set_svg_raw_content(svg_raw_content);
+        shape.update_svg_raw_content(font_manager);
+    });
+
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_blend_mode(mode: i32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_blend_mode(render::BlendMode::from(mode));
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn set_shape_opacity(opacity: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
+#[wasm_error]
+pub extern "C" fn set_shape_opacity(opacity: f32) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
         shape.set_opacity(opacity);
-    }
+    });
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_hidden(hidden: bool) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
+#[wasm_error]
+pub extern "C" fn set_shape_hidden(hidden: bool) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
         shape.set_hidden(hidden);
-    }
+    });
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_blur(blur_type: u8, hidden: bool, value: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_blur(blur_type, hidden, value);
-    }
+#[wasm_error]
+pub extern "C" fn set_shape_corners(r1: f32, r2: f32, r3: f32, r4: f32) -> Result<()> {
+    with_current_shape_mut!(state, |shape: &mut Shape| {
+        shape.set_corners((r1, r2, r3, r4));
+    });
+    Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_path_content() {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
+#[wasm_error]
+pub extern "C" fn get_selection_rect() -> Result<*mut u8> {
+    let bytes = mem::bytes();
 
-    if let Some(shape) = state.current_shape() {
-        let bytes = mem::bytes();
-        let raw_segments = bytes
-            .chunks(size_of::<shapes::RawPathData>())
-            .map(|data| shapes::RawPathData {
-                data: data.try_into().unwrap(),
-            })
+    let entries: Vec<Uuid> = bytes
+        .chunks(16)
+        .map(|bytes| {
+            uuid_from_u32_quartet(
+                u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+                u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+                u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+                u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            )
+        })
+        .collect();
+
+    let result_bound = with_state!(state, {
+        let bbs: Vec<_> = entries
+            .iter()
+            .flat_map(|id| state.shapes.get(id).map(|b| b.bounds()))
             .collect();
-        shape.set_path_segments(raw_segments).unwrap();
-    }
-}
 
-#[no_mangle]
-pub extern "C" fn add_shape_center_stroke(width: f32, style: u8, cap_start: u8, cap_end: u8) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.add_stroke(shapes::Stroke::new_center_stroke(
-            width, style, cap_start, cap_end,
-        ));
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_inner_stroke(width: f32, style: u8, cap_start: u8, cap_end: u8) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.add_stroke(shapes::Stroke::new_inner_stroke(
-            width, style, cap_start, cap_end,
-        ))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_outer_stroke(width: f32, style: u8, cap_start: u8, cap_end: u8) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.add_stroke(shapes::Stroke::new_outer_stroke(
-            width, style, cap_start, cap_end,
-        ))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_stroke_solid_fill(raw_color: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        let color = skia::Color::new(raw_color);
-        shape
-            .set_stroke_fill(shapes::Fill::Solid(color))
-            .expect("could not add stroke solid fill");
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_stroke_linear_fill(
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
-    opacity: f32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape
-            .set_stroke_fill(shapes::Fill::new_linear_gradient(
-                (start_x, start_y),
-                (end_x, end_y),
-                opacity,
-            ))
-            .expect("could not add stroke linear fill");
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_stroke_radial_fill(
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
-    opacity: f32,
-    width: f32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape
-            .set_stroke_fill(shapes::Fill::new_radial_gradient(
-                (start_x, start_y),
-                (end_x, end_y),
-                opacity,
-                width,
-            ))
-            .expect("could not add stroke radial fill");
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn add_shape_stroke_stops(ptr: *mut shapes::RawStopData, n_stops: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-
-    if let Some(shape) = state.current_shape() {
-        let len = n_stops as usize;
-
-        unsafe {
-            let buffer = Vec::<shapes::RawStopData>::from_raw_parts(ptr, len, len);
-            shape
-                .add_stroke_gradient_stops(buffer)
-                .expect("could not add gradient stops");
-            mem::free_bytes();
+        if bbs.len() == 1 {
+            bbs[0]
+        } else {
+            Bounds::join_bounds(&bbs)
         }
-    }
-}
+    });
 
-// Extracts a string from the bytes slice until the next null byte (0) and returns the result as a `String`.
-// Updates the `start` index to the end of the extracted string.
-fn extract_string(start: &mut usize, bytes: &[u8]) -> String {
-    match bytes[*start..].iter().position(|&b| b == 0) {
-        Some(pos) => {
-            let end = *start + pos;
-            let slice = &bytes[*start..end];
-            *start = end + 1; // Move the `start` pointer past the null byte
-                              // Call to unsafe function within an unsafe block
-            unsafe { String::from_utf8_unchecked(slice.to_vec()) }
-        }
-        None => {
-            *start = bytes.len(); // Move `start` to the end if no null byte is found
-            String::new()
-        }
-    }
+    let width = result_bound.width();
+    let height = result_bound.height();
+    let center = result_bound.center();
+    let transform = result_bound.transform_matrix().unwrap_or(Matrix::default());
+
+    let mut bytes = vec![0; 40];
+    bytes[0..4].clone_from_slice(&width.to_le_bytes());
+    bytes[4..8].clone_from_slice(&height.to_le_bytes());
+    bytes[8..12].clone_from_slice(&center.x.to_le_bytes());
+    bytes[12..16].clone_from_slice(&center.y.to_le_bytes());
+    bytes[16..20].clone_from_slice(&transform[0].to_le_bytes());
+    bytes[20..24].clone_from_slice(&transform[3].to_le_bytes());
+    bytes[24..28].clone_from_slice(&transform[1].to_le_bytes());
+    bytes[28..32].clone_from_slice(&transform[4].to_le_bytes());
+    bytes[32..36].clone_from_slice(&transform[2].to_le_bytes());
+    bytes[36..40].clone_from_slice(&transform[5].to_le_bytes());
+    Ok(mem::write_bytes(bytes))
 }
 
 #[no_mangle]
-pub extern "C" fn add_shape_image_stroke(
+#[wasm_error]
+pub extern "C" fn set_structure_modifiers() -> Result<()> {
+    let bytes = mem::bytes();
+
+    let entries: Vec<StructureEntry> = bytes
+        .chunks(44)
+        .map(|chunk| {
+            let data = chunk
+                .try_into()
+                .map_err(|_| Error::CriticalError("Invalid StructureEntry bytes".to_string()))?;
+            Ok(StructureEntry::from_bytes(data))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    with_state!(state, {
+        let mut structure = HashMap::new();
+        let mut scale_content = HashMap::new();
+        for entry in entries {
+            match entry.entry_type {
+                StructureEntryType::ScaleContent => {
+                    let Some(shape) = state.shapes.get(&entry.id) else {
+                        continue;
+                    };
+                    for id in shape.all_children(&state.shapes, true, true) {
+                        scale_content.insert(id, entry.value);
+                    }
+                }
+                _ => {
+                    structure.entry(entry.parent).or_insert_with(Vec::new);
+                    structure
+                        .get_mut(&entry.parent)
+                        .ok_or(Error::CriticalError(
+                            "Parent not found for entry".to_string(),
+                        ))?
+                        .push(entry);
+                }
+            }
+        }
+        if !scale_content.is_empty() {
+            state.shapes.set_scale_content(scale_content);
+        }
+        if !structure.is_empty() {
+            state.shapes.set_structure(structure);
+        }
+    });
+
+    mem::free_bytes()?;
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn clean_modifiers() -> Result<()> {
+    with_state!(state, {
+        let render_state = get_render_state();
+        let prev_modifier_ids = state.shapes.clean_all();
+        // Skip the tile-cache cleanup during interactive transform: the
+        // per-rAF `rebuild_modifier_tiles` in `render()` already evicts
+        // the same tiles for the active modifier set, so the eviction
+        // here is redundant and doubles the per-emission cost.
+        if !prev_modifier_ids.is_empty() && !render_state.options.is_interactive_transform() {
+            render_state.update_tiles_shapes(&prev_modifier_ids, &state.shapes)?;
+        }
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn set_modifiers() -> Result<()> {
+    let bytes = mem::bytes();
+
+    let entries: Vec<TransformEntry> = bytes
+        .chunks(size_of::<<TransformEntry as SerializableResult>::BytesType>())
+        .map(|data| TransformEntry::try_from(data).map_err(|e| Error::CriticalError(e.to_string())))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut modifiers = HashMap::new();
+    let mut ids = Vec::<Uuid>::new();
+    for entry in entries {
+        modifiers.insert(entry.id, entry.transform);
+        ids.push(entry.id);
+    }
+
+    with_state!(state, {
+        state.set_modifiers(modifiers);
+        if !get_render_state().options.is_interactive_transform() {
+            state.rebuild_modifier_tiles(&ids)?;
+        }
+    });
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn start_temp_objects() -> Result<()> {
+    get_design_state().start_temp_objects()?;
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn end_temp_objects() -> Result<()> {
+    get_design_state().end_temp_objects()?;
+    Ok(())
+}
+
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn get_shape_extrect(a: u32, b: u32, c: u32, d: u32) -> Result<*mut u8> {
+    let id = uuid_from_u32_quartet(a, b, c, d);
+
+    with_state!(state, {
+        let Some(shape) = state.shapes.get(&id) else {
+            return Err(Error::CriticalError("Shape not found".to_string()));
+        };
+        let extrect = get_render_state().get_cached_extrect(shape, &state.shapes, 1.0);
+        let mut buf = Vec::with_capacity(16);
+        buf.extend_from_slice(&extrect.x().to_le_bytes());
+        buf.extend_from_slice(&extrect.y().to_le_bytes());
+        buf.extend_from_slice(&extrect.width().to_le_bytes());
+        buf.extend_from_slice(&extrect.height().to_le_bytes());
+        Ok(mem::write_bytes(buf))
+    })
+}
+
+/// Raster image via the GPU surface. Returns `[len][width][height][bytes]`
+/// (LE). `format` selects the encoder: 0 = PNG, 1 = JPEG, 2 = WEBP (see
+/// `RasterFormat`).
+#[no_mangle]
+#[wasm_error]
+pub extern "C" fn render_shape_pixels(
     a: u32,
     b: u32,
     c: u32,
     d: u32,
-    alpha: f32,
-    width: i32,
-    height: i32,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
+    scale: f32,
+    format: u32,
+) -> Result<*mut u8> {
     let id = uuid_from_u32_quartet(a, b, c, d);
-    if let Some(shape) = state.current_shape() {
-        shape
-            .set_stroke_fill(shapes::Fill::new_image_fill(
-                id,
-                (alpha * 0xff as f32).floor() as u8,
-                (width, height),
-            ))
-            .expect("could not add stroke image fill");
+
+    if !scale.is_finite() {
+        return Err(Error::CriticalError("Scale is not finite".to_string()));
     }
+
+    let format = RasterFormat::from_u32(format)?;
+
+    with_state!(state, {
+        let (data, width, height) =
+            state.render_shape_pixels(&id, scale, performance::get_time(), format)?;
+
+        let len = data.len() as u32;
+        let mut buf = Vec::with_capacity(4 + data.len());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&width.to_le_bytes());
+        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(&data);
+        Ok(mem::write_bytes(buf))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn clear_shape_strokes() {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.clear_strokes();
-    }
+pub extern "C" fn render_stats() {
+    get_render_state().print_stats();
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_corners(r1: f32, r2: f32, r3: f32, r4: f32) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.set_corners((r1, r2, r3, r4));
-    }
+pub fn free_gpu_resources() {
+    get_render_state().free_gpu_resources();
 }
 
 #[no_mangle]
-pub extern "C" fn set_shape_path_attrs(num_attrs: u32) {
-    let state = unsafe { STATE.as_mut() }.expect("Got an invalid state pointer");
+#[wasm_error]
+pub extern "C" fn render_shape_pdf(a: u32, b: u32, c: u32, d: u32, scale: f32) -> Result<*mut u8> {
+    let id = uuid_from_u32_quartet(a, b, c, d);
 
-    if let Some(shape) = state.current_shape() {
-        let bytes = mem::bytes();
-        let mut start = 0;
-        for _ in 0..num_attrs {
-            let name = extract_string(&mut start, &bytes);
-            let value = extract_string(&mut start, &bytes);
-            shape.set_path_attr(name, value);
-        }
-    }
+    with_state!(state, {
+        let data = state.render_shape_pdf(&id, scale)?;
+
+        let len = data.len() as u32;
+        let mut buf = Vec::with_capacity(4 + data.len());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&data);
+        Ok(mem::write_bytes(buf))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn add_shape_shadow(
-    raw_color: u32,
-    blur: f32,
-    spread: f32,
-    x: f32,
-    y: f32,
-    raw_style: u8,
-    hidden: bool,
-) {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        let color = skia::Color::new(raw_color);
-        let style = shapes::ShadowStyle::from(raw_style);
-        let shadow = shapes::Shadow::new(color, blur, spread, (x, y), style, hidden);
-        shape.add_shadow(shadow);
-    }
+#[wasm_error]
+pub extern "C" fn render_shape_svg(a: u32, b: u32, c: u32, d: u32, scale: f32) -> Result<*mut u8> {
+    let id = uuid_from_u32_quartet(a, b, c, d);
+
+    with_state!(state, {
+        let data = state.render_shape_svg(&id, scale)?;
+
+        let len = data.len() as u32;
+        let mut buf = Vec::with_capacity(4 + data.len());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&data);
+        Ok(mem::write_bytes(buf))
+    })
 }
 
+/// Raster image via CPU (no GPU/WebGL). Returns `[len][width][height][bytes]`
+/// (LE), same layout as `render_shape_pixels`. `format` selects the encoder:
+/// 0 = PNG, 1 = JPEG, 2 = WEBP (see `RasterFormat`).
 #[no_mangle]
-pub extern "C" fn clear_shape_shadows() {
-    let state = unsafe { STATE.as_mut() }.expect("got an invalid state pointer");
-    if let Some(shape) = state.current_shape() {
-        shape.clear_shadows();
+#[wasm_error]
+pub extern "C" fn render_shape_raster(
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+    scale: f32,
+    format: u32,
+) -> Result<*mut u8> {
+    let id = uuid_from_u32_quartet(a, b, c, d);
+
+    if !scale.is_finite() {
+        return Err(Error::CriticalError("Scale is not finite".to_string()));
     }
+
+    let format = RasterFormat::from_u32(format)?;
+
+    with_state!(state, {
+        let (data, width, height) = state.render_shape_raster(&id, scale, format)?;
+
+        let len = data.len() as u32;
+        let mut buf = Vec::with_capacity(12 + data.len());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&width.to_le_bytes());
+        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(&data);
+        Ok(mem::write_bytes(buf))
+    })
 }
 
-fn main() {
-    init_gl();
+pub fn main() {
+    // Why an empty main?
+    // Right now with the target `wasm32-unknown-emscripten` it is not possible
+    // to compile a rust project without a main and generate the necessary glue
+    // code. So the only option is to compile it with an empty main.
 }

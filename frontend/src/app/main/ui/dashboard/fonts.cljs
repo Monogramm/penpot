@@ -2,13 +2,18 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard.fonts
   (:require-macros [app.main.style :as stl])
   (:require
+   [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.media :as cm]
+   [app.common.schema :as sm]
+   [app.common.types.font :as ctf]
+   [app.common.uuid :as uuid]
+   [app.config :as cf]
    [app.main.data.fonts :as df]
    [app.main.data.modal :as modal]
    [app.main.data.notifications :as ntf]
@@ -17,9 +22,10 @@
    [app.main.ui.components.context-menu-a11y :refer [context-menu*]]
    [app.main.ui.components.file-uploader :refer [file-uploader]]
    [app.main.ui.ds.product.empty-placeholder :refer [empty-placeholder*]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.main.ui.notifications.context-notification :refer [context-notification]]
    [app.util.dom :as dom]
+   [app.util.http :as http]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [beicon.v2.core :as rx]
@@ -27,12 +33,17 @@
    [okulary.core :as l]
    [rumext.v2 :as mf]))
 
+(def ^:private accept-font-types
+  (str (str/join "," cm/font-types)
+       ;; A workaround to solve a problem with chrome input selector
+       ",.ttf,application/font-woff,.woff,.woff2,.otf"))
+
 (defn- use-page-title
   [team section]
   (mf/with-effect [team]
     (when team
       (let [tname (if (:is-default team)
-                    (tr "dashboard.your-penpot")
+                    (tr "dashboard.personal-projects")
                     (:name team))]
         (case section
           :fonts (dom/set-html-title (tr "title.dashboard.fonts" tname))
@@ -43,9 +54,18 @@
   (and (contains? font :font-family-tmp)
        (str/blank? (:font-family-tmp font))))
 
+(defn- handle-font-upload
+  [{:keys [id] :as item}]
+  (->> (df/upload-font-variant item)
+       ;; This delay fixes the UI problem. When the font is uploaded quickly,
+       ;; the user only sees a flicker on the button. With a small delay we
+       ;; have a clear transition from uploading state to uploaded
+       (rx/delay-at-least 2000)
+       (rx/map (fn [font]
+                 [id font]))))
+
 (mf/defc header*
-  {::mf/props :obj
-   ::mf/memo true
+  {::mf/memo true
    ::mf/private true}
   [{:keys [section team]}]
   (use-page-title team section)
@@ -54,17 +74,14 @@
     [:h1 (tr "labels.fonts")]]])
 
 (mf/defc font-variant-display-name*
-  {::mf/props :obj
-   ::mf/private true}
+  {::mf/private true}
   [{:keys [variant]}]
-  [:*
-   [:span (cm/font-weight->name (:font-weight variant))]
-   (when (not= "normal" (:font-style variant))
-     [:span " " (str/capital (:font-style variant))])])
+  [:span (cm/font-display-variant (:variant-name variant)
+                                  (:font-weight variant)
+                                  (:font-style variant))])
 
 (mf/defc uploaded-fonts*
-  {::mf/props :obj
-   ::mf/private true}
+  {::mf/private true}
   [{:keys [team installed-fonts]}]
   (let [fonts*     (mf/use-state {})
         fonts      (deref fonts*)
@@ -99,30 +116,23 @@
                           (fn [error]
                             (js/console.error "error" error))))))
 
-        on-upload*
-        (mf/use-fn
-         (fn [{:keys [id] :as item}]
-           (swap! uploading* conj id)
-           (->> (rp/cmd! :create-font-variant item)
-                (rx/delay-at-least 2000)
-                (rx/subs! (fn [font]
-                            (swap! fonts* dissoc id)
-                            (swap! uploading* disj id)
-                            (st/emit! (df/add-font font)))
-                          (fn [error]
-                            (st/emit! (ntf/error (tr "errors.bad-font" (first (:names item)))))
-                            (swap! fonts* dissoc id)
-                            (js/console.log "error" error))))))
-
         on-upload
         (mf/use-fn
-         (mf/deps fonts on-upload*)
+         (mf/deps fonts)
          (fn [event]
            (let [id   (-> (dom/get-current-target event)
                           (dom/get-data "id")
-                          (parse-uuid))
+                          (uuid/parse))
                  item (get fonts id)]
-             (on-upload* item))))
+             (swap! uploading* conj id)
+             (->> (handle-font-upload item)
+                  (rx/subs! (fn [[previous-id font]]
+                              (swap! fonts* dissoc previous-id)
+                              (swap! uploading* disj previous-id)
+                              (st/emit! (df/add-font font)))
+                            (fn [cause]
+                              (st/emit! (ntf/error (tr "errors.bad-font" (first (:names item)))))
+                              (js/console.error "Unexpected error on uploading font" cause)))))))
 
         on-blur-name
         (mf/use-fn
@@ -131,9 +141,10 @@
            (let [target (dom/get-current-target event)
                  id     (-> target
                             (dom/get-data "id")
-                            (parse-uuid))
+                            (uuid/parse))
                  name   (dom/get-value target)]
-             (when-not (str/blank? name)
+             (when (and (not (str/blank? name))
+                        (sm/validate ctf/schema:font-family name))
                (swap! fonts* df/rename-and-regroup id name installed-fonts)))))
 
         on-change-name
@@ -142,7 +153,7 @@
            (let [target (dom/get-current-target event)
                  id     (-> target
                             (dom/get-data "id")
-                            (parse-uuid))
+                            (uuid/parse))
                  name   (dom/get-value target)]
              (swap! fonts* update id assoc :font-family-tmp name))))
 
@@ -152,14 +163,27 @@
          (fn [event]
            (let [id (-> (dom/get-current-target event)
                         (dom/get-data "id")
-                        (parse-uuid))]
+                        (uuid/parse))]
              (swap! fonts* dissoc id))))
 
         on-upload-all
         (mf/use-fn
          (mf/deps font-vals)
          (fn [_]
-           (run! on-upload* font-vals)))
+           (->> (rx/from font-vals)
+                (rx/tap #(swap! uploading* conj (:id %)))
+                (rx/mapcat (fn [{:keys [id] :as item}]
+                             (->> (handle-font-upload item)
+                                  (rx/catch (fn [cause]
+                                              (st/emit! (ntf/error (tr "errors.bad-font" (first (:names item)))))
+                                              (js/console.error "Unexpected error on uploading font" cause)
+                                              (rx/of [id nil]))))))
+
+                (rx/subs! (fn [[previous-id font]]
+                            (swap! fonts* dissoc previous-id)
+                            (swap! uploading* disj previous-id)
+                            (when font
+                              (st/emit! (df/add-font font))))))))
 
         on-dismis-all
         (mf/use-fn
@@ -178,14 +202,15 @@
                  :tab-index "0"}
         [:span (tr "labels.add-custom-font")]
         [:& file-uploader {:input-id "font-upload"
-                           :accept cm/str-font-types
+                           :accept accept-font-types
                            :multi true
                            :ref input-ref
                            :on-selected on-selected}]]
 
-       [:& context-notification {:content (tr "dashboard.fonts.hero-text2")
-                                 :level :default
-                                 :is-html true}]
+       (when-let [url cf/terms-of-service-uri]
+         [:& context-notification {:content (tr "dashboard.fonts.hero-text2" url)
+                                   :level :default
+                                   :is-html true}])
 
        (when problematic-fonts?
          [:& context-notification {:content (tr "dashboard.fonts.warning-text")
@@ -231,7 +256,7 @@
            [:div {:class (stl/css :table-field :options)}
             (when (:height-warning? item)
               [:span {:class (stl/css :icon :failure)}
-               i/msg-neutral])
+               deprecated-icon/msg-neutral])
 
             [:button {:on-click on-upload
                       :data-id (dm/str id)
@@ -246,16 +271,18 @@
             [:span {:class (stl/css :icon :close)
                     :data-id (dm/str id)
                     :on-click on-delete}
-             i/close]]]))]]))
+             deprecated-icon/close]]]))]]))
 
-(mf/defc installed-font-context-menu
-  {::mf/props :obj
-   ::mf/private true}
-  [{:keys [is-open on-close on-edit on-delete]}]
-  (let [options (mf/with-memo [on-edit on-delete]
+(mf/defc installed-font-context-menu*
+  {::mf/private true}
+  [{:keys [is-open on-close on-edit on-download on-delete]}]
+  (let [options (mf/with-memo [on-edit on-download on-delete]
                   [{:name    (tr "labels.edit")
                     :id      "font-edit"
                     :handler on-edit}
+                   {:name    (tr "labels.download-simple")
+                    :id      "font-download"
+                    :handler on-download}
                    {:name    (tr "labels.delete")
                     :id      "font-delete"
                     :handler on-delete}])]
@@ -268,10 +295,9 @@
       :left -115
       :options options}]))
 
-(mf/defc installed-font
-  {::mf/props :obj
-   ::mf/private true
-   ::mf/memo true}
+(mf/defc installed-font*
+  {::mf/private true
+   ::mf/wrap [mf/memo]}
   [{:keys [font-id variants can-edit]}]
   (let [font        (first variants)
 
@@ -310,7 +336,9 @@
          (fn [_]
            (reset! edition* false)
            (when-not (str/blank? font-family)
-             (st/emit! (df/update-font {:id font-id :name font-family})))))
+             (if (sm/validate ctf/schema:font-family font-family)
+               (st/emit! (df/update-font {:id font-id :name font-family}))
+               (st/emit! (ntf/error (tr "errors.font-family-invalid-chars")))))))
 
         on-key-down
         (mf/use-fn
@@ -337,12 +365,32 @@
                                          (st/emit! (df/delete-font font-id)))}]
              (st/emit! (modal/show options)))))
 
+        on-download
+        (mf/use-fn
+         (mf/deps variants)
+         (fn [_event]
+           (let [variant    (first variants)
+                 variant-id (:id variant)
+                 multiple?  (> (count variants) 1)
+                 cmd        (if multiple? :download-font-family :download-font)
+                 params     (if multiple? {:font-id font-id} {:id variant-id})]
+             (->> (rp/cmd! cmd params)
+                  (rx/mapcat (fn [{:keys [name uri]}]
+                               (->> (http/send! {:uri uri :method :get :response-type :blob})
+                                    (rx/map :body)
+                                    (rx/map (fn [blob] (d/vec2 name blob))))))
+                  (rx/subs! (fn [[filename blob]]
+                              (dom/trigger-download filename blob))
+                            (fn [error]
+                              (js/console.error "error downloading font" error)
+                              (st/emit! (ntf/error (tr "errors.generic")))))))))
+
         on-delete-variant
         (mf/use-fn
          (fn [event]
            (let [id      (-> (dom/get-current-target event)
                              (dom/get-data "id")
-                             (parse-uuid))
+                             (uuid/parse))
                  options {:type :confirm
                           :title (tr "modals.delete-font-variant.title")
                           :message (tr "modals.delete-font-variant.message")
@@ -352,7 +400,9 @@
              (st/emit! (modal/show options)))))]
 
     [:div {:class (stl/css :font-item :table-row)}
-     [:div {:class (stl/css :table-field :family)}
+     [:div {:class (stl/css-case :table-field true
+                                 :family true
+                                 :is-edition edition?)}
       (if ^boolean edition?
         [:input {:type "text"
                  :auto-focus true
@@ -373,7 +423,7 @@
             {:class (stl/css :icon :close)
              :data-id (dm/str id)
              :on-click on-delete-variant}
-            i/add])])]
+            deprecated-icon/add])])]
 
      (if ^boolean edition?
        [:div {:class (stl/css :table-field :options)}
@@ -385,22 +435,22 @@
          (tr "labels.save")]
         [:button {:class (stl/css :icon :close)
                   :on-click on-cancel}
-         i/close]]
+         deprecated-icon/close]]
 
        (when can-edit
          [:div {:class (stl/css :table-field :options)}
           [:span {:class (stl/css :icon)
                   :on-click on-menu-open}
-           i/menu]
+           deprecated-icon/menu]
 
-          [:& installed-font-context-menu
+          [:> installed-font-context-menu*
            {:on-close on-menu-close
             :is-open menu-open?
             :on-delete on-delete-font
+            :on-download on-download
             :on-edit on-edit}]]))]))
 
 (mf/defc installed-fonts*
-  {::mf/props :obj}
   [{:keys [fonts can-edit]}]
   (let [sterm (mf/use-state "")
 
@@ -428,20 +478,20 @@
         (for [[font-id variants] (->> (vals fonts)
                                       (filter matches?)
                                       (group-by :font-id))]
-          [:& installed-font {:key (dm/str font-id "-installed")
-                              :font-id font-id
-                              :can-edit can-edit
-                              :variants variants}])]
+          [:> installed-font* {:key (dm/str font-id "-installed")
+                               :font-id font-id
+                               :can-edit can-edit
+                               :variants variants}])]
 
        (nil? fonts)
        [:div {:class (stl/css :fonts-placeholder)}
-        [:div {:class (stl/css :icon)} i/loader]
+        [:div {:class (stl/css :icon)} deprecated-icon/loader]
         [:div {:class (stl/css :label)} (tr "dashboard.loading-fonts")]]
 
        :else
        (if ^boolean can-edit
          [:div {:class (stl/css :fonts-placeholder)}
-          [:div {:class (stl/css :icon)} i/text]
+          [:div {:class (stl/css :icon)} deprecated-icon/text]
           [:div {:class (stl/css :label)} (tr "dashboard.fonts.empty-placeholder")]]
 
          [:> empty-placeholder*
@@ -453,7 +503,6 @@
   (l/derived :fonts st/state))
 
 (mf/defc fonts-page*
-  {::mf/props :obj}
   [{:keys [team]}]
   (let [fonts       (mf/deref ref:fonts)
         permissions (:permissions team)
@@ -467,7 +516,6 @@
        {:team team :fonts fonts :can-edit can-edit}]]]))
 
 (mf/defc font-providers-page*
-  {::mf/props :obj}
   [{:keys [team]}]
   [:*
    [:> header* {:team team :section :providers}]

@@ -2,12 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard.templates
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data.macros :as dm]
+   [app.common.uri :as u]
    [app.config :as cf]
    [app.main.data.common :as dcm]
    [app.main.data.dashboard :as dd]
@@ -15,20 +16,20 @@
    [app.main.data.modal :as modal]
    [app.main.refs :as refs]
    [app.main.store :as st]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
+   [app.util.dom.normalize-wheel :as nw]
    [app.util.i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [app.util.storage :as storage]
    [okulary.core :as l]
-   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
 (def ^:private arrow-icon
-  (i/icon-xref :arrow (stl/css :arrow-icon)))
+  (deprecated-icon/icon-xref :arrow (stl/css :arrow-icon)))
 
 (def ^:private download-icon
-  (i/icon-xref :download (stl/css :download-icon)))
+  (deprecated-icon/icon-xref :add (stl/css :download-icon)))
 
 (def builtin-templates
   (l/derived :builtin-templates st/state))
@@ -37,10 +38,11 @@
   [template team-id project-id default-project-id section]
   (letfn [(on-finish []
             (st/emit!
-             (ptk/event ::ev/event {::ev/name "import-template-finish"
-                                    ::ev/origin "dashboard"
-                                    :template (:name template)
-                                    :section section})
+             (dd/fetch-recent-files team-id)
+             (ev/event {::ev/name "import-template-finish"
+                        ::ev/origin "dashboard"
+                        :template (:name template)
+                        :section section})
 
              (when-not (some? project-id)
                (dcm/go-to-dashboard-recent
@@ -48,10 +50,10 @@
                 :project-id default-project-id))))]
 
     (st/emit!
-     (ptk/event ::ev/event {::ev/name "import-template-launch"
-                            ::ev/origin "dashboard"
-                            :template (:name template)
-                            :section section})
+     (ev/event {::ev/name "import-template-launch"
+                ::ev/origin "dashboard"
+                :template (:name template)
+                :section section})
 
      (modal/show
       {:type :import
@@ -61,8 +63,7 @@
        :on-finish-import on-finish}))))
 
 (mf/defc title*
-  {::mf/props :obj
-   ::mf/private true}
+  {::mf/private true}
   [{:keys [on-click is-collapsed]}]
   (let [on-key-down
         (mf/use-fn
@@ -81,16 +82,20 @@
       [:span {:class (stl/css :title-text)}
        (tr "dashboard.libraries-and-templates")]
       (if ^boolean is-collapsed
-        [:span {:class (stl/css :title-icon :title-icon-collapsed)}
-         arrow-icon]
-        [:span {:class (stl/css :title-icon)}
-         arrow-icon])]]))
+        [:span {:class (stl/css :title-icon-container)}
+         [:span {:class (stl/css :title-icon-text)} (tr "labels.show")]
+         [:span {:class (stl/css :title-icon :title-icon-collapsed)}
+          arrow-icon]]
+        [:span {:class (stl/css :title-icon-container)}
+         [:span {:class (stl/css :title-icon-text)} (tr "labels.hide")]
+         [:span {:class (stl/css :title-icon)}
+          arrow-icon]])]]))
 
-(mf/defc card-item
-  {::mf/wrap-props false}
+(mf/defc card-item*
   [{:keys [item index is-visible collapsed on-import]}]
-  (let [id  (dm/str "card-container-" index)
-        thb (assoc cf/public-uri :path (dm/str "/images/thumbnails/template-" (:id item) ".jpg"))
+  (let [id     (dm/str "card-container-" index)
+        href   (u/join cf/public-uri (dm/str "images/thumbnails/template-" (:id item) ".jpg"))
+        hover? (mf/use-state false)
 
         on-click
         (mf/use-fn
@@ -106,25 +111,29 @@
              (dom/stop-propagation event)
              (on-import item event))))]
 
-    [:a {:class (stl/css :card-container)
-         :tab-index (if (or (not is-visible) collapsed) "-1" "0")
-         :id id
-         :data-index index
-         :on-click on-click
-         :on-mouse-down dom/prevent-default
-         :on-key-down on-key-down}
-     [:div {:class (stl/css :template-card)}
+    [:div {:class (stl/css :card-container)
+           :tab-index (if (or (not is-visible) collapsed) "-1" "0")
+           :id id
+           :data-index index}
+     [:a {:class (stl/css :template-card)
+          :on-click on-click
+          :on-mouse-down dom/prevent-default
+          :on-mouse-enter #(reset! hover? true)
+          :on-mouse-leave #(reset! hover? false)
+          :on-key-down on-key-down}
       [:div {:class (stl/css :img-container)}
-       [:img {:src (dm/str thb)
+       [:img {:src (dm/str href)
               :alt (:name item)
               :loading "lazy"
               :decoding "async"}]]
       [:div {:class (stl/css :card-name)}
-       [:span {:class (stl/css :card-text)} (:name item)]
+       [:span {:class (stl/css :card-text)}
+        (if @hover?
+          (tr "dashboard.template.add-to-project")
+          (:name item))]
        download-icon]]]))
 
-(mf/defc card-item-link
-  {::mf/wrap-props false}
+(mf/defc card-item-link*
   [{:keys [total is-visible collapsed section]}]
   (let [id (dm/str "card-container-" total)
 
@@ -132,9 +141,9 @@
         (mf/use-fn
          (mf/deps section)
          (fn []
-           (st/emit! (ptk/event ::ev/event {::ev/name "explore-libraries-click"
-                                            ::ev/origin "dashboard"
-                                            :section section}))))
+           (st/emit! (ev/event {::ev/name "explore-libraries-click"
+                                ::ev/origin "dashboard"
+                                :section section}))))
 
         on-key-down
         (mf/use-fn
@@ -158,42 +167,48 @@
          [:div {:class (stl/css :template-link-text)} (tr "dashboard.libraries-and-templates.explore")]]]]]]))
 
 (mf/defc templates-section*
-  {::mf/props :obj}
   [{:keys [default-project-id profile project-id team-id]}]
-  (let [templates      (mf/deref builtin-templates)
-        templates      (mf/with-memo [templates]
-                         (filterv #(and
-                                    (not= (:id %) "welcome")
-                                    (not= (:id %) "tutorial-for-beginners")) templates))
+  (let [templates   (mf/deref builtin-templates)
+        templates   (mf/with-memo [templates]
+                      (filterv #(and
+                                 (not= (:id %) "welcome")
+                                 (not= (:id %) "tutorial-for-beginners")) templates))
 
-        route          (mf/deref refs/route)
-        route-name     (get-in route [:data :name])
-        section        (if (= route-name :dashboard-files)
-                         (if (= project-id default-project-id)
-                           "dashboard-drafts"
-                           "dashboard-project")
-                         (name route-name))
+        route       (mf/deref refs/route)
+        route-name  (get-in route [:data :name])
+        section     (if (= route-name :dashboard-files)
+                      (if (= project-id default-project-id)
+                        "dashboard-drafts"
+                        "dashboard-project")
+                      (name route-name))
 
-        collapsed*     (mf/use-state
-                        #(get storage/global ::collapsed))
-        collapsed      (deref collapsed*)
+        collapsed*  (mf/use-state
+                     #(get storage/global ::collapsed))
+        collapsed   (deref collapsed*)
 
 
 
-        can-move       (mf/use-state {:left false :right true})
+        can-move    (mf/use-state {:left false :right true})
 
-        total          (count templates)
+        total       (count templates)
 
         ;; We need space for total plus the libraries&templates link
-        content-ref    (mf/use-ref)
-
-        move-left (fn [] (dom/scroll-by! (mf/ref-val content-ref) -300 0))
-        move-right (fn [] (dom/scroll-by! (mf/ref-val content-ref) 300 0))
+        content-ref (mf/use-ref)
 
         on-toggle-collapse
         (mf/use-fn
          (fn [_event]
            (swap! collapsed* not)))
+
+        on-wheel
+        (mf/use-fn
+         (fn [^js event]
+           (let [event* (nw/normalize-wheel event)
+                 deltaY (.-spinY event*)
+                 deltaX (.-spinX event*)
+                 node (mf/ref-val content-ref)]
+             (when (> (abs deltaY) (abs deltaX))
+               (.scrollBy node #js {:left (* 300 deltaY) :mode "smooth"})))))
 
         on-scroll
         (mf/use-fn
@@ -208,16 +223,18 @@
                                :right (> scroll-available client-width)}))))
 
         on-move-left
-        (mf/use-fn #(move-left))
-
-        on-move-left-key-down
-        (mf/use-fn #(move-left))
+        (mf/use-fn
+         (fn [event]
+           (if (kbd/right-arrow? event)
+             (dom/scroll-by! (mf/ref-val content-ref) 300 0)
+             (dom/scroll-by! (mf/ref-val content-ref) -300 0))))
 
         on-move-right
-        (mf/use-fn #(move-right))
-
-        on-move-right-key-down
-        (mf/use-fn #(move-right))
+        (mf/use-fn
+         (fn [event]
+           (if (kbd/left-arrow? event)
+             (dom/scroll-by! (mf/ref-val content-ref) -300 0)
+             (dom/scroll-by! (mf/ref-val content-ref) 300 0))))
 
         on-import-template
         (mf/use-fn
@@ -225,7 +242,7 @@
          (fn [template _event]
            (import-template! template team-id project-id default-project-id section)))]
 
-    (mf/with-effect [content-ref templates]
+    (mf/with-effect [templates]
       (let [content (mf/ref-val content-ref)]
         (when (and (some? content) (some? templates))
           (dom/scroll-to content #js {:behavior "instant" :left 0 :top 0})
@@ -242,12 +259,16 @@
      [:> title* {:on-click on-toggle-collapse
                  :is-collapsed collapsed}]
 
+     [:p {:class (stl/css :content-description)}
+      (tr "dashboard.libraries-and-templates.description")]
+
      [:div {:class (stl/css :content)
             :on-scroll on-scroll
+            :on-wheel on-wheel
             :ref content-ref}
 
       (for [index (range (count templates))]
-        [:& card-item
+        [:> card-item*
          {:on-import on-import-template
           :item (nth templates index)
           :index index
@@ -255,7 +276,7 @@
           :is-visible true
           :collapsed collapsed}])
 
-      [:& card-item-link
+      [:> card-item-link*
        {:is-visible true
         :collapsed collapsed
         :section section
@@ -265,13 +286,13 @@
        [:button {:class (stl/css :move-button :move-left)
                  :tab-index (if ^boolean collapsed "-1" "0")
                  :on-click on-move-left
-                 :on-key-down on-move-left-key-down}
+                 :on-key-down on-move-left}
         arrow-icon])
 
      (when (:right @can-move)
        [:button {:class (stl/css :move-button :move-right)
                  :tab-index (if collapsed "-1" "0")
                  :on-click on-move-right
-                 :aria-label (tr "labels.next")
-                 :on-key-down  on-move-right-key-down}
+                 :on-key-down  on-move-right
+                 :aria-label (tr "labels.next")}
         arrow-icon])]))

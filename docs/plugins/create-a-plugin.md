@@ -1,6 +1,7 @@
 ---
 layout: layouts/plugins.njk
 title: 2. Create a Plugin
+desc: Dive into Penpot plugin development! This guide covers creating plugins from scratch or using templates, libraries, API communication, & deployment.
 ---
 
 # Create a Plugin
@@ -34,9 +35,11 @@ Create your own app with the framework of your choice. See examples for each fra
 
 | Framework | Command                                                     | Version\* |
 | --------- | ----------------------------------------------------------- | --------- |
-| Angular   | ng new plugin-name                                          | 18.0.0    |
-| React     | npm create vite@latest plugin-name -- --template react-ts   | 18.2.0    |
-| Vue       | npm create vue@latest                                       | 3.4.21    |
+| Angular   | ng new plugin-name                                          | 19.2.2    |
+| React     | npm create vite@latest plugin-name -- --template react-ts   | 19.0.0    |
+| Vue       | npm create vue@latest                                       | 3.5.13    |
+| Svelte    | npm create svelte@latest                                    | 5.23.0    |
+
 
 _\*: version we used in the examples._
 
@@ -46,7 +49,7 @@ There are two libraries that can help you with your plugin's development. They a
 
 ### Plugin styles
 
-<code class="language-js">@penpot/plugin-styles</code> contains styles to help build the UI for Penpot plugins. To check the styles go to <a target="_blank" href="https://penpot-plugins-styles.pages.dev/">Plugin styles</a>.
+<code class="language-js">@penpot/plugin-styles</code> contains styles to help build the UI for Penpot plugins. To check the styles go to <a target="_blank" href="https://styles-doc.plugins.penpot.app/">Plugin styles</a>.
 
 ```bash
 npm install @penpot/plugin-styles
@@ -113,6 +116,10 @@ Your plugin can capture incoming messages from Penpot using the <code class="lan
 
 ```js
 window.addEventListener("message", (event) => {
+  // Validate the source to ensure messages come from the parent (Penpot)
+  if (event.source !== window.parent) {
+    return;
+  }
   // Handle the incoming message
   console.log(event.data);
 });
@@ -126,17 +133,17 @@ This setup allows for two-way communication between Penpot and your plugin. Penp
 
 ```js
 // Sending a message back to Penpot from your plugin
-parent.postMessage(responseMessage, targetOrigin);
+parent.postMessage(responseMessage, "*");
 ```
 
 -<code class="language-js">responseMessage</code> is the data you want to send back to Penpot.
--<code class="language-js">targetOrigin</code> should be the origin of the Penpot application to ensure messages are only sent to the intended recipient. You can use<code class="language-js">'*'</code> to allow all.
+- Using<code class="language-js">'*'</code> as the target origin is acceptable here because the message content is controlled by your plugin (the sender), not by untrusted input. If you know the exact Penpot origin, you can use it instead for stricter security.
 
 ### Summary
 
 By using these message-based events, any data retrieved through the Penpot API can be communicated to and from your plugin interface seamlessly.
 
-For more detailed information, refer to the [Penpot Plugins API Documentation](https://penpot-plugins-api-doc.pages.dev/).
+For more detailed information, refer to the [Penpot Plugins API Documentation](https://doc.plugins.penpot.app/).
 
 ## 2.5. Step 5. Build the plugin file
 
@@ -216,8 +223,9 @@ Now that everything is in place you need a <code class="language-js">manifest.js
 {
   "name": "Plugin name",
   "description": "Plugin description",
-  "code": "/plugin.js",
-  "icon": "/icon.png",
+  "version": 2,
+  "code": "plugin.js",
+  "icon": "icon.png",
   "permissions": [
     "content:read",
     "content:write",
@@ -230,6 +238,13 @@ Now that everything is in place you need a <code class="language-js">manifest.js
   ]
 }
 ```
+
+<p class="advice">
+Use <code class="language-js">"version": 2</code> when your
+<code class="language-js">code</code> and <code class="language-js">icon</code> values
+are relative paths. Version 2 resolves these assets from the manifest location.
+If omitted, Penpot treats the manifest as version 1.
+</p>
 
 ### Icon
 

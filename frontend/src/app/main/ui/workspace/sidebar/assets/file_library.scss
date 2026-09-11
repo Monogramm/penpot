@@ -2,19 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "ds/typography.scss" as t;
+@use "refactor/common-refactor.scss" as deprecated;
+
 .tool-window {
-  padding: 0 0 $s-24 $s-12;
+  padding: 0 0 deprecated.$s-24 deprecated.$s-12;
   display: grid;
   grid-auto-rows: max-content;
-  gap: $s-4;
+  gap: deprecated.$s-4;
   height: 100%;
 }
 
 .file-name {
-  @include bodySmallTypography;
+  @include t.use-typography("body-small");
+
   display: flex;
   justify-content: flex-start;
   align-items: center;
@@ -22,20 +25,35 @@
   height: 100%;
 }
 
+.loading {
+  @include t.use-typography("body-small");
+
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  height: deprecated.$s-32;
+  padding-left: calc(deprecated.$s-12 + deprecated.$s-2);
+  color: var(--color-foreground-secondary);
+}
+
 .special-title {
-  @include textEllipsis;
+  @include deprecated.text-ellipsis;
+
   color: var(--title-foreground-color-hover);
-  margin-left: $s-2;
+  margin-left: deprecated.$s-2;
   text-align: left;
 }
 
 .file-link {
-  @extend .button-tertiary;
-  height: $s-32;
-  width: $s-28;
-  border-radius: $br-8;
+  @extend %button-tertiary;
+
+  height: deprecated.$s-32;
+  width: deprecated.$s-28;
+  border-radius: deprecated.$br-8;
+
   svg {
-    @extend .button-icon;
+    @extend %button-icon;
+
     stroke: var(--icon-foreground);
     fill: var(--title-foreground-color-hover);
   }
@@ -45,32 +63,36 @@
   width: 100%;
   display: grid;
   grid-auto-rows: max-content;
-  gap: $s-4;
+  gap: deprecated.$s-4;
 }
 
 .asset-title {
-  margin-left: $s-28;
+  margin-left: deprecated.$s-28;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: $s-8;
+  gap: deprecated.$s-8;
 }
 
 .no-found-icon {
-  @include flexCenter;
+  @include deprecated.flex-center;
+
   background-color: var(--not-found-background-color);
-  border-radius: $br-circle;
-  height: $s-48;
-  width: $s-48;
+  border-radius: deprecated.$br-circle;
+  height: deprecated.$s-48;
+  width: deprecated.$s-48;
+
   svg {
-    @extend .button-icon;
-    height: $s-24;
-    width: $s-24;
+    @extend %button-icon;
+
+    height: deprecated.$s-24;
+    width: deprecated.$s-24;
     stroke: var(--not-found-foreground-color);
   }
 }
 
 .no-found-text {
-  @include bodySmallTypography;
+  @include deprecated.body-small-typography;
+
   color: var(--not-found-foreground-color);
 }

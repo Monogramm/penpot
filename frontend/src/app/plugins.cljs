@@ -2,11 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.plugins
   "RPC for plugins runtime."
   (:require
+   ["@penpot/plugins-runtime" :as runtime]
+   [app.main.errors :as errors]
    [app.main.features :as features]
    [app.main.store :as st]
    [app.plugins.api :as api]
@@ -15,29 +17,31 @@
    [app.plugins.grid :as grid]
    [app.plugins.library :as library]
    [app.plugins.public-utils]
+   [app.plugins.register :as preg]
    [app.plugins.ruler-guides :as rg]
    [app.plugins.shape :as shape]
-   [app.util.globals :refer [global]]
-   [app.util.object :as obj]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
 
-(defn init-plugins-runtime!
+(defn init-plugins-runtime
   []
-  (when-let [init-runtime (obj/get global "initPluginsRuntime")]
-    (init-runtime (fn [plugin-id] (api/create-context plugin-id)))))
+  (runtime/initPluginsRuntime (fn [plugin-id] (api/create-context plugin-id)))
+  ;; Signal that runtime is ready
+  (preg/signal-runtime-ready))
 
 (defn initialize
   []
   (ptk/reify ::initialize
     ptk/WatchEvent
     (watch [_ _ stream]
+      (set! errors/is-plugin-error? runtime/isPluginError)
+
       (->> stream
            (rx/filter (ptk/type? ::features/initialize))
            (rx/observe-on :async)
            (rx/filter #(features/active-feature? @st/state "plugins/runtime"))
            (rx/take 1)
-           (rx/tap init-plugins-runtime!)
+           (rx/tap init-plugins-runtime)
            (rx/ignore)))))
 
 ;; Prevent circular dependency

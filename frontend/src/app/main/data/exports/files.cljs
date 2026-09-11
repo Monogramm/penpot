@@ -2,75 +2,85 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.exports.files
   "The file exportation API and events"
   (:require
    [app.common.data :as d]
-   [app.common.data.macros :as dm]
    [app.common.schema :as sm]
    [app.main.data.event :as ev]
    [app.main.data.modal :as modal]
-   [app.main.features :as features]
    [app.main.repo :as rp]
+   [app.util.sse :as sse]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
 
 (def valid-types
-  (d/ordered-set :all :merge :detach))
+  (d/ordered-set :include-libraries :merge-libraries :detach-libraries :link-later))
 
 (def valid-formats
-  #{:binfile-v1 :binfile-v3 :legacy-zip})
+  #{:binfile-v1 :binfile-v3})
+
+(def ^:private schema:export-file-param
+  [:map {:title "FileParam"}
+   [:id ::sm/uuid]
+   [:name :string]
+   [:project-id ::sm/uuid]
+   [:is-shared ::sm/boolean]
+   #_[:has-libraries ::sm/boolean]])
 
 (def ^:private schema:export-files
-  [:sequential {:title "Files"}
-   [:map {:title "FileParam"}
-    [:id ::sm/uuid]
-    [:name :string]
-    [:project-id ::sm/uuid]
-    [:is-shared ::sm/boolean]]])
+  [:sequential {:title "Files"} schema:export-file-param])
 
 (def check-export-files
   (sm/check-fn schema:export-files))
 
+(defn open-export-dialog
+  [files]
+  (let [files (check-export-files files)]
+    (ptk/reify ::export-files
+      ptk/WatchEvent
+      (watch [_ state _]
+        (let [team-id (get state :current-team-id)]
+          (rx/merge
+           (rx/of (ev/event {::ev/name "export-binary-files"
+                             ::ev/origin "dashboard"
+                             :format "binfile-v3"
+                             :num-files (count files)}))
+           (->> (rx/from files)
+                (rx/mapcat
+                 (fn [file]
+                   (->> (rp/cmd! :has-file-libraries {:file-id (:id file)})
+                        (rx/map #(assoc file :has-libraries %)))))
+                (rx/reduce conj [])
+                (rx/map (fn [files]
+                          (modal/show {:type ::export-files
+                                       :team-id team-id
+                                       :files files}))))))))))
+
 (defn export-files
-  [files format]
-  (dm/assert!
-   "expected valid files param"
-   (check-export-files files))
+  "Start files exportation process"
+  [& {:keys [type files]}]
+  (assert (check-export-files files) "expected a sequence of files")
+  (assert (valid-types type) "expected valid export type")
 
-  (dm/assert!
-   "expected valid format"
-   (contains? valid-formats format))
-
-  (ptk/reify ::export-files
-    ptk/WatchEvent
-    (watch [_ state _]
-      (let [features (features/get-team-enabled-features state)
-            team-id  (:current-team-id state)
-            evname   (if (= format :legacy-zip)
-                       "export-standard-files"
-                       "export-binary-files")]
-
-        (rx/merge
-         (rx/of (ptk/event ::ev/event {::ev/name evname
-                                       ::ev/origin "dashboard"
-                                       :format format
-                                       :num-files (count files)}))
-         (->> (rx/from files)
-              (rx/mapcat
-               (fn [file]
-                 (->> (rp/cmd! :has-file-libraries {:file-id (:id file)})
-                      (rx/map #(assoc file :has-libraries %)))))
-              (rx/reduce conj [])
-              (rx/map (fn [files]
-                        (modal/show
-                         {:type ::export-files
-                          :features features
-                          :team-id team-id
-                          :files files
-                          :format format})))))))))
+  (->> (rx/from files)
+       (rx/mapcat
+        (fn [file]
+          (->> (rp/cmd! ::sse/export-binfile {:file-id (:id file)
+                                              :version 3
+                                              :type type})
+               (rx/filter sse/end-of-stream?)
+               (rx/map sse/get-payload)
+               (rx/map (fn [uri]
+                         {:file-id (:id file)
+                          :uri uri
+                          :filename (:name file)}))
+               (rx/catch (fn [cause]
+                           (let [error (ex-data cause)]
+                             (rx/of {:file-id (:id file)
+                                     :error error})))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Team Request

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.ds.notifications.actionable
   (:require-macros
@@ -17,34 +17,45 @@
    [:class {:optional true} :string]
    [:variant {:optional true}
     [:maybe [:enum "default" "error"]]]
-   [:acceptLabel {:optional true} :string]
-   [:cancelLabel {:optional true} :string]
-   [:onAccept {:optional true} [:fn fn?]]
-   [:onCancel {:optional true} [:fn fn?]]])
+   [:accept-label {:optional true} [:maybe :string]]
+   [:cancel-label {:optional true} [:maybe :string]]
+   [:on-accept {:optional true} [:maybe [:fn fn?]]]
+   [:on-cancel {:optional true} [:maybe [:fn fn?]]]])
 
 (mf/defc actionable*
-  {::mf/props :obj
-   ::mf/schema schema:actionable}
-  [{:keys [class variant acceptLabel cancelLabel children onAccept onCancel] :rest props}]
+  {::mf/schema schema:actionable}
+  [{:keys [class variant accept-label cancel-label children on-accept on-cancel] :rest props}]
 
-  (let [variant (or variant "default")
-        class (d/append-class class (stl/css :notification))
-        props (mf/spread-props props {:class class :data-testid "actionable"})
+  (let [variant (d/nilv variant "default")
+        class   (d/append-class class (stl/css :notification))
+        props   (mf/spread-props props
+                                 {:class class
+                                  :data-testid "actionable"})
 
-        handle-accept
+        on-accept
         (mf/use-fn
+         (mf/deps on-accept)
          (fn [e]
-           (when onAccept (onAccept e))))
+           (when (fn? on-accept)
+             (on-accept e))))
 
-        handle-cancel
+        on-cancel
         (mf/use-fn
+         (mf/deps on-cancel)
          (fn [e]
-           (when onCancel (onCancel e))))]
+           (when on-cancel (on-cancel e))))]
 
-    [:> "aside" props
-     [:div {:class (stl/css :notification-message)}
-      children]
-     [:> button* {:variant "secondary"
-                  :on-click handle-cancel} cancelLabel]
-     [:> button* {:variant (if (= variant "default") "primary" "destructive")
-                  :on-click handle-accept} acceptLabel]]))
+    [:> :aside props
+     [:div {:class (stl/css :notification-message)} children]
+
+     (when cancel-label
+       [:> button* {:variant "secondary"
+                    :type "button"
+                    :on-click on-cancel}
+        cancel-label])
+
+     (when accept-label
+       [:> button* {:variant (if (= variant "default") "primary" "destructive")
+                    :type "button"
+                    :on-click on-accept}
+        accept-label])]))

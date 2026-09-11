@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import TextNodeIterator from "./TextNodeIterator.js";
-import { createInline } from "./Inline.js";
+import { createTextSpan } from "./TextSpan.js";
 import { createParagraph } from "./Paragraph.js";
 import { createRoot } from "./Root.js";
 import { createLineBreak } from "./LineBreak.js";
@@ -21,16 +21,16 @@ describe("TextNodeIterator", () => {
   test("Create a new TextNodeIterator and iterate only over text nodes", () => {
     const rootNode = createRoot([
       createParagraph([
-        createInline(new Text("Hello, ")),
-        createInline(new Text("World!")),
-        createInline(new Text("Whatever")),
+        createTextSpan(new Text("Hello, ")),
+        createTextSpan(new Text("World!")),
+        createTextSpan(new Text("Whatever")),
       ]),
-      createParagraph([createInline(createLineBreak())]),
+      createParagraph([createTextSpan(createLineBreak())]),
       createParagraph([
-        createInline(new Text("This is a ")),
-        createInline(new Text("test")),
+        createTextSpan(new Text("This is a ")),
+        createTextSpan(new Text("test")),
       ]),
-      createParagraph([createInline(new Text("Hi!"))]),
+      createParagraph([createTextSpan(new Text("Hi!"))]),
     ]);
 
     const textNodeIterator = new TextNodeIterator(rootNode);
@@ -69,5 +69,30 @@ describe("TextNodeIterator", () => {
     expect(textNodeIterator.currentNode.nodeValue).toBe("World!");
     textNodeIterator.nextNode();
     expect(textNodeIterator.currentNode.nodeValue).toBe("Whatever");
+  });
+
+  test("collectFrom includes the end node (iterateFrom must yield end inclusive)", () => {
+    const rootNode = createRoot([
+      createParagraph([createTextSpan(new Text("Hello"))]),
+      createParagraph([createTextSpan(createLineBreak())]),
+    ]);
+    const firstText = rootNode.firstChild.firstChild.firstChild;
+    const br = rootNode.lastChild.firstChild.firstChild;
+    const textNodeIterator = new TextNodeIterator(rootNode);
+    const nodes = textNodeIterator.collectFrom(firstText, br);
+    expect(nodes.length).toBe(2);
+    expect(nodes[0]).toBe(firstText);
+    expect(nodes[1]).toBe(br);
+  });
+
+  test("collectFrom with identical start and end returns one node", () => {
+    const rootNode = createRoot([
+      createParagraph([createTextSpan(new Text("Hi"))]),
+    ]);
+    const text = rootNode.firstChild.firstChild.firstChild;
+    const textNodeIterator = new TextNodeIterator(rootNode);
+    const nodes = textNodeIterator.collectFrom(text, text);
+    expect(nodes.length).toBe(1);
+    expect(nodes[0]).toBe(text);
   });
 });

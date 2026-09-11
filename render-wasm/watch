@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Usage: ./watch [frontend|export]
+
+_SCRIPT_DIR=$(dirname $0);
+pushd $_SCRIPT_DIR;
+
+. ./_build_env
+
+set -x
+build;
+copy_target_artifacts;
+
+pushd $_SCRIPT_DIR;
+
+cargo watch \
+      --why \
+      -i "_tmp*" \
+      -x "build $CARGO_PARAMS" \
+      -s "./build $RENDER_TARGET" \
+      -s "echo 'DONE\n'";
+
+popd

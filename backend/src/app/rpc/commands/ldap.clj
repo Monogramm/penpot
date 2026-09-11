@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.ldap
   (:require
@@ -38,11 +38,11 @@
    ::doc/added "1.15"
    ::doc/module :auth
    ::sm/params schema:login-with-ldap}
-  [{:keys [::setup/props ::ldap/provider] :as cfg} params]
+  [{:keys [::ldap/provider] :as cfg} params]
   (when-not provider
     (ex/raise :type :restriction
               :code :ldap-not-initialized
-              :hide "ldap auth provider is not initialized"))
+              :hint "ldap auth provider is not initialized"))
 
   (let [info (ldap/authenticate provider params)]
     (when-not info
@@ -60,18 +60,18 @@
         ;; user comes from team-invitation process; in this case,
         ;; regenerate token and send back to the user a new invitation
         ;; token (and mark current session as logged).
-        (let [claims (tokens/verify props {:token token :iss :team-invitation})
+        (let [claims (tokens/verify cfg {:token token :iss :team-invitation})
               claims (assoc claims
                             :member-id  (:id profile)
                             :member-email (:email profile))
-              token  (tokens/generate props claims)]
+              token  (tokens/generate cfg claims)]
           (-> {:invitation-token token}
-              (rph/with-transform (session/create-fn cfg (:id profile)))
+              (rph/with-transform (session/create-fn cfg profile))
               (rph/with-meta {::audit/props (:props profile)
                               ::audit/profile-id (:id profile)})))
 
         (-> (profile/strip-private-attrs profile)
-            (rph/with-transform (session/create-fn cfg (:id profile)))
+            (rph/with-transform (session/create-fn cfg profile))
             (rph/with-meta {::audit/props (:props profile)
                             ::audit/profile-id (:id profile)}))))))
 
@@ -83,6 +83,6 @@
                              (profile/clean-email)
                              (profile/get-profile-by-email conn))
                     (->> (assoc info :is-active true :is-demo false)
-                         (auth/create-profile! conn)
-                         (auth/create-profile-rels! conn)
+                         (auth/create-profile cfg)
+                         (auth/create-profile-rels cfg)
                          (profile/strip-private-attrs))))))

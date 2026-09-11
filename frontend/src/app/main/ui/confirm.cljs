@@ -2,20 +2,25 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.confirm
   (:require-macros [app.main.style :as stl])
   (:require
    [app.main.data.modal :as modal]
    [app.main.store :as st]
-   [app.main.ui.icons :as i]
+   [app.main.ui.ds.buttons.button :refer [button*]]
+   [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.foundations.assets.icon :as i :refer [icon*]]
+   [app.main.ui.ds.foundations.typography.heading :refer [heading*]]
+   [app.main.ui.ds.notifications.context-notification :refer [context-notification*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as k]
    [goog.events :as events]
    [rumext.v2 :as mf])
-  (:import goog.events.EventType))
+  (:import
+   goog.events.EventType))
 
 (mf/defc confirm-dialog
   {::mf/register modal/components
@@ -26,10 +31,12 @@
            on-accept
            on-cancel
            hint
+           error-msg
            items
            cancel-label
            accept-label
-           accept-style] :as props}]
+           accept-style
+           hint-level] :as props}]
   (let [on-accept    (or on-accept identity)
         on-cancel    (or on-cancel identity)
         message      (or message (tr "ds.confirm-title"))
@@ -66,17 +73,25 @@
     [:div {:class (stl/css :modal-overlay)}
      [:div {:class (stl/css :modal-container)}
       [:div {:class (stl/css :modal-header)}
-       [:h2 {:class (stl/css :modal-title)} title]
-       [:button {:class (stl/css :modal-close-btn)
-                 :on-click cancel-fn} i/close]]
+       [:> heading* {:level 2 :typography "headline-medium" :class (stl/css :modal-title)} title]
+       [:> icon-button* {:variant "ghost"
+                         :aria-label (tr "labels.close")
+                         :on-click cancel-fn
+                         :icon i/close
+                         :class (stl/css :modal-close-btn)}]]
 
       [:div {:class (stl/css :modal-content)}
        (when (and (string? message) (not= message ""))
-         [:h3 {:class (stl/css :modal-msg)} message])
+         [:> heading* {:level 3 :typography "body-large" :class (stl/css :modal-msg)} message])
        (when (and (string? scd-message) (not= scd-message ""))
-         [:h3 {:class (stl/css :modal-scd-msg)} scd-message])
+         [:> heading* {:level 3 :typography "body-large" :class (stl/css :modal-scd-msg)} scd-message])
        (when (string? hint)
-         [:p {:class (stl/css :modal-hint)} hint])
+         [:> context-notification* {:level (or hint-level :info)
+                                    :appearance :ghost}
+          hint])
+       (when (string? error-msg)
+         [:> context-notification* {:level :error :class (stl/css :modal-error-msg)}
+          error-msg])
        (when (> (count items) 0)
          [:*
           [:p {:class (stl/css :modal-subtitle)}
@@ -84,24 +99,18 @@
           [:ul {:class (stl/css :component-list)}
            (for [item items]
              [:li {:class (stl/css :modal-item-element)}
-              [:span {:class (stl/css :modal-component-icon)}
-               i/component]
+              [:> icon* {:icon-id i/component
+                         :class (stl/css :modal-component-icon)
+                         :size "s"}]
               [:span {:class (stl/css :modal-component-name)}
                (:name item)]])]])]
 
       [:div {:class (stl/css :modal-footer)}
-       [:div {:class (stl/css :action-buttons)}
-        (when-not (= cancel-label :omit)
-          [:input
-           {:class (stl/css :cancel-button)
-            :type "button"
-            :value cancel-label
-            :on-click cancel-fn}])
-
-        [:input
-         {:class (stl/css-case :accept-btn true
-                               :danger (= accept-style :danger)
-                               :primary (= accept-style :primary))
-          :type "button"
-          :value accept-label
-          :on-click accept-fn}]]]]]))
+       (when-not (= cancel-label :omit)
+         [:> button* {:variant "secondary"
+                      :on-click cancel-fn}
+          cancel-label])
+       [:> button* {:variant (cond (= accept-style :danger)  "destructive"
+                                   (= accept-style :primary) "primary")
+                    :on-click accept-fn}
+        accept-label]]]]))

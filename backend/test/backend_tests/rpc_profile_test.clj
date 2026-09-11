@@ -2,19 +2,20 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.rpc-profile-test
   (:require
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
    [app.email.blacklist :as email.blacklist]
    [app.email.whitelist :as email.whitelist]
+   [app.nitrate :as nitrate]
    [app.rpc :as-alias rpc]
    [app.rpc.commands.profile :as profile]
    [app.tokens :as tokens]
-   [app.util.time :as dt]
    [backend-tests.helpers :as th]
    [clojure.java.io :as io]
    [clojure.test :as t]
@@ -41,7 +42,7 @@
   (let [profile (th/create-profile* 1)
         data    {::th/type :login-with-password
                  :email "profile1.test@nodomain.com"
-                 :password "foobar"}
+                 :password "Foobar12!"}
         out     (th/command! data)]
 
     #_(th/print-result! out)
@@ -55,7 +56,7 @@
   (let [profile (th/create-profile* 1)
         data    {::th/type :login-with-password
                  :email "profile1.test@nodomain.com"
-                 :password "123123"}
+                 :password "Test123!"}
         out     (th/command! data)]
     ;; (th/print-result! out)
     (let [error (:error out)]
@@ -68,7 +69,7 @@
   (let [profile (th/create-profile* 1 {:is-active true})
         data    {::th/type :login-with-password
                  :email "profile1.test@nodomain.com"
-                 :password "123123"}
+                 :password "Test123!"}
         out     (th/command! data)]
     ;; (th/print-result! out)
     (t/is (nil? (:error out)))
@@ -90,17 +91,26 @@
           (t/is (not (contains? result :password))))))
 
     (t/testing "update profile"
-      (let [data (assoc profile
-                        ::th/type :update-profile
-                        ::rpc/profile-id (:id profile)
-                        :fullname "Full Name"
-                        :lang "en"
-                        :theme "dark")
-            out  (th/command! data)]
+      (with-redefs [app.config/flags #{:admin-console}]
+        (with-redefs [nitrate/add-nitrate-licence-to-profile
+                      (fn [_ profile]
+                        (assoc profile :subscription {:plan :pro}))]
+          (let [data (assoc profile
+                            ::th/type :update-profile
+                            ::rpc/profile-id (:id profile)
+                            :fullname "Full Name"
+                            :lang "en"
+                            :theme "dark")
+                out  (th/command! data)]
 
-        ;; (th/print-result! out)
-        (t/is (nil? (:error out)))
-        (t/is (map? (:result out)))))
+            ;; (th/print-result! out)
+            (t/is (nil? (:error out)))
+            (t/is (map? (:result out)))
+            (t/is (= "Full Name" (get-in out [:result :fullname])))
+            (t/is (= "en" (get-in out [:result :lang])))
+            (t/is (= "dark" (get-in out [:result :theme])))
+            (t/is (= {:plan :pro}
+                     (:subscription (:result out))))))))
 
     (t/testing "query profile after update"
       (let [data {::th/type :get-profile
@@ -115,6 +125,17 @@
           (t/is (= "en" (:lang result)))
           (t/is (= "dark" (:theme result))))))
 
+    (t/testing "update profile preserves omitted optional fields"
+      (let [data {::th/type :update-profile
+                  ::rpc/profile-id (:id profile)
+                  :fullname "Updated Name"}
+            out  (th/command! data)]
+
+        (t/is (nil? (:error out)))
+        (t/is (= "Updated Name" (get-in out [:result :fullname])))
+        (t/is (= "en" (get-in out [:result :lang])))
+        (t/is (= "dark" (get-in out [:result :theme])))))
+
     (t/testing "update photo"
       (let [data {::th/type :update-profile-photo
                   ::rpc/profile-id (:id profile)
@@ -125,7 +146,20 @@
             out  (th/command! data)]
 
         ;; (th/print-result! out)
-        (t/is (nil? (:error out)))))))
+        (t/is (nil? (:error out)))))
+
+    (t/testing "delete photo clears photo-id"
+      (let [data {::th/type :delete-profile-photo
+                  ::rpc/profile-id (:id profile)}
+            out  (th/command! data)]
+        (t/is (nil? (:error out)))
+        (t/is (nil? (:result out))))
+
+      (let [data {::th/type :get-profile
+                  ::rpc/profile-id (:id profile)}
+            out  (th/command! data)]
+        (t/is (nil? (:error out)))
+        (t/is (nil? (:photo-id (:result out))))))))
 
 (t/deftest profile-deletion-1
   (let [prof (th/create-profile* 1)
@@ -158,11 +192,11 @@
     (let [row (th/db-get :team
                          {:id (:default-team-id prof)}
                          {::db/remove-deleted false})]
-      (t/is (dt/instant? (:deleted-at row))))
+      (t/is (ct/inst? (:deleted-at row))))
 
     ;; execute permanent deletion task
     (let [result (th/run-task! :objects-gc {:min-age 0})]
-      (t/is (= 4 (:processed result))))
+      (t/is (= 6 (:processed result))))
 
     (let [row (th/db-get :team
                          {:id (:default-team-id prof)}
@@ -209,16 +243,16 @@
                     ::rpc/profile-id (:id prof1)
                     :id (:id team1)}
             out    (th/command! params)]
-      ;; (th/print-result! out)
+        ;; (th/print-result! out)
 
         (let [team (th/db-get :team {:id (:id team1)} {::db/remove-deleted false})]
-          (t/is (dt/instant? (:deleted-at team)))))
+          (t/is (ct/inst? (:deleted-at team)))))
 
-    ;; Request profile to be deleted
+      ;; Request profile to be deleted
       (let [params {::th/type :delete-profile
                     ::rpc/profile-id (:id prof1)}
             out    (th/command! params)]
-      ;; (th/print-result! out)
+        ;; (th/print-result! out)
         (t/is (nil? (:result out)))
         (t/is (nil? (:error out)))))))
 
@@ -324,7 +358,7 @@
 
     ;; execute permanent deletion task
     (let [result (th/run-task! :objects-gc {:min-age 0})]
-      (t/is (= 4 (:processed result))))
+      (t/is (= 6 (:processed result))))
 
     (let [row (th/db-get :team
                          {:id (:default-team-id prof1)}
@@ -363,8 +397,65 @@
 
     ;; execute permanent deletion task
     (let [result (th/run-task! :objects-gc {:min-age 0})]
-      (t/is (= 8 (:processed result))))))
+      (t/is (= 10 (:processed result))))))
 
+(t/deftest profile-deletion-invalidates-all-sessions
+  (let [prof (th/create-profile* 1)
+
+        ;; Insert 3 sessions for this profile directly into the database
+        session-ids (doall
+                     (for [i (range 3)]
+                       (let [sid (uuid/random)]
+                         (th/db-exec-one! ["INSERT INTO http_session_v2 (id, profile_id, user_agent) VALUES (?, ?, ?)"
+                                           sid (:id prof) (str "user-agent-" i)])
+                         sid)))]
+
+    ;; Verify sessions exist
+    (let [count-before (:count (th/db-exec-one! ["SELECT count(*) FROM http_session_v2 WHERE profile_id = ?" (:id prof)]))]
+      (t/is (= 3 count-before)))
+
+    ;; Request profile to be deleted
+    (let [params {::th/type :delete-profile
+                  ::rpc/profile-id (:id prof)}
+          out    (th/command! params)]
+      (t/is (nil? (:error out))))
+
+    ;; Verify ALL sessions were invalidated (not just one)
+    (let [count-after (:count (th/db-exec-one! ["SELECT count(*) FROM http_session_v2 WHERE profile_id = ?" (:id prof)]))]
+      (t/is (= 0 count-after)))))
+
+(t/deftest profile-deletion-via-gc-cascades
+  (let [prof (th/create-profile* 1)
+        file (th/create-file* 1 {:profile-id (:id prof)
+                                 :project-id (:default-project-id prof)
+                                 :is-shared false})
+        team-id (:default-team-id prof)
+        project-id (:default-project-id prof)
+        file-id (:id file)
+
+        deleted-at (ct/minus (ct/now) (ct/duration {:days 1}))]
+
+    (th/db-update! :profile
+                   {:deleted-at deleted-at}
+                   {:id (:id prof)})
+
+    (let [team-before (th/db-get :team {:id team-id} {::db/remove-deleted false})]
+      (t/is (nil? (:deleted-at team-before))))
+
+    (let [result (th/run-task! :objects-gc {:min-age 0})]
+      (t/is (pos? (:processed result))))
+
+    (let [profile-after (th/db-get :profile {:id (:id prof)} {::db/remove-deleted false})]
+      (t/is (nil? profile-after)))
+
+    (let [team-after (th/db-get :team {:id team-id} {::db/remove-deleted false})]
+      (t/is (nil? team-after)))
+
+    (let [project-after (th/db-get :project {:id project-id} {::db/remove-deleted false})]
+      (t/is (nil? project-after)))
+
+    (let [file-after (th/db-get :file {:id file-id} {::db/remove-deleted false})]
+      (t/is (nil? file-after)))))
 
 (t/deftest email-blacklist-1
   (t/is (false? (email.blacklist/enabled? th/*system*)))
@@ -379,15 +470,16 @@
 (t/deftest prepare-register-and-register-profile-1
   (let [data  {::th/type :prepare-register-profile
                :email "user@example.com"
-               :password "foobar"}
+               :fullname "foobar"
+               :password "Foobar12!"
+               :utm_campaign "utma"
+               :mtm_campaign "mtma"}
         out   (th/command! data)
         token (get-in out [:result :token])]
     (t/is (string? token))
 
     ;; try register without token
-    (let [data  {::th/type :register-profile
-                 :fullname "foobar"
-                 :accept-terms-and-privacy true}
+    (let [data  {::th/type :register-profile}
           out   (th/command! data)]
       ;; (th/print-result! out)
       (let [error (:error out)]
@@ -397,14 +489,9 @@
 
     ;; try correct register
     (let [data  {::th/type :register-profile
-                 :token token
-                 :fullname "foobar"
-                 :utm_campaign "utma"
-                 :mtm_campaign "mtma"
-                 :accept-terms-and-privacy true
-                 :accept-newsletter-subscription true}]
-      (let [{:keys [result error]} (th/command! data)]
-        (t/is (nil? error))))
+                 :token token}
+          out   (th/command! data)]
+      (t/is (nil? (:error out))))
 
     (let [profile (some-> (th/db-get :profile {:email "user@example.com"})
                           (profile/decode-row))]
@@ -424,7 +511,8 @@
       ;; PREPARE REGISTER
       (let [data  {::th/type :prepare-register-profile
                    :email "hello@example.com"
-                   :password "foobar"}
+                   :fullname "foobar"
+                   :password "Foobar12!"}
             out   (th/command! data)
             token (get-in out [:result :token])]
         (t/is (th/success? out))
@@ -432,10 +520,7 @@
 
       ;; DO REGISTRATION
       (let [data  {::th/type :register-profile
-                   :token @current-token
-                   :fullname "foobar"
-                   :accept-terms-and-privacy true
-                   :accept-newsletter-subscription true}
+                   :token @current-token}
             out   (th/command! data)]
         (t/is (nil? (:error out)))
         (t/is (= 1 (:call-count @mock))))
@@ -445,7 +530,8 @@
       ;; PREPARE REGISTER: second attempt
       (let [data  {::th/type :prepare-register-profile
                    :email "hello@example.com"
-                   :password "foobar"}
+                   :fullname "foobar"
+                   :password "Foobar12!"}
             out   (th/command! data)
             token (get-in out [:result :token])]
         (t/is (th/success? out))
@@ -479,7 +565,8 @@
       ;; PREPARE REGISTER
       (let [data  {::th/type :prepare-register-profile
                    :email "hello@example.com"
-                   :password "foobar"}
+                   :fullname "foobar"
+                   :password "Foobar12!"}
             out   (th/command! data)
             token (get-in out [:result :token])]
         (t/is (th/success? out))
@@ -487,10 +574,7 @@
 
       ;; DO REGISTRATION
       (let [data  {::th/type :register-profile
-                   :token @current-token
-                   :fullname "foobar"
-                   :accept-terms-and-privacy true
-                   :accept-newsletter-subscription true}
+                   :token @current-token}
             out   (th/command! data)]
         (t/is (nil? (:error out)))
         (t/is (= 1 (:call-count @mock))))
@@ -504,7 +588,8 @@
       ;; PREPARE REGISTER: second attempt
       (let [data  {::th/type :prepare-register-profile
                    :email "hello@example.com"
-                   :password "foobar"}
+                   :fullname "foobar"
+                   :password "Foobar12!"}
             out   (th/command! data)
             token (get-in out [:result :token])]
         (t/is (th/success? out))
@@ -514,48 +599,159 @@
                       :return true}]
         ;; DO REGISTRATION: second attempt
         (let [data  {::th/type :register-profile
-                     :token @current-token
-                     :fullname "foobar"
-                     :accept-terms-and-privacy true
-                     :accept-newsletter-subscription true}
+                     :token @current-token}
               out   (th/command! data)]
           (t/is (nil? (:error out)))
           (t/is (= 0 (:call-count @mock))))))))
 
+(t/deftest prepare-register-and-register-profile-disable-email-verification
+  ;; When disable-email-verification is set and the profile is inactive
+  ;; (e.g. created before the flag was set), re-registering should be
+  ;; rejected with :email-already-exists.
+  (with-mocks [mock {:target 'app.email/send! :return nil}]
+    (with-redefs [app.config/flags #{:registration :login-with-password}]
+      (let [current-token (atom nil)]
+        ;; PREPARE REGISTER: first attempt (no profile exists yet)
+        (let [data  {::th/type :prepare-register-profile
+                     :email "hello@example.com"
+                     :fullname "foobar"
+                     :password "Foobar12!"}
+              out   (th/command! data)
+              token (get-in out [:result :token])]
+          (t/is (th/success? out))
+          (reset! current-token token))
+
+        ;; DO REGISTRATION: creates active profile (email-verification disabled)
+        (let [data  {::th/type :register-profile
+                     :token @current-token}
+              out   (th/command! data)
+              mdata (-> out :result meta)]
+          (t/is (nil? (:error out)))
+          ;; No verification email sent
+          (t/is (= 0 (:call-count @mock)))
+          ;; Session is minted
+          (t/is (seq (:app.rpc/response-transform-fns mdata))))
+
+        ;; Force the profile back to inactive to simulate the case where it was
+        ;; created before disable-email-verification was set
+        (th/db-update! :profile
+                       {:is-active false}
+                       {:email "hello@example.com"})
+
+        (th/reset-mock! mock)
+
+        ;; PREPARE REGISTER: second attempt (inactive profile exists)
+        (let [data  {::th/type :prepare-register-profile
+                     :email "hello@example.com"
+                     :fullname "foobar"
+                     :password "Foobar12!"}
+              out   (th/command! data)
+              token (get-in out [:result :token])]
+          (t/is (th/success? out))
+          (reset! current-token token))
+
+        ;; DO REGISTRATION: second attempt should be rejected
+        (let [data  {::th/type :register-profile
+                     :token @current-token}
+              out   (th/command! data)
+              error (:error out)]
+          (t/is (th/ex-info? error))
+          (t/is (th/ex-of-type? error :validation))
+          (t/is (th/ex-of-code? error :email-already-exists))
+          ;; No email sent, profile remains inactive
+          (t/is (= 0 (:call-count @mock)))
+          (let [profile (th/db-get :profile {:email "hello@example.com"})]
+            (t/is (false? (:is-active profile)))))))))
+
 (t/deftest prepare-and-register-with-invitation-and-enabled-registration-1
-  (let [sprops (:app.setup/props th/*system*)
-        itoken (tokens/generate sprops
-                                {:iss :team-invitation
-                                 :exp (dt/in-future "48h")
-                                 :role :editor
-                                 :team-id uuid/zero
-                                 :member-email "user@example.com"})
-        data  {::th/type :prepare-register-profile
-               :invitation-token itoken
-               :email "user@example.com"
-               :password "foobar"}
+  ;; With email-verification ENABLED (the default), a brand-new
+  ;; profile created via the invitation flow is NOT active yet, so
+  ;; `register-profile` must NOT mint a session and must NOT echo
+  ;; back the invitation token. Instead it must dispatch the
+  ;; verify-email mail with the invitation token EMBEDDED into the
+  ;; verify-email JWE (so the team-invitation flow can resume after
+  ;; the user clicks the email link).
+  (with-mocks [mock {:target 'app.email/send! :return nil}]
+    (let [itoken (tokens/generate th/*system*
+                                  {:iss :team-invitation
+                                   :exp (ct/in-future "48h")
+                                   :role :editor
+                                   :team-id uuid/zero
+                                   :member-email "user@example.com"})
+          prep-data {::th/type :prepare-register-profile
+                     :invitation-token itoken
+                     :fullname "foobar"
+                     :email "user@example.com"
+                     :password "Foobar12!"}
 
-        {:keys [result error] :as out} (th/command! data)]
-    (t/is (nil? error))
-    (t/is (map? result))
-    (t/is (string? (:token result)))
+          {prep-result :result prep-error :error} (th/command! prep-data)]
+      (t/is (nil? prep-error))
+      (t/is (map? prep-result))
+      (t/is (string? (:token prep-result)))
 
-    (let [rtoken (:token result)
-          data   {::th/type :register-profile
-                  :token rtoken
-                  :fullname "foobar"}
+      (let [reg-data {::th/type :register-profile
+                      :token (:token prep-result)}
 
-          {:keys [result error] :as out} (th/command! data)]
-        ;; (th/print-result! out)
-      (t/is (nil? error))
-      (t/is (map? result))
-      (t/is (string? (:invitation-token result))))))
+            {reg-result :result reg-error :error} (th/command! reg-data)
+            mdata    (meta reg-result)]
+        (t/is (nil? reg-error))
+        (t/is (map? reg-result))
+
+        ;; No invitation token echoed back, no session minted.
+        (t/is (nil? (:invitation-token reg-result)))
+        (t/is (empty? (:app.rpc/response-transform-fns mdata)))
+
+        ;; The verify-email mail was dispatched, and its token claims
+        ;; carry the invitation-token through to the verification step.
+        (t/is (= 1 (:call-count @mock)))
+        (let [send-args   (-> @mock :call-args)
+              email-token (->> send-args (some (fn [m] (when (map? m) (:token m)))))
+              vclaims     (tokens/decode th/*system* email-token)]
+          (t/is (= :verify-email (:iss vclaims)))
+          (t/is (= itoken (:invitation-token vclaims))))))))
+
+(t/deftest prepare-and-register-with-invitation-and-enabled-registration-1b
+  ;; With email-verification DISABLED, the brand-new profile is
+  ;; immediately active, so `register-profile` mints a session and
+  ;; returns the regenerated invitation token in the body — the
+  ;; frontend then redirects to :auth-verify-token to complete the
+  ;; team-invitation flow.
+  (with-redefs [app.config/flags #{:registration :login-with-password}]
+    (let [itoken (tokens/generate th/*system*
+                                  {:iss :team-invitation
+                                   :exp (ct/in-future "48h")
+                                   :role :editor
+                                   :team-id uuid/zero
+                                   :member-email "user@example.com"})
+          prep-data {::th/type :prepare-register-profile
+                     :invitation-token itoken
+                     :fullname "foobar"
+                     :email "user@example.com"
+                     :password "Foobar12!"}
+
+          {prep-result :result prep-error :error} (th/command! prep-data)]
+      (t/is (nil? prep-error))
+      (t/is (string? (:token prep-result)))
+
+      (let [reg-data {::th/type :register-profile
+                      :token (:token prep-result)}
+
+            {reg-result :result reg-error :error} (th/command! reg-data)
+            mdata    (meta reg-result)]
+        (t/is (nil? reg-error))
+        (t/is (map? reg-result))
+
+        ;; Active branch: invitation-token is echoed back and a session
+        ;; is minted via `session/create-fn`.
+        (t/is (string? (:invitation-token reg-result)))
+        (t/is (seq (:app.rpc/response-transform-fns mdata)))
+        (t/is (= "accept-invitation"
+                 (get-in mdata [:app.loggers.audit/context :action])))))))
 
 (t/deftest prepare-and-register-with-invitation-and-enabled-registration-2
-  (let [sprops (:app.setup/props th/*system*)
-        itoken (tokens/generate sprops
+  (let [itoken (tokens/generate th/*system*
                                 {:iss :team-invitation
-                                 :exp (dt/in-future "48h")
+                                 :exp (ct/in-future "48h")
                                  :role :editor
                                  :team-id uuid/zero
                                  :member-email "user2@example.com"})
@@ -563,7 +759,8 @@
         data  {::th/type :prepare-register-profile
                :invitation-token itoken
                :email "user@example.com"
-               :password "foobar"}
+               :fullname "foobar"
+               :password "Foobar12!"}
         out   (th/command! data)]
 
     (t/is (not (th/success? out)))
@@ -573,17 +770,17 @@
 
 (t/deftest prepare-and-register-with-invitation-and-disabled-registration-1
   (with-redefs [app.config/flags [:disable-registration]]
-    (let [sprops (:app.setup/props th/*system*)
-          itoken (tokens/generate sprops
+    (let [itoken (tokens/generate th/*system*
                                   {:iss :team-invitation
-                                   :exp (dt/in-future "48h")
+                                   :exp (ct/in-future "48h")
                                    :role :editor
                                    :team-id uuid/zero
                                    :member-email "user@example.com"})
           data  {::th/type :prepare-register-profile
                  :invitation-token itoken
+                 :fullname "foobar"
                  :email "user@example.com"
-                 :password "foobar"}
+                 :password "Foobar12!"}
           out (th/command! data)]
 
       (t/is (not (th/success? out)))
@@ -593,10 +790,9 @@
 
 (t/deftest prepare-and-register-with-invitation-and-disabled-registration-2
   (with-redefs [app.config/flags [:disable-registration]]
-    (let [sprops (:app.setup/props th/*system*)
-          itoken (tokens/generate sprops
+    (let [itoken (tokens/generate th/*system*
                                   {:iss :team-invitation
-                                   :exp (dt/in-future "48h")
+                                   :exp (ct/in-future "48h")
                                    :role :editor
                                    :team-id uuid/zero
                                    :member-email "user2@example.com"})
@@ -604,7 +800,8 @@
           data  {::th/type :prepare-register-profile
                  :invitation-token itoken
                  :email "user@example.com"
-                 :password "foobar"}
+                 :fullname "foobar"
+                 :password "Foobar12!"}
           out   (th/command! data)]
 
       (t/is (not (th/success? out)))
@@ -614,18 +811,18 @@
 
 (t/deftest prepare-and-register-with-invitation-and-disabled-login-with-password
   (with-redefs [app.config/flags [:disable-login-with-password]]
-    (let [sprops (:app.setup/props th/*system*)
-          itoken (tokens/generate sprops
+    (let [itoken (tokens/generate th/*system*
                                   {:iss :team-invitation
-                                   :exp (dt/in-future "48h")
+                                   :exp (ct/in-future "48h")
                                    :role :editor
                                    :team-id uuid/zero
                                    :member-email "user2@example.com"})
 
           data  {::th/type :prepare-register-profile
                  :invitation-token itoken
+                 :fullname "foobar"
                  :email "user@example.com"
-                 :password "foobar"}
+                 :password "Foobar12!"}
           out   (th/command! data)]
 
       (t/is (not (th/success? out)))
@@ -636,8 +833,9 @@
 (t/deftest prepare-register-with-registration-disabled
   (with-redefs [app.config/flags #{}]
     (let [data  {::th/type :prepare-register-profile
+                 :fullname "foobar"
                  :email "user@example.com"
-                 :password "foobar"}
+                 :password "Foobar12!"}
           out  (th/command! data)]
 
       (t/is (not (th/success? out)))
@@ -648,8 +846,9 @@
 (t/deftest prepare-register-with-existing-user
   (let [profile (th/create-profile* 1)
         data    {::th/type :prepare-register-profile
+                 :fullname "foobar"
                  :email (:email profile)
-                 :password "foobar"}
+                 :password "Foobar12!"}
         out     (th/command! data)]
     ;; (th/print-result! out)
     (t/is (th/success? out))
@@ -660,8 +859,9 @@
 
   (let [pool  (:app.db/pool th/*system*)
         data  {::th/type :prepare-register-profile
+               :fullname "foobar"
                :email "user@example.com"
-               :password "foobar"}]
+               :password "Foobar12!"}]
 
     (th/create-global-complaint-for pool {:type :bounce :email "user@example.com"})
 
@@ -674,8 +874,9 @@
 (t/deftest register-profile-with-complained-email
   (let [pool  (:app.db/pool th/*system*)
         data  {::th/type :prepare-register-profile
+               :fullname "foobar"
                :email "user@example.com"
-               :password "foobar"}]
+               :password "Foobar12!"}]
 
     (th/create-global-complaint-for pool {:type :complaint :email "user@example.com"})
 
@@ -688,6 +889,7 @@
 
 (t/deftest register-profile-with-email-as-password
   (let [data {::th/type :prepare-register-profile
+              :fullname "foobar"
               :email "user@example.com"
               :password "USER@example.com"}
         out  (th/command! data)]
@@ -696,6 +898,188 @@
     (let [edata (-> out :error ex-data)]
       (t/is (= :validation (:type edata)))
       (t/is (= :email-as-password (:code edata))))))
+
+(t/deftest prepare-register-rejects-active-profile-email
+  ;; SECURITY: `prepare-register` must reject any attempt to prepare a
+  ;; registration for an email that already belongs to an *active*
+  ;; profile, regardless of whether an invitation token is supplied.
+  ;; Active profiles must use the standard login flow.
+  (let [_victim (th/create-profile* 1 {:is-active true
+                                       :email "victim@corp.tld"})]
+
+    ;; Without invitation token.
+    (let [out (th/command! {::th/type :prepare-register-profile
+                            :fullname "Mallory"
+                            :email "victim@corp.tld"
+                            :password "Whatever1!"})]
+      (t/is (not (th/success? out)))
+      (let [edata (-> out :error ex-data)]
+        (t/is (= :validation (:type edata)))
+        (t/is (= :email-already-exists (:code edata)))))
+
+    ;; With invitation token (the GHSA-4937-35vc-hqjj exploit shape).
+    (let [itoken (tokens/generate th/*system*
+                                  {:iss :team-invitation
+                                   :exp (ct/in-future "48h")
+                                   :role :editor
+                                   :team-id uuid/zero
+                                   :member-email "victim@corp.tld"})
+          out    (th/command! {::th/type :prepare-register-profile
+                               :invitation-token itoken
+                               :fullname "Mallory"
+                               :email "victim@corp.tld"
+                               :password "Whatever1!"})]
+      (t/is (not (th/success? out)))
+      (let [edata (-> out :error ex-data)]
+        (t/is (= :validation (:type edata)))
+        (t/is (= :email-already-exists (:code edata)))))))
+
+(t/deftest prepare-register-must-not-leak-existing-profile-id
+  ;; Victim is a pre-existing profile that has not yet activated (e.g.
+  ;; freshly registered, has not clicked the email verification link).
+  ;; `prepare-register` allows the call (no active profile exists), but
+  ;; the issued JWE must NOT carry the existing profile's id.
+  (let [_victim (th/create-profile* 1 {:is-active false
+                                       :email "victim@corp.tld"})
+
+        ;; Attacker holds a cryptographically valid `:team-invitation` JWE
+        ;; for the victim's email. (In a real exploit this is obtained
+        ;; from `create-team-invitations` or `get-team-invitation-token`
+        ;; on a team the attacker owns.)
+        itoken (tokens/generate th/*system*
+                                {:iss :team-invitation
+                                 :exp (ct/in-future "48h")
+                                 :role :editor
+                                 :team-id uuid/zero
+                                 :member-email "victim@corp.tld"})
+
+        ;; Anonymous request — no ::rpc/profile-id.
+        data   {::th/type :prepare-register-profile
+                :invitation-token itoken
+                :fullname "Mallory"
+                :email "victim@corp.tld"
+                :password "Whatever1!"}
+
+        out    (th/command! data)]
+
+    ;; The current behaviour either returns a token or rejects the request;
+    ;; what MUST hold is that the issued prepared-register JWE does not
+    ;; carry the victim's profile id.
+    (t/is (th/success? out))
+
+    (let [token  (-> out :result :token)
+          claims (tokens/decode th/*system* token)]
+      (t/is (= :prepared-register (:iss claims)))
+      ;; This is the root-cause assertion: an anonymous prepare-register
+      ;; call must NEVER embed an existing profile's id.
+      (t/is (nil? (:profile-id claims))
+            "prepare-register must not embed existing profile id of an anonymous caller"))))
+
+(t/deftest register-profile-with-invitation-must-not-take-over-existing-account
+  (with-mocks [_mock {:target 'app.email/send! :return nil}]
+    (let [;; Victim profile exists but is not yet active (e.g. registered
+          ;; but has not clicked the verification link). This is the
+          ;; remaining attack surface after fix 1b: `prepare-register`
+          ;; will not reject this case, so the `register-profile` path
+          ;; must enforce the security invariants on its own.
+          victim   (th/create-profile* 1 {:is-active false
+                                          :email "victim@corp.tld"})
+
+          ;; Attacker mints a valid `:team-invitation` JWE for the victim's
+          ;; email. No member-id is included (matches what an attacker
+          ;; obtains via `create-team-invitations` against their own team
+          ;; before the victim has joined).
+          itoken   (tokens/generate th/*system*
+                                    {:iss :team-invitation
+                                     :exp (ct/in-future "48h")
+                                     :role :editor
+                                     :team-id uuid/zero
+                                     :member-email "victim@corp.tld"})
+
+          ;; Step 1 (anonymous): prepare-register-profile with the victim's
+          ;; email + the invitation token.
+          prep-out (th/command! {::th/type :prepare-register-profile
+                                 :invitation-token itoken
+                                 :fullname "Mallory"
+                                 :email "victim@corp.tld"
+                                 :password "Whatever1!"})
+
+          rtoken   (-> prep-out :result :token)
+
+          ;; Step 2 (anonymous): register-profile with the prepared token.
+          reg-out  (th/command! {::th/type :register-profile
+                                 :token rtoken})
+
+          result   (:result reg-out)
+          mdata    (meta result)]
+
+      ;; The first call may succeed; the issue is what the second call
+      ;; produces. We assert the security invariants on its result.
+      (t/is (th/success? prep-out))
+
+      ;; INVARIANT 1: register-profile must NOT install a session for the
+      ;; victim. `session/create-fn` is wired via
+      ;; `rph/with-transform`, which appends to
+      ;; `:app.rpc/response-transform-fns`. If that vector is non-empty
+      ;; for an anonymous register that targets an EXISTING profile, the
+      ;; server is about to mint an `auth-token` cookie bound to the
+      ;; victim — i.e. account takeover.
+      (t/is (empty? (:app.rpc/response-transform-fns mdata))
+            "register-profile must not create a session for an existing victim profile")
+
+      ;; INVARIANT 2: register-profile must NOT echo back an invitation
+      ;; token that authenticates as the victim. When the response
+      ;; contains both `:id` matching the victim and `:invitation-token`,
+      ;; the frontend treats the user as logged-in for that profile.
+      (when (and (map? result)
+                 (= (:id victim) (:id result)))
+        (t/is (not (contains? result :invitation-token))
+              "register-profile must not return an invitation-token bound to an existing victim profile"))
+
+      ;; INVARIANT 3: the server must NOT have taken the
+      ;; "accept-invitation" branch (which is the one that mints a
+      ;; session). For an existing victim profile, the operation
+      ;; should fall through to the harmless "repeated registry" path.
+      (t/is (not= "accept-invitation"
+                  (get-in mdata [:app.loggers.audit/context :action]))
+            "register-profile must not run the accept-invitation branch for an existing victim profile")
+      ;; The victim must remain inactive: nothing in this anonymous
+      ;; flow should have flipped `is-active` to true.
+      (let [reloaded (th/db-get :profile {:id (:id victim)})]
+        (t/is (false? (:is-active reloaded))
+              "register-profile must not activate the victim profile")))))
+
+(t/deftest verify-email-with-invitation-token-propagates-it
+  ;; A `:verify-email` JWE that carries `:invitation-token` (as
+  ;; produced by `register-profile` for the not-active+invitation
+  ;; case) must propagate that token through the verify-token RPC
+  ;; result so the frontend can resume the team-invitation flow.
+  (let [profile (th/create-profile* 1 {:is-active false})
+        itoken  (tokens/generate th/*system*
+                                 {:iss :team-invitation
+                                  :exp (ct/in-future "48h")
+                                  :role :editor
+                                  :team-id uuid/zero
+                                  :member-email (:email profile)})
+        vtoken  (tokens/generate th/*system*
+                                 {:iss :verify-email
+                                  :exp (ct/in-future "72h")
+                                  :profile-id (:id profile)
+                                  :email (:email profile)
+                                  :invitation-token itoken})
+
+        out     (th/command! {::th/type :verify-token
+                              :token vtoken})
+        result  (:result out)]
+
+    (t/is (th/success? out))
+    (t/is (= :verify-email (:iss result)))
+    (t/is (= itoken (:invitation-token result))
+          "verify-token must echo back the invitation-token from the verify-email JWE")
+
+    ;; And the profile must now be active.
+    (let [reloaded (th/db-get :profile {:id (:id profile)})]
+      (t/is (true? (:is-active reloaded))))))
 
 (t/deftest email-change-request
   (with-mocks [mock {:target 'app.email/send! :return nil}]
@@ -815,8 +1199,8 @@
   (let [profile (th/create-profile* 1)
         data  {::th/type :update-profile-password
                ::rpc/profile-id (:id profile)
-               :old-password "123123"
-               :password "foobarfoobar"}
+               :old-password "Test123!"
+               :password "Foobar12!"}
         out   (th/command! data)]
     (t/is (nil? (:error out)))
     (t/is (nil? (:result out)))))
@@ -827,7 +1211,7 @@
         data  {::th/type :update-profile-password
                ::rpc/profile-id (:id profile)
                :old-password "badpassword"
-               :password "foobarfoobar"}
+               :password "Foobar12!"}
         {:keys [result error] :as out} (th/command! data)]
     (t/is (th/ex-info? error))
     (t/is (th/ex-of-type? error :validation))
@@ -838,9 +1222,166 @@
   (let [profile (th/create-profile* 1)
         data  {::th/type :update-profile-password
                ::rpc/profile-id (:id profile)
-               :old-password "123123"
+               :old-password "Test123!"
                :password "profile1.test@nodomain.com"}
         {:keys [result error] :as out} (th/command! data)]
     (t/is (th/ex-info? error))
     (t/is (th/ex-of-type? error :validation))
     (t/is (th/ex-of-code? error :email-as-password))))
+
+
+(t/deftest update-profile-props-rejects-subscription
+  ;; N1-16: Mass Assignment — :subscription must not be writable via RPC
+  ;; The closed schema rejects :subscription at validation time
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:subscription {:type "unlimited" :status "active"}}}
+        out     (th/command! data)]
+
+    ;; The call must fail with validation error
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :params-validation))
+
+    ;; And :subscription must NOT be persisted
+    (let [saved (th/db-get :profile {:id (:id profile)})
+          props (profile/decode-row saved)]
+      (t/is (nil? (get-in props [:props :subscription]))
+            ":subscription must not be writable via update-profile-props"))))
+
+
+(t/deftest update-profile-props-accepts-valid-keys
+  ;; Verify that valid props keys still work after closing the schema
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:onboarding-viewed true
+                         :newsletter-updates false
+                         :renderer :wasm}}
+        out     (th/command! data)]
+
+    ;; The call should succeed
+    (t/is (nil? (:error out)))
+
+    ;; And all valid keys should be persisted
+    (let [saved (th/db-get :profile {:id (:id profile)})
+          props (profile/decode-row saved)]
+      (t/is (true? (get-in props [:props :onboarding-viewed])))
+      (t/is (false? (get-in props [:props :newsletter-updates])))
+      (t/is (= :wasm (get-in props [:props :renderer]))))))
+
+
+(t/deftest update-profile-props-accepts-onboarding-questions
+  ;; The onboarding questions flow sends these props on the final "START" step
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:onboarding-questions-answered true
+                         :onboarding-questions
+                         {:expected-use "work"
+                          :role "ux"
+                          :start-with "prototyping"}}}
+        out     (th/command! data)]
+
+    ;; The call should succeed
+    (t/is (nil? (:error out)))
+
+    ;; And all keys should be persisted
+    (let [saved (th/db-get :profile {:id (:id profile)})
+          props (profile/decode-row saved)]
+      (t/is (true? (get-in props [:props :onboarding-questions-answered])))
+      (t/is (= {:expected-use "work"
+                :role "ux"
+                :start-with "prototyping"}
+               (get-in props [:props :onboarding-questions]))))))
+
+
+(t/deftest update-profile-props-rejects-invalid-onboarding-questions
+  ;; The schema is closed and :onboarding-questions only accepts string values
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:onboarding-questions {:expected-use 42}}}
+        out     (th/command! data)]
+
+    ;; The call must fail with validation error
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :params-validation))))
+
+
+(t/deftest update-profile-props-accepts-nudge
+  ;; Nudge settings are persisted per-profile via update-profile-props
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:nudge {:big 20 :small 0.5}}}
+        out     (th/command! data)]
+
+    ;; The call should succeed
+    (t/is (nil? (:error out)))
+
+    ;; And the nudge values should be persisted
+    (let [saved (th/db-get :profile {:id (:id profile)})
+          props (profile/decode-row saved)]
+      (t/is (= {:big 20 :small 0.5} (get-in props [:props :nudge]))))))
+
+(t/deftest update-profile-props-rejects-invalid-nudge
+  ;; The nudge map only accepts :big/:small numbers
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-props
+                 ::rpc/profile-id (:id profile)
+                 :props {:nudge {:big "ten"}}}
+        out     (th/command! data)]
+
+    ;; The call must fail with validation error
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :params-validation))))
+
+
+(t/deftest prepare-register-profile-password-too-short
+  (let [data {::th/type :prepare-register-profile
+              :email "user@example.com"
+              :fullname "foobar"
+              :password "123"}
+        out  (th/command! data)]
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :weak-password))))
+
+
+(t/deftest prepare-register-profile-weak-password
+  (let [data {::th/type :prepare-register-profile
+              :email "user@example.com"
+              :fullname "foobar"
+              :password "password123"}
+        out  (th/command! data)]
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :weak-password))))
+
+
+(t/deftest update-profile-password-too-short
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-password
+                 ::rpc/profile-id (:id profile)
+                 :old-password "Test123!"
+                 :password "123"}
+        out     (th/command! data)]
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :weak-password))))
+
+
+(t/deftest update-profile-password-weak-password
+  (let [profile (th/create-profile* 1)
+        data    {::th/type :update-profile-password
+                 ::rpc/profile-id (:id profile)
+                 :old-password "Test123!"
+                 :password "qwerty"}
+        out     (th/command! data)]
+    (t/is (th/ex-info? (:error out)))
+    (t/is (th/ex-of-type? (:error out) :validation))
+    (t/is (th/ex-of-code? (:error out) :weak-password))))

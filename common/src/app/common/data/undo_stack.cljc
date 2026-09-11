@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.data.undo-stack
   (:refer-clojure :exclude [peek])
@@ -47,7 +47,7 @@
 
 (defn undo
   [stack]
-  (update stack :index dec))
+  (update stack :index #(max 0 (dec %))))
 
 (defn redo
   [{index :index items :items :as stack}]

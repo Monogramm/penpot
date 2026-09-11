@@ -2,32 +2,37 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.shapes.multiple
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.attrs :as attrs]
    [app.common.data :as d]
+   [app.common.data.macros :as dm]
+   [app.common.files.helpers :as cfh]
    [app.common.geom.shapes :as gsh]
-   [app.common.text :as txt]
+   [app.common.math :as mth]
    [app.common.types.component :as ctk]
+   [app.common.types.path :as path]
    [app.common.types.shape.attrs :refer [editable-attrs]]
    [app.common.types.shape.layout :as ctl]
+   [app.common.types.text :as txt]
+   [app.common.types.token :as tt]
+   [app.common.weak :as weak]
    [app.main.refs :as refs]
-   [app.main.ui.hooks :as hooks]
-   [app.main.ui.workspace.sidebar.options.menus.blur :refer [blur-attrs blur-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.color-selection :refer [color-selection-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.component :refer [component-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.constraints :refer [constraint-attrs constraints-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.exports :refer [exports-attrs exports-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.fill :refer [fill-attrs fill-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.layer :refer [layer-attrs layer-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.layout-container :refer [layout-container-flex-attrs layout-container-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.layout-item :refer [layout-item-attrs layout-item-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.blur :refer [blur-attrs blur-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.color-selection :refer [color-selection-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.component :refer [component-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.constraints :refer [constraint-attrs constraints-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.exports :refer [exports-attrs exports-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.fill :as fill]
+   [app.main.ui.workspace.sidebar.options.menus.layer :refer [layer-attrs layer-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.layout-container :refer [layout-container-flex-attrs layout-container-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.layout-item :refer [layout-item-attrs layout-item-menu*]]
    [app.main.ui.workspace.sidebar.options.menus.measures :refer [select-measure-keys measure-attrs measures-menu*]]
-   [app.main.ui.workspace.sidebar.options.menus.shadow :refer [shadow-attrs shadow-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.stroke :refer [stroke-attrs stroke-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.shadow :refer [shadow-attrs shadow-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.stroke :refer [stroke-attrs stroke-menu*]]
    [app.main.ui.workspace.sidebar.options.menus.text :as ot]
    [rumext.v2 :as mf]))
 
@@ -44,6 +49,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :children
     :exports          :shape
@@ -57,6 +63,7 @@
     :fill             :children
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :children
     :text             :children
     :exports          :shape
@@ -70,6 +77,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :ignore
     :exports          :shape
@@ -83,6 +91,7 @@
     :fill             :text
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :text
     :exports          :shape
@@ -96,6 +105,7 @@
     :fill             :ignore
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :ignore
     :text             :ignore
     :exports          :shape
@@ -109,6 +119,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :ignore
     :exports          :shape
@@ -122,6 +133,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :ignore
     :exports          :shape
@@ -135,6 +147,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :ignore
     :exports          :shape
@@ -148,6 +161,7 @@
     :fill             :shape
     :shadow           :shape
     :blur             :shape
+    :background-blur  :shape
     :stroke           :shape
     :text             :ignore
     :exports          :shape
@@ -158,7 +172,7 @@
   {:measure           measure-attrs
    :layer             layer-attrs
    :constraint        constraint-attrs
-   :fill              fill-attrs
+   :fill              fill/fill-attrs
    :shadow            shadow-attrs
    :blur              blur-attrs
    :stroke            stroke-attrs
@@ -167,7 +181,7 @@
    :layout-container  layout-container-flex-attrs
    :layout-item       layout-item-attrs})
 
-(def shadow-keys [:style :color :offset-x :offset-y :blur :spread])
+(def shadow-keys [:style :color :offset-x :offset-y :blur :spread :hidden])
 
 (defn shadow-eq
   "Function to check if two shadows are equivalent to the multiple selection (ignores their ids)"
@@ -195,6 +209,59 @@
   [v]
   (when v (select-keys v blur-keys)))
 
+(def layout-padding-attrs [:p1 :p2 :p3 :p4])
+
+(defn- normalize-layout-padding
+  [value]
+  (if (= value :multiple)
+    (zipmap layout-padding-attrs (repeat :multiple))
+    value))
+
+(defn- merge-layout-padding
+  [values shape-values]
+  (let [current (normalize-layout-padding (get values :layout-padding ::unset))
+        next    (normalize-layout-padding (get shape-values :layout-padding ::unset))]
+    (cond
+      (= current ::unset) next
+      (= next ::unset)    current
+
+      (and (map? current) (map? next))
+      (attrs/get-attrs-multi [current next] layout-padding-attrs)
+
+      (= current next)
+      current
+
+      :else
+      :multiple)))
+
+(defn- same-padding-value?
+  [v1 v2]
+  (if (and (number? v1) (number? v2))
+    (mth/close? v1 v2)
+    (= v1 v2)))
+
+(defn- simple-layout-padding?
+  [{:keys [p1 p2 p3 p4]}]
+  (and (same-padding-value? p1 p3)
+       (same-padding-value? p2 p4)))
+
+(defn- promote-simple-layout-padding-type
+  [{:keys [layout-padding layout-padding-type] :as values}]
+  (cond-> values
+    (and (= layout-padding-type :simple)
+         (map? layout-padding)
+         (not (simple-layout-padding? layout-padding)))
+    (assoc :layout-padding-type :multiple)))
+
+(defn- merge-layout-container-attrs
+  [values shape-values attrs]
+  (let [merged-values (attrs/get-attrs-multi [values shape-values] attrs)
+        merged-values (cond-> merged-values
+                        (or (contains? values :layout-padding)
+                            (contains? shape-values :layout-padding))
+                        (assoc :layout-padding (merge-layout-padding values shape-values)))]
+    (promote-simple-layout-padding-type merged-values)))
+
 (defn get-attrs*
   "Given a group of attributes that we want to extract and the shapes to extract them from
   returns a list of tuples [id, values] with the extracted properties for the shapes that
@@ -202,17 +269,66 @@
   [shapes objects attr-group]
   (let [attrs (group->attrs attr-group)
 
+        type->editable-attrs
+        (memoize (fn [type]
+                   (if-let [editable? (get editable-attrs type)]
+                     (filterv editable? attrs)
+                     [])))
+
+        type->nil-values
+        (memoize (fn [type] (into {} (map (fn [attr] [attr nil])) (type->editable-attrs type))))
+
+        type->token-attrs
+        (memoize (fn [type]
+                   (into [] (comp (mapcat tt/shape-attr->token-attrs) (distinct))
+                         (type->editable-attrs type))))
+
         merge-attrs
         (fn [v1 v2]
           (cond
-            (= attr-group :shadow) (attrs/get-attrs-multi [v1 v2] attrs shadow-eq shadow-sel)
-            (= attr-group :blur)   (attrs/get-attrs-multi [v1 v2] attrs blur-eq blur-sel)
-            :else                  (attrs/get-attrs-multi [v1 v2] attrs)))
+            (= attr-group :shadow)           (attrs/get-attrs-multi [v1 v2] attrs shadow-eq shadow-sel)
+            (= attr-group :blur)             (attrs/get-attrs-multi [v1 v2] attrs blur-eq blur-sel)
+            (= attr-group :layout-container) (merge-layout-container-attrs v1 v2 attrs)
+            :else                            (attrs/get-attrs-multi [v1 v2] attrs)))
+
+        merge-attr
+        (fn [acc applied-tokens t-attr]
+          "Merges a single token attribute (`t-attr`) into the accumulator map.
+           - If the attribute is not present, associates it with the new value.
+           - If the existing value equals the new value, keeps the accumulator unchanged.
+           - If there is a conflict, sets the value to `:multiple`."
+          (let [new-val  (get applied-tokens t-attr)
+                existing (get acc t-attr ::not-found)]
+            (cond
+              (= existing ::not-found) (assoc acc t-attr new-val)
+              (= existing new-val)     acc
+              :else                    (assoc acc t-attr :multiple))))
+
+        ;; Merging an empty `applied-tokens` into an accumulator that a previous
+        ;; empty merge already produced is a fixed point, so long runs of
+        ;; token-less shapes of the same type only pay for the first one.
+        stable-token-acc (volatile! nil)
+
+        merge-token-values
+        (fn [acc token-attrs applied-tokens]
+          "Merges token values across all token attributes derived from the shape's
+           editable attributes."
+          (let [no-tokens? (empty? applied-tokens)
+                stable     (deref stable-token-acc)]
+            (if (and no-tokens?
+                     (some? stable)
+                     (identical? (nth stable 0) token-attrs)
+                     (identical? (nth stable 1) acc))
+              acc
+              (let [result (reduce #(merge-attr %1 applied-tokens %2) acc token-attrs)]
+                (when no-tokens?
+                  (vreset! stable-token-acc [token-attrs result]))
+                result))))
 
         extract-attrs
-        (fn [[ids values] {:keys [id type] :as shape}]
+        (fn [[ids values token-acc] {:keys [id type applied-tokens] :as shape}]
           (let [read-mode      (get-in type->read-mode [type attr-group])
-                editable-attrs (filter (get editable-attrs (:type shape)) attrs)]
+                editable-attrs (type->editable-attrs type)]
             (case read-mode
               :ignore
               [ids values]
@@ -221,12 +337,17 @@
               (let [;; Get the editable attrs from the shape, ensuring that all attributes
                     ;; are present, with value nil if they are not present in the shape.
                     shape-values (merge
-                                  (into {} (map #(vector % nil)) editable-attrs)
+                                  (type->nil-values type)
                                   (cond
                                     (= attr-group :measure) (select-measure-keys shape)
-                                    :else (select-keys shape editable-attrs)))]
+                                    :else (select-keys shape editable-attrs)))
+                    shape-values (cond-> shape-values
+                                   (= attr-group :layer)
+                                   (update :hidden #(if (nil? %) false %)))
+                    new-token-acc (merge-token-values token-acc (type->token-attrs type) applied-tokens)]
                 [(conj ids id)
-                 (merge-attrs values shape-values)])
+                 (merge-attrs values shape-values)
+                 new-token-acc])
 
               :text
               (let [shape-attrs (select-keys shape attrs)
@@ -237,170 +358,260 @@
                     new-values
                     (-> values
                         (merge-attrs shape-attrs)
-                        (merge-attrs content-attrs))]
+                        (merge-attrs content-attrs))
+
+                    new-token-acc (merge-token-values token-acc (type->token-attrs type) applied-tokens)]
                 [(conj ids id)
-                 new-values])
+                 new-values
+                 new-token-acc])
 
               :children
               (let [children (->> (:shapes shape []) (map #(get objects %)))
-                    [new-ids new-values] (get-attrs* children objects attr-group)]
-                [(d/concat-vec ids new-ids) (merge-attrs values new-values)])
+                    [new-ids new-values tokens] (get-attrs* children objects attr-group)]
+                [(d/concat-vec ids new-ids) (merge-attrs values new-values) tokens])
 
               [])))]
 
-    (reduce extract-attrs [[] []] shapes)))
+    (reduce extract-attrs [[] {} {}] shapes)))
 
-(def get-attrs (memoize get-attrs*))
-
-(defn basic-shape [_ shape]
-  (cond-> shape
-    :always
-    (dissoc :selrect :points :x :y :width :height :transform :transform-inverse :rotation :svg-transform :svg-viewbox :thumbnail)
-
-    (= (:type shape) :path)
-    (dissoc :content)))
+(def get-attrs
+  (weak/memoize get-attrs*))
 
 (defn- is-bool-descendant?
-  [[_ shape] objects selected-shape-ids]
+  [objects selected-shape-ids shape]
 
   (let [parent-id (:parent-id shape)
-        parent (get objects parent-id)]
+        parent    (get objects parent-id)]
+
     (cond
-      (nil? shape) false                                                   ;; failsafe
-      (contains? selected-shape-ids (:id shape)) false                     ;; if it is one of the selected shapes, it is considerer not a bool descendant
-      (= :bool (:type parent)) true                                        ;; if its parent is of type bool, it is a bool descendant
-      :else (recur [parent-id parent] objects selected-shape-ids))))  ;; else, check its parent
+      (nil? shape)
+      false
 
-(mf/defc options
-  {::mf/wrap [#(mf/memo' % (mf/check-props ["shapes" "shapes-with-children" "page-id" "file-id"]))]
-   ::mf/wrap-props false}
-  [props]
-  (let [shapes               (unchecked-get props "shapes")
-        shapes-with-children (unchecked-get props "shapes-with-children")
+      ;; if it is one of the selected shapes, it is considerer not a
+      ;; bool descendant
+      (contains? selected-shape-ids (:id shape))
+      false
 
-        ;; remove children from bool shapes
-        shape-ids (into #{} (map :id) shapes)
+      (cfh/bool-shape? parent)
+      true
 
-        objects (->> shapes-with-children (group-by :id) (d/mapm (fn [_ v] (first v))))
+      :else
+      (recur objects selected-shape-ids parent))))
+
+(defn- check-options-props
+  [new-props old-props]
+  (and (= (unchecked-get new-props "shapes")
+          (unchecked-get old-props "shapes"))
+       (= (unchecked-get new-props "shapesWithChildren")
+          (unchecked-get old-props "shapesWithChildren"))
+       (= (unchecked-get new-props "pageId")
+          (unchecked-get old-props "pageId"))
+       (= (unchecked-get new-props "fileId")
+          (unchecked-get old-props "fileId"))))
+
+(mf/defc options*
+  {::mf/wrap [#(mf/memo' % check-options-props)]}
+  [{:keys [shapes shapes-with-children page-id file-id libraries] :as props}]
+  (let [shape-ids
+        (mf/with-memo [shapes]
+          (into #{} d/xf:map-id shapes))
+
+        typographies
+        (mf/deref refs/workspace-file-typography)
+
+        is-layout-child-ref
+        (mf/with-memo [shape-ids]
+          (refs/is-layout-child? shape-ids))
+
+        is-layout-child?
+        (mf/deref is-layout-child-ref)
+
+        is-flex-parent-ref
+        (mf/with-memo [shape-ids]
+          (refs/flex-layout-child? shape-ids))
+
+        is-flex-parent?
+        (mf/deref is-flex-parent-ref)
+
+        is-grid-parent-ref
+        (mf/with-memo [shape-ids]
+          (refs/grid-layout-child? shape-ids))
+
+        is-grid-parent?
+        (mf/deref is-grid-parent-ref)
+
+        has-flex-layout-container?
+        (some ctl/flex-layout? shapes)
+
+        all-layout-child-ref
+        (mf/with-memo [shape-ids]
+          (refs/all-layout-child? shape-ids))
+
+        all-layout-child?
+        (mf/deref all-layout-child-ref)
+
+        all-flex-layout-container?
+        (mf/with-memo [shapes]
+          (every? ctl/flex-layout? shapes))
+
+        show-caps?
+        (mf/with-memo [shapes]
+          (some #(and (cfh/path-shape? %)
+                      (path/shape-with-open-path? %))
+                shapes))
+
+        has-text?
+        (mf/with-memo [shapes]
+          (some cfh/text-shape? shapes))
+
         objects
-        (into {}
-              (filter #(not (is-bool-descendant? % objects shape-ids)))
-              objects)
+        (mf/with-memo [shapes-with-children]
+          (let [objects (d/index-by :id shapes-with-children)]
+            (reduce-kv (fn [objects id object]
+                         (if (is-bool-descendant? objects shape-ids object)
+                           (dissoc objects id)
+                           objects))
+                       objects
+                       objects)))
 
-        workspace-modifiers (mf/deref refs/workspace-modifiers)
-        shapes (map #(gsh/transform-shape % (get-in workspace-modifiers [(:id %) :modifiers])) shapes)
+        [layer-ids layer-values layer-tokens]
+        (get-attrs shapes objects :layer)
 
-        page-id (unchecked-get props "page-id")
-        file-id (unchecked-get props "file-id")
-        shared-libs (unchecked-get props "shared-libs")
+        [text-ids text-values text-tokens]
+        (get-attrs shapes objects :text)
 
-        show-caps (some #(and (= :path (:type %)) (gsh/open-path? %)) shapes)
+        [constraint-ids constraint-values]
+        (get-attrs shapes objects :constraint)
 
-        ;; Selrect/points only used for measures and it's the one that changes the most. We separate it
-        ;; so we can memoize it
-        objects-no-measures (->> objects (d/mapm basic-shape))
-        objects-no-measures (hooks/use-equal-memo objects-no-measures)
+        [fill-ids fill-values fill-tokens]
+        (get-attrs shapes objects :fill)
+
+        [shadow-ids shadow-values]
+        (get-attrs shapes objects :shadow)
+
+        [blur-ids blur-values]
+        (get-attrs shapes objects :blur)
+
+        [stroke-ids stroke-values stroke-tokens]
+        (get-attrs shapes objects :stroke)
+
+        [exports-ids exports-values]
+        (get-attrs shapes objects :exports)
+
+        [layout-container-ids layout-container-values layout-container-tokens]
+        (get-attrs shapes objects :layout-container)
+
+        [layout-item-ids layout-item-values layout-item-tokens]
+        (get-attrs shapes objects :layout-item)
+
+        components
+        (mf/with-memo [shapes]
+          (not-empty (filter ctk/instance-head? shapes)))
+
+        workspace-modifiers
+        (mf/deref refs/workspace-modifiers)
+
+        shapes
+        (mf/with-memo [workspace-modifiers shapes]
+          (into []
+                (map (fn [shape]
+                       (let [shape-id  (dm/get-prop shape :id)
+                             modifiers (dm/get-in workspace-modifiers [shape-id :modifiers])]
+                         (gsh/transform-shape shape modifiers))))
+                shapes))
 
         type :multiple
-        all-types (into #{} (map :type shapes))
 
-        ids (->> shapes (map :id))
-        is-layout-child-ref (mf/use-memo (mf/deps ids) #(refs/is-layout-child? ids))
-        is-layout-child? (mf/deref is-layout-child-ref)
-
-        is-flex-parent-ref (mf/use-memo (mf/deps ids) #(refs/flex-layout-child? ids))
-        is-flex-parent? (mf/deref is-flex-parent-ref)
-
-        is-grid-parent-ref (mf/use-memo (mf/deps ids) #(refs/grid-layout-child? ids))
-        is-grid-parent? (mf/deref is-grid-parent-ref)
-
-        has-text? (contains? all-types :text)
-
-        has-flex-layout-container? (->> shapes (some ctl/flex-layout?))
-
-        all-layout-child-ref (mf/use-memo (mf/deps ids) #(refs/all-layout-child? ids))
-        all-layout-child? (mf/deref all-layout-child-ref)
-
-        all-flex-layout-container? (->> shapes (every? ctl/flex-layout?))
-
-        [measure-ids    measure-values]    (get-attrs shapes objects :measure)
-
-        [layer-ids            layer-values
-         text-ids             text-values
-         constraint-ids       constraint-values
-         fill-ids             fill-values
-         shadow-ids           shadow-values
-         blur-ids             blur-values
-         stroke-ids           stroke-values
-         exports-ids          exports-values
-         layout-container-ids layout-container-values
-         layout-item-ids      layout-item-values]
-        (mf/use-memo
-         (mf/deps shapes objects-no-measures)
-         (fn []
-           (into
-            []
-            (mapcat identity)
-            [(get-attrs shapes objects-no-measures :layer)
-             (get-attrs shapes objects-no-measures :text)
-             (get-attrs shapes objects-no-measures :constraint)
-             (get-attrs shapes objects-no-measures :fill)
-             (get-attrs shapes objects-no-measures :shadow)
-             (get-attrs shapes objects-no-measures :blur)
-             (get-attrs shapes objects-no-measures :stroke)
-             (get-attrs shapes objects-no-measures :exports)
-             (get-attrs shapes objects-no-measures :layout-container)
-             (get-attrs shapes objects-no-measures :layout-item)])))
-
-        components (filter ctk/instance-head? shapes)]
+        ;; NOTE: we only need transformed shapes for the measure menu,
+        ;; the rest of menus can live with shapes not transformed; we
+        ;; also don't use the memoized version of get-attrs because it
+        ;; makes no sense because the shapes object are changed on
+        ;; each rerender.
+        [measure-ids measure-values measure-tokens]
+        (get-attrs* shapes objects :measure)]
 
     [:div {:class (stl/css :options)}
      (when-not (empty? layer-ids)
-       [:& layer-menu {:type type :ids layer-ids :values layer-values}])
+       [:> layer-menu* {:type type
+                        :ids layer-ids
+                        :applied-tokens layer-tokens
+                        :values layer-values}])
 
      (when-not (empty? measure-ids)
-       [:> measures-menu* {:type type :all-types all-types :ids measure-ids :values measure-values :shape shapes}])
+       [:> measures-menu*
+        {:type type
+         :ids measure-ids
+         :values measure-values
+         :applied-tokens measure-tokens
+         :shapes shapes}])
 
-     (when-not (empty? components)
-       [:& component-menu {:shapes components}])
+     (when (some? components)
+       [:> component-menu* {:shapes components}])
 
-     [:& layout-container-menu
+     [:> layout-container-menu*
       {:type type
        :ids layout-container-ids
        :values layout-container-values
+       :applied-tokens layout-container-tokens
        :multiple true}]
 
      (when (or is-layout-child? has-flex-layout-container?)
-       [:& layout-item-menu
+       [:> layout-item-menu*
         {:type type
          :ids layout-item-ids
-         :is-layout-child? all-layout-child?
-         :is-layout-container? all-flex-layout-container?
-         :is-flex-parent? is-flex-parent?
-         :is-grid-parent? is-grid-parent?
+         :is-layout-child all-layout-child?
+         :is-layout-container all-flex-layout-container?
+         :is-flex-parent is-flex-parent?
+         :is-grid-parent is-grid-parent?
+         :applied-tokens layout-item-tokens
          :values layout-item-values}])
 
      (when-not (or (empty? constraint-ids) ^boolean is-layout-child?)
-       [:& constraints-menu {:ids constraint-ids :values constraint-values}])
+       [:> constraints-menu* {:ids constraint-ids :values constraint-values}])
 
      (when-not (empty? text-ids)
-       [:& ot/text-menu {:type type :ids text-ids :values text-values}])
+       [:> ot/text-menu*
+        {:type type
+         :ids text-ids
+         :values text-values
+         :applied-tokens text-tokens
+         :libraries libraries
+         :file-id file-id
+         :typographies typographies}])
 
      (when-not (empty? fill-ids)
-       [:& fill-menu {:type type :ids fill-ids :values fill-values}])
+       [:> fill/fill-menu* {:type type
+                            :ids fill-ids
+                            :values fill-values
+                            :applied-tokens fill-tokens}])
 
      (when-not (empty? stroke-ids)
-       [:& stroke-menu {:type type :ids stroke-ids :show-caps show-caps :values stroke-values
-                        :disable-stroke-style has-text?}])
+       [:> stroke-menu* {:type type
+                         :ids stroke-ids
+                         :show-caps show-caps?
+                         :values stroke-values
+                         :disable-stroke-style has-text?
+                         :applied-tokens stroke-tokens}])
 
      (when-not (empty? shapes)
-       [:& color-selection-menu {:file-id file-id :type type :shapes (vals objects-no-measures) :shared-libs shared-libs}])
+       [:> color-selection-menu*
+        {:file-id file-id
+         :type type
+         :shapes (vals objects)
+         :libraries libraries}])
 
      (when-not (empty? shadow-ids)
-       [:& shadow-menu {:type type :ids shadow-ids :values shadow-values}])
+       [:> shadow-menu* {:type type
+                         :ids shadow-ids
+                         :values (get shadow-values :shadow)}])
 
      (when-not (empty? blur-ids)
-       [:& blur-menu {:type type :ids blur-ids :values blur-values}])
+       [:> blur-menu* {:type type :ids blur-ids :values blur-values}])
 
      (when-not (empty? exports-ids)
-       [:& exports-menu {:type type :ids exports-ids :values exports-values :page-id page-id :file-id file-id}])]))
+       [:> exports-menu* {:type type
+                          :ids exports-ids
+                          :shapes shapes
+                          :values exports-values
+                          :page-id page-id
+                          :file-id file-id}])]))

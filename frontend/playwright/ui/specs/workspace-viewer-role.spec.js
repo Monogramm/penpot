@@ -1,13 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { WorkspacePage } from "../pages/WorkspacePage";
+import { WasmWorkspacePage } from "../pages/WasmWorkspacePage";
 import { presenceFixture } from "../../data/workspace/ws-notifications";
 
 test.beforeEach(async ({ page }) => {
-  await WorkspacePage.init(page);
+  await WasmWorkspacePage.init(page);
 
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
-  await WorkspacePage.mockRPC(page, "get-teams", "get-teams-role-viewer.json");
+  await WasmWorkspacePage.mockRPC(page, "get-teams", "get-teams-role-viewer.json");
 
   await workspacePage.goToWorkspace();
 });
@@ -18,7 +18,7 @@ test("User haven't toolbar", async ({ page }) => {
 });
 
 test("User haven't edition menu entries", async ({ page }) => {
-  await page.getByTitle("main menu").click();
+  await page.getByRole("button", { name: "Main menu" }).click();
   await page.getByText("file").last().click();
 
   await expect(page.getByText("Add as Shared Library")).toBeHidden();

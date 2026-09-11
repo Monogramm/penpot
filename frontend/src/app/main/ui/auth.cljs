@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.auth
   (:require-macros [app.main.style :as stl])
@@ -10,24 +10,31 @@
    [app.common.data.macros :as dm]
    [app.main.data.auth :as da]
    [app.main.store :as st]
-   [app.main.ui.auth.login :refer [login-page]]
-   [app.main.ui.auth.recovery :refer [recovery-page]]
-   [app.main.ui.auth.recovery-request :refer [recovery-request-page]]
-   [app.main.ui.auth.register :refer [register-page register-success-page register-validate-page terms-register]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.auth.login :refer [login-page*]]
+   [app.main.ui.auth.recovery :refer [recovery-page*]]
+   [app.main.ui.auth.recovery-request :refer [recovery-request-page*]]
+   [app.main.ui.auth.register :refer [register-page* register-success-page* register-validate-page* terms-service-privacy-policy*]]
+   [app.main.ui.ds.foundations.assets.raw-svg :refer [raw-svg*] :as raw-svg]
+   [app.main.ui.ds.foundations.typography.heading :refer [heading*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [rumext.v2 :as mf]))
 
-(mf/defc auth
-  {::mf/props :obj}
+(mf/defc auth*
   [{:keys [route]}]
-  (let [section (dm/get-in route [:data :name])
-        show-login-icon (and
-                         (not= section :auth-register-validate)
-                         (not= section :auth-register-success))
-        params  (:query-params route)
-        error   (:error params)]
+  (let [section
+        (dm/get-in route [:data :name])
+
+        is-register
+        (or (= section :auth-register)
+            (= section :auth-register-validate)
+            (= section :register-validate-page)
+            (= section :auth-register-success))
+        params
+        (:query-params route)
+
+        error
+        (:error params)]
 
     (mf/with-effect []
       (dom/set-html-title (tr "title.default")))
@@ -36,33 +43,41 @@
       (when error
         (st/emit! (da/show-redirect-error error))))
 
-    [:main {:class (stl/css :auth-section)}
-     (when show-login-icon
-       [:h1 {:class (stl/css :logo-container)}
-        [:a {:href "#/" :title "Penpot" :class (stl/css :logo-btn)} i/logo]])
+    [:main {:class (stl/css-case
+                    :auth-section true
+                    :register is-register)}
+     [:> heading* {:level 1 :typography "title-large" :class (stl/css :logo-container)}
+      [:a {:href "#/" :title "Penpot" :class (stl/css :logo-btn)}
+       [:> raw-svg* {:id raw-svg/penpot-logo
+                     :class (stl/css :logo)}]]]
      [:div {:class (stl/css :login-illustration)}
-      i/login-illustration]
+      [:img {:src "images/registration-illustration.png"}]]
 
      [:section {:class (stl/css :auth-content)}
-
       (case section
         :auth-register
-        [:& register-page {:params params}]
-
-        :auth-register-validate
-        [:& register-validate-page {:params params}]
+        [:> register-page* {:params params}]
 
         :auth-register-success
-        [:& register-success-page {:params params}]
+        [:> register-success-page* {:params params}]
+
+        :auth-register-validate
+        [:> register-validate-page* {:params params}]
 
         :auth-login
-        [:& login-page {:params params}]
+        [:> login-page* {:params params}]
 
         :auth-recovery-request
-        [:& recovery-request-page]
+        [:> recovery-request-page*]
 
         :auth-recovery
-        [:& recovery-page {:params params}])
+        [:> recovery-page* {:params params}])
 
       (when (= section :auth-register)
-        [:& terms-register])]]))
+        [:> terms-service-privacy-policy*])]]))
+
+
+(mf/defc auth-page*
+  {::mf/lazy-load true}
+  [props]
+  [:> auth* props])

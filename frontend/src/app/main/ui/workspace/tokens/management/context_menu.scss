@@ -1,0 +1,118 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) KALEIDOS SUBSIDIARY SL
+
+@use "ds/_borders.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/_utils.scss" as *;
+@use "ds/typography.scss" as *;
+
+.menu-wrapper {
+  position: absolute;
+  z-index: var(--z-index-dropdown);
+}
+
+.menu-wrapper[data-direction="up"] {
+  bottom: var(--bottom);
+}
+
+.menu-wrapper[data-direction="down"] {
+  top: var(--top);
+}
+
+.menu,
+.submenu {
+  box-shadow: 0 0 px2rem(12) 0 var(--color-shadow-dark);
+  display: grid;
+  inline-size: px2rem(240);
+  padding: var(--sp-xs);
+  border-radius: $br-8;
+  border: $b-2 solid var(--color-background-quaternary);
+  background-color: var(--color-background-tertiary);
+  max-block-size: 100vh;
+  overflow-y: auto;
+}
+
+.submenu {
+  display: none;
+  position: absolute;
+  padding: var(--sp-xs);
+  margin-inline-start: px2rem(6);
+}
+
+.submenu-top {
+  inset-block-end: px2rem(80);
+}
+
+.separator {
+  margin: px2rem(6);
+  border-block-start: $b-1 solid var(--color-background-quaternary);
+}
+
+.menu-item {
+  --menu-item-bg-color: none;
+  --menu-item-fg-color: var(--color-foreground-primary);
+  --menu-item-border-color: none;
+  --menu-item-icon-color: none;
+
+  @include use-typography("body-small");
+
+  cursor: default;
+  display: flex;
+  align-items: center;
+  block-size: $sz-32;
+  inline-size: 100%;
+  padding: var(--sp-s);
+  border-radius: $br-8;
+  color: var(--menu-item-fg-color);
+  background-color: var(--menu-item-bg-color);
+  border: $b-1 solid var(--menu-item-border-color);
+
+  &:hover {
+    --menu-item-bg-color: var(--color-background-quaternary);
+  }
+
+  &:focus {
+    --menu-item-bg-color: var(--color-background-tertiary);
+    --menu-item-border-color: var(--color-background-tertiary);
+  }
+
+  &.selected {
+    --menu-item-icon-color: var(--color-accent-primary);
+  }
+
+  &.unselected {
+    --menu-item-fg-color: var(--color-foreground-secondary);
+    --menu-item-icon-color: var(--color-background-quaternary);
+
+    &:hover {
+      --menu-item-fg-color: var(--color-foreground-primary);
+      --menu-item-icon-color: var(--color-foreground-secondary);
+    }
+  }
+
+  &.hint {
+    position: relative;
+  }
+}
+
+.menu-item-hint {
+  position: absolute;
+  background-color: var(--color-background-primary);
+  border-radius: $br-6;
+  padding: var(--sp-xs);
+  inset-inline-end: var(--sp-xs);
+  inset-block-start: var(--sp-xs);
+  color: var(--color-foreground-secondary);
+}
+
+.menu-item-text {
+  flex-grow: 1;
+}
+
+.menu-item-icon {
+  color: var(--menu-item-icon-color);
+  margin-inline-end: var(--sp-xs);
+}

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.tasks.file-gc
   "A maintenance task that is responsible of: purge unused file media,
@@ -10,85 +10,68 @@
   file is eligible to be garbage collected after some period of
   inactivity (the default threshold is 72h)."
   (:require
+   [app.binfile.cleaner :as bfl]
+   [app.binfile.common :as bfc]
    [app.common.files.helpers :as cfh]
-   [app.common.files.migrations :as fmg]
    [app.common.files.validate :as cfv]
    [app.common.logging :as l]
    [app.common.thumbnails :as thc]
+   [app.common.time :as ct]
    [app.common.types.components-list :as ctkl]
    [app.common.types.file :as ctf]
    [app.common.types.shape-tree :as ctt]
    [app.config :as cf]
    [app.db :as db]
    [app.features.fdata :as feat.fdata]
+   [app.features.file-snapshots :as fsnap]
    [app.storage :as sto]
-   [app.util.blob :as blob]
-   [app.util.pointer-map :as pmap]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [integrant.core :as ig]))
 
-(declare ^:private get-file)
-(declare ^:private decode-file)
-(declare ^:private persist-file!)
-
-(def ^:private sql:get-snapshots
-  "SELECT f.file_id AS id,
-          f.data,
-          f.revn,
-          f.version,
-          f.features,
-          f.data_backend,
-          f.data_ref_id
-     FROM file_change AS f
-    WHERE f.file_id = ?
-      AND f.data IS NOT NULL
-    ORDER BY f.created_at ASC")
+(declare get-file)
 
 (def ^:private sql:mark-file-media-object-deleted
   "UPDATE file_media_object
-      SET deleted_at = now()
+      SET deleted_at = ?
     WHERE file_id = ? AND id != ALL(?::uuid[])
    RETURNING id")
 
-(def ^:private xf:collect-used-media
+(def xf:collect-used-media
   (comp
    (map :data)
    (mapcat cfh/collect-used-media)))
 
 (defn- clean-file-media!
   "Performs the garbage collection of file media objects."
-  [{:keys [::db/conn] :as cfg} {:keys [id] :as file}]
-  (let [xform  (comp
-                (map (partial decode-file cfg))
-                xf:collect-used-media)
+  [{:keys [::db/conn ::timestamp] :as cfg} {:keys [id] :as file}]
+  (let [used-media
+        (fsnap/reduce-snapshots cfg id xf:collect-used-media conj #{})
 
-        used   (->> (db/plan conn [sql:get-snapshots id])
-                    (transduce xform conj #{}))
-        used   (into used xf:collect-used-media [file])
+        used-media
+        (into used-media xf:collect-used-media [file])
 
-        ids    (db/create-array conn "uuid" used)
-        unused (->> (db/exec! conn [sql:mark-file-media-object-deleted id ids])
-                    (into #{} (map :id)))]
+        used-media
+        (db/create-array conn "uuid" used-media)
 
-    (l/dbg :hint "clean" :rel "file-media-object" :file-id (str id) :total (count unused))
+        unused-media
+        (->> (db/exec! conn [sql:mark-file-media-object-deleted timestamp id used-media])
+             (into #{} (map :id)))]
 
-    (doseq [id unused]
-      (l/trc :hint "mark deleted"
-             :rel "file-media-object"
-             :id (str id)
-             :file-id (str id)))
+    (doseq [id unused-media]
+      (l/trc :obj "media-object"
+             :file-id (str id)
+             :id (str id)))
 
     file))
 
 (def ^:private sql:mark-file-object-thumbnails-deleted
   "UPDATE file_tagged_object_thumbnail
-      SET deleted_at = now()
+      SET deleted_at = ?
     WHERE file_id = ? AND object_id != ALL(?::text[])
    RETURNING object_id")
 
 (defn- clean-file-object-thumbnails!
-  [{:keys [::db/conn]} {:keys [data] :as file}]
+  [{:keys [::db/conn ::timestamp]} {:keys [data] :as file}]
   (let [file-id (:id file)
         using   (->> (vals (:pages-index data))
                      (into #{} (comp
@@ -100,56 +83,42 @@
                                            (thc/fmt-object-id file-id page-id id "frame")
                                            (thc/fmt-object-id file-id page-id id "component")))))))
 
-        ids    (db/create-array conn "text" using)
-        unused (->> (db/exec! conn [sql:mark-file-object-thumbnails-deleted file-id ids])
+        ids    (into-array String using)
+        unused (->> (db/exec! conn [sql:mark-file-object-thumbnails-deleted timestamp file-id ids])
                     (into #{} (map :object-id)))]
 
-    (l/dbg :hint "clean" :rel "file-object-thumbnail" :file-id (str file-id) :total (count unused))
-
     (doseq [object-id unused]
-      (l/trc :hint "mark deleted"
-             :rel "file-tagged-object-thumbnail"
-             :object-id object-id
-             :file-id (str file-id)))
+      (l/trc :obj "object-thumbnail"
+             :file-id (str file-id)
+             :id object-id))
 
     file))
 
 (def ^:private sql:mark-file-thumbnails-deleted
   "UPDATE file_thumbnail
-      SET deleted_at = now()
+      SET deleted_at = ?
     WHERE file_id = ? AND revn < ?
    RETURNING revn")
 
 (defn- clean-file-thumbnails!
-  [{:keys [::db/conn]} {:keys [id revn] :as file}]
-  (let [unused (->> (db/exec! conn [sql:mark-file-thumbnails-deleted id revn])
+  [{:keys [::db/conn ::timestamp]} {:keys [id revn] :as file}]
+  (let [unused (->> (db/exec! conn [sql:mark-file-thumbnails-deleted timestamp id revn])
                     (into #{} (map :revn)))]
 
-    (l/dbg :hint "clean" :rel "file-thumbnail" :file-id (str id) :total (count unused))
-
     (doseq [revn unused]
-      (l/trc :hint "mark deleted"
-             :rel "file-thumbnail"
-             :revn revn
-             :file-id (str id)))
+      (l/trc :obj "thumbnail"
+             :file-id (str id)
+             :revn revn))
 
     file))
 
 (def ^:private sql:get-files-for-library
-  "SELECT f.id,
-          f.data,
-          f.modified_at,
-          f.features,
-          f.version,
-          f.data_backend,
-          f.data_ref_id
+  "SELECT f.id
      FROM file AS f
      LEFT JOIN file_library_rel AS fl ON (fl.file_id = f.id)
     WHERE fl.library_file_id = ?
       AND f.deleted_at IS null
     ORDER BY f.modified_at ASC")
-
-(def ^:private xf:map-id (map :id))
 
 (defn- get-used-components
   "Given a file and a set of components marked for deletion, return a
@@ -165,149 +134,106 @@
         deleted-components
         (ctkl/deleted-components-seq data)
 
-        xform
+        file-xform
         (mapcat (partial get-used-components deleted-components file-id))
 
+        library-xform
+        (comp
+         (map :id)
+         (map #(bfc/get-file cfg % :realize? true :read-only? true))
+         file-xform)
+
         used-remote
-        (->> (db/plan conn [sql:get-files-for-library file-id])
-             (transduce (comp (map (partial decode-file cfg)) xform) conj #{}))
+        (->> (db/plan conn [sql:get-files-for-library file-id] {:fetch-size 1})
+             (transduce library-xform conj #{}))
 
         used-local
-        (into #{} xform [file])
+        (into #{} file-xform [file])
 
         unused
-        (transduce xf:map-id disj
-                   (into #{} xf:map-id deleted-components)
+        (transduce bfc/xf-map-id disj
+                   (into #{} bfc/xf-map-id deleted-components)
                    (concat used-remote used-local))
 
         file
         (update file :data
                 (fn [data]
                   (reduce (fn [data id]
-                            (l/trc :hint "delete component"
-                                   :component-id (str id)
-                                   :file-id (str file-id))
+                            (l/trc :obj "component"
+                                   :file-id (str file-id)
+                                   :id (str id))
                             (ctkl/delete-component data id))
                           data
                           unused)))]
 
-    (l/dbg :hint "clean" :rel "components" :file-id (str file-id) :total (count unused))
     file))
 
 (def ^:private sql:mark-deleted-data-fragments
-  "UPDATE file_data_fragment
-      SET deleted_at = now()
+  "UPDATE file_data
+      SET deleted_at = ?
     WHERE file_id = ?
       AND id != ALL(?::uuid[])
+      AND type = 'fragment'
       AND deleted_at IS NULL
    RETURNING id")
 
 (def ^:private xf:collect-pointers
   (comp (map :data)
-        (map blob/decode)
         (mapcat feat.fdata/get-used-pointer-ids)))
 
-(defn- clean-data-fragments!
-  [{:keys [::db/conn]} {:keys [id] :as file}]
+(defn- clean-fragments!
+  [{:keys [::db/conn ::timestamp]} {:keys [id] :as file}]
   (let [used   (into #{} xf:collect-pointers [file])
+        unused (->> (db/exec! conn [sql:mark-deleted-data-fragments timestamp id
+                                    (db/create-array conn "uuid" used)])
+                    (into #{} bfc/xf-map-id))]
 
-        unused (let [ids (db/create-array conn "uuid" used)]
-                 (->> (db/exec! conn [sql:mark-deleted-data-fragments id ids])
-                      (into #{} (map :id))))]
-
-    (l/dbg :hint "clean" :rel "file-data-fragment" :file-id (str id) :total (count unused))
     (doseq [id unused]
-      (l/trc :hint "mark deleted"
-             :rel "file-data-fragment"
-             :id (str id)
-             :file-id (str id)))))
+      (l/trc :obj "fragment"
+             :file-id (str id)
+             :id (str id)))
+
+    file))
 
 (defn- clean-media!
   [cfg file]
   (let [file (->> file
+                  (clean-deleted-components! cfg)
                   (clean-file-media! cfg)
                   (clean-file-thumbnails! cfg)
-                  (clean-file-object-thumbnails! cfg)
-                  (clean-deleted-components! cfg))]
+                  (clean-file-object-thumbnails! cfg))]
     (cfv/validate-file-schema! file)
     file))
 
-(def ^:private sql:get-file
-  "SELECT f.id,
-          f.data,
-          f.revn,
-          f.version,
-          f.features,
-          f.modified_at,
-          f.data_backend,
-          f.data_ref_id
-     FROM file AS f
-    WHERE f.has_media_trimmed IS false
-      AND f.modified_at < now() - ?::interval
-      AND f.deleted_at IS NULL
-      AND f.id = ?
-      FOR UPDATE
-     SKIP LOCKED")
+(defn get-file
+  [cfg {:keys [file-id revn]}]
+  (let [file (bfc/get-file cfg file-id
+                           :realize? true
+                           :skip-locked? true
+                           :lock-for-update? true)]
 
-(defn- get-file
-  [{:keys [::db/conn ::min-age ::file-id]}]
-  (->> (db/exec! conn [sql:get-file min-age file-id])
-       (first)))
+    ;; We should ensure that the scheduled file and the procesing file
+    ;; has not changed since schedule, for this reason we check the
+    ;; revn from props with the revn from retrieved file from database
+    (when (or (nil? revn) (= revn (:revn file)))
+      file)))
 
-(defn- decode-file
-  [cfg {:keys [id] :as file}]
-  (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-    (-> (feat.fdata/resolve-file-data cfg file)
-        (update :features db/decode-pgarray #{})
-        (update :data blob/decode)
-        (update :data feat.fdata/process-pointers deref)
-        (update :data feat.fdata/process-objects (partial into {}))
-        (update :data assoc :id id)
-        (fmg/migrate-file))))
-
-(defn- persist-file!
-  [{:keys [::db/conn ::sto/storage] :as cfg} {:keys [id] :as file}]
-  (let [file (if (contains? (:features file) "fdata/objects-map")
-               (feat.fdata/enable-objects-map file)
-               file)
-
-        file (if (contains? (:features file) "fdata/pointer-map")
-               (binding [pmap/*tracked* (pmap/create-tracked)]
-                 (let [file (feat.fdata/enable-pointer-map file)]
-                   (feat.fdata/persist-pointers! cfg id)
-                   file))
-               file)
-
-        file (-> file
-                 (update :features db/encode-pgarray conn "text")
-                 (update :data blob/encode))]
-
-    ;; If file was already offloaded, we touch the underlying storage
-    ;; object for properly trigger storage-gc-touched task
-    (when (feat.fdata/offloaded? file)
-      (some->> (:data-ref-id file) (sto/touch-object! storage)))
-
-    (db/update! conn :file
-                {:has-media-trimmed true
-                 :features (:features file)
-                 :version (:version file)
-                 :data (:data file)
-                 :data-backend nil
-                 :data-ref-id nil}
-                {:id id}
-                {::db/return-keys true})))
+;; FIXME: we should skip files that does not match the revn on the
+;; props and add proper schema for this task props
 
 (defn- process-file!
-  [cfg]
-  (if-let [file (get-file cfg)]
-    (let [file (decode-file cfg file)
-          file (clean-media! cfg file)
-          file (persist-file! cfg file)]
-      (clean-data-fragments! cfg file)
+  [cfg {:keys [file-id] :as props}]
+  (if-let [file (get-file cfg props)]
+    (let [file (->> file
+                    (bfl/clean-file)
+                    (clean-media! cfg)
+                    (clean-fragments! cfg))
+          file (assoc file :has-media-trimmed true)]
+      (bfc/update-file! cfg file)
       true)
 
     (do
-      (l/dbg :hint "skip" :file-id (str (::file-id cfg)))
+      (l/dbg :hint "skip cleaning, criteria does not match" :file-id (str file-id))
       false)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -322,26 +248,20 @@
 (defmethod ig/init-key ::handler
   [_ cfg]
   (fn [{:keys [props] :as task}]
-    (let [min-age (dt/duration (or (:min-age props)
-                                   (cf/get-deletion-delay)))
-          cfg     (-> cfg
-                      (assoc ::db/rollback (:rollback? props))
-                      (assoc ::file-id (:file-id props))
-                      (assoc ::min-age (db/interval min-age)))]
-
-      (try
-        (db/tx-run! cfg (fn [{:keys [::db/conn] :as cfg}]
-                          (let [cfg        (update cfg ::sto/storage sto/configure conn)
-                                processed? (process-file! cfg)]
-                            (when (and processed? (contains? cf/flags :tiered-file-data-storage))
-                              (wrk/submit! (-> cfg
-                                               (assoc ::wrk/task :offload-file-data)
-                                               (assoc ::wrk/params props)
-                                               (assoc ::wrk/priority 10)
-                                               (assoc ::wrk/delay 1000))))
-                            processed?)))
-
-        (catch Throwable cause
-          (l/err :hint "error on cleaning file"
-                 :file-id (str (:file-id props))
-                 :cause cause))))))
+    (try
+      (-> cfg
+          (assoc ::db/rollback (:rollback? props))
+          (assoc ::timestamp (ct/now))
+          (db/tx-run! (fn [cfg]
+                        (let [processed? (process-file! cfg props)]
+                          (when (and processed? (contains? cf/flags :tiered-file-data-storage))
+                            (wrk/submit! (-> cfg
+                                             (assoc ::wrk/task :offload-file-data)
+                                             (assoc ::wrk/params props)
+                                             (assoc ::wrk/priority 10)
+                                             (assoc ::wrk/delay 1000))))
+                          processed?))))
+      (catch Throwable cause
+        (l/err :hint "error on cleaning file"
+               :file-id (str (:file-id props))
+               :cause cause)))))

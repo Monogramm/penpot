@@ -2,18 +2,18 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.shapes.text.editor
   (:require
-   ["draft-js" :as draft]
+   ["@penpot/draft-js" :as draft]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.geom.point :as gpt]
    [app.common.geom.shapes :as gsh]
    [app.common.geom.shapes.text :as gst]
    [app.common.math :as mth]
-   [app.common.text :as txt]
+   [app.common.text :as legacy.txt]
    [app.config :as cf]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.texts :as dwt]
@@ -61,11 +61,11 @@
       nil)))
 
 (defn- styles-fn [shape styles content]
-  (let [data (if (= (.getText ^js content) "")
+  (let [data (if (and content (= (.getText ^js content) ""))
                (-> ^js (.getData content)
                    (.toJS)
                    (js->clj :keywordize-keys true))
-               (txt/styles-to-attrs styles))]
+               (legacy.txt/styles-to-attrs styles))]
     (sts/generate-text-styles shape data {:show-text? false})))
 
 (def default-decorator
@@ -221,13 +221,19 @@
 
         handle-pasted-text
         (fn [text _ _]
-          (let [current-block-styles (ted/get-editor-current-block-data state)
-                inline-styles        (ted/get-editor-current-inline-styles state)
-                style                (merge current-block-styles inline-styles)
-                state                (-> (ted/insert-text state text style)
-                                         (handle-change))]
-            (st/emit! (dwt/update-editor-state shape state)))
-          "handled")]
+          (when (seq text)
+            (let [current-block-styles (ted/get-editor-current-block-data state)
+                  inline-styles        (ted/get-editor-current-inline-styles state)
+                  style                (merge current-block-styles inline-styles)
+                  state                (-> (ted/insert-text state text style)
+                                           (handle-change))]
+              (st/emit! (dwt/update-editor-state shape state))))
+          "handled")
+
+        handle-drop
+        (fn [_ _ drag-type]
+          (when (= drag-type "internal")
+            "handled"))]
 
     (mf/use-layout-effect on-mount)
 
@@ -252,6 +258,7 @@
        :handle-return handle-return
        :strip-pasted-styles true
        :handle-pasted-text handle-pasted-text
+       :handle-drop handle-drop
        :custom-style-fn (partial styles-fn shape)
        :block-renderer-fn #(render-block % shape)
        :ref on-editor

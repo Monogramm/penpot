@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.comments
   (:require
@@ -10,12 +10,16 @@
    [app.common.data.macros :as dm]
    [app.common.geom.point :as gpt]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.types.shape-tree :as ctst]
    [app.common.uuid :as uuid]
    [app.main.data.event :as ev]
    [app.main.data.helpers :as dsh]
+   [app.main.data.notifications :as ntf]
    [app.main.data.team :as dtm]
    [app.main.repo :as rp]
+   [app.util.i18n :as i18n :refer [tr]]
+   [app.util.storage :as storage]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
 
@@ -33,8 +37,8 @@
    [:seqn :int]
    [:content :string]
    [:participants ::sm/set-of-uuid]
-   [:created-at ::sm/inst]
-   [:modified-at ::sm/inst]
+   [:created-at ::ct/inst]
+   [:modified-at ::ct/inst]
    [:position ::gpt/point]
    [:count-unread-comments {:optional true} :int]
    [:count-comments {:optional true} :int]])
@@ -47,8 +51,8 @@
    [:owner-id ::sm/uuid]
    [:owner-fullname {:optional true} ::sm/text]
    [:owner-email {:optional true} ::sm/email]
-   [:created-at ::sm/inst]
-   [:modified-at ::sm/inst]
+   [:created-at ::ct/inst]
+   [:modified-at ::ct/inst]
    [:content :string]])
 
 (def check-comment-thread!
@@ -67,7 +71,7 @@
   "Retrieves the mentions in the content as an array of uuids"
   [content]
   (->> (re-seq r-mentions content)
-       (mapv (fn [[_ _ id]] (uuid/uuid id)))))
+       (mapv (fn [[_ _ id]] (uuid/parse id)))))
 
 (defn update-mentions
   "Updates the params object with the mentiosn"
@@ -90,16 +94,16 @@
                (update :comments-local assoc :open id))
              (update :comments-local assoc :options nil)
              (update :comments-local dissoc :draft)
-             (update :workspace-drawing dissoc :comment)
              (update-in [:comments id] assoc (:id comment) comment))))
 
      ptk/WatchEvent
-     (watch [_ _ _]
-       (rx/of (ptk/data-event ::ev/event
-                              {::ev/name "create-comment-thread"
-                               ::ev/origin "workspace"
-                               :id id
-                               :content-size (count (:content comment))}))))))
+     (watch [it _ _]
+       (rx/of (ev/event
+               (merge {::ev/name "create-comment-thread"
+                       ::ev/origin "workspace"
+                       :id id
+                       :content-size (count (:content comment))}
+                      (meta it))))))))
 
 (def ^:private
   schema:create-thread-on-workspace
@@ -117,7 +121,7 @@
 
    (ptk/reify ::create-thread-on-workspace
      ptk/WatchEvent
-     (watch [_ state _]
+     (watch [it state _]
        (let [page-id (:current-page-id state)
              objects (dsh/lookup-page-objects state page-id)
              frame-id (ctst/get-frame-id-by-position objects (:position params))
@@ -127,7 +131,10 @@
          (->> (rp/cmd! :create-comment-thread params)
               (rx/mapcat #(rp/cmd! :get-comment-thread {:file-id (:file-id %) :id (:id %)}))
               (rx/tap on-thread-created)
-              (rx/map #(created-thread-on-workspace % open?))
+              (rx/map
+               (fn [data]
+                 (-> (created-thread-on-workspace data open?)
+                     (with-meta (meta it)))))
               (rx/catch (fn [{:keys [type code] :as cause}]
                           (if (and (= type :restriction)
                                    (= code :max-quote-reached))
@@ -146,16 +153,15 @@
             (update :comments-local assoc :open id)
             (update :comments-local assoc :options nil)
             (update :comments-local dissoc :draft)
-            (update :workspace-drawing dissoc :comment)
             (update-in [:comments id] assoc (:id comment) comment))))
 
     ptk/WatchEvent
     (watch [_ _ _]
-      (rx/of (ptk/data-event ::ev/event
-                             {::ev/name "create-comment-thread"
-                              ::ev/origin "viewer"
-                              :id id
-                              :content-size (count (:content comment))})))))
+      (rx/of (ev/event
+              {::ev/name "create-comment-thread"
+               ::ev/origin "viewer"
+               :id id
+               :content-size (count (:content comment))})))))
 
 (def ^:private
   schema:create-thread-on-viewer
@@ -215,11 +221,13 @@
       (d/update-in-when state [:comment-threads id] assoc :is-resolved is-resolved))
 
     ptk/WatchEvent
-    (watch [_ state _]
+    (watch [it state _]
       (let [share-id (-> state :viewer-local :share-id)]
         (rx/concat
-         (when is-resolved (rx/of
-                            (ptk/event ::ev/event {::ev/name "resolve-comment-thread" :thread-id id})))
+         (when is-resolved
+           (rx/of (ev/event
+                   (-> {::ev/name "resolve-comment-thread" :thread-id id}
+                       (merge (meta it))))))
          (->> (rp/cmd! :update-comment-thread {:id id :is-resolved is-resolved :share-id share-id})
               (rx/catch (fn [{:keys [type code] :as cause}]
                           (if (and (= type :restriction)
@@ -308,16 +316,18 @@
            (update :comment-threads dissoc id)))
 
      ptk/WatchEvent
-     (watch [_ _ _]
+     (watch [it _ _]
        (rx/concat
         (->> (rp/cmd! :delete-comment-thread {:id id})
              (rx/catch #(rx/throw {:type :comment-error}))
              (rx/tap on-delete)
              (rx/ignore))
-        (rx/of (ptk/data-event ::ev/event
-                               {::ev/name "delete-comment-thread"
-                                ::ev/origin "workspace"
-                                :id id})))))))
+        (rx/of (ev/event
+                (merge
+                 {::ev/name "delete-comment-thread"
+                  ::ev/origin "workspace"
+                  :id id}
+                 (meta it)))))))))
 
 (defn delete-comment-thread-on-viewer
   [{:keys [id] :as thread}]
@@ -340,10 +350,10 @@
          (->> (rp/cmd! :delete-comment-thread {:id id :share-id share-id})
               (rx/catch #(rx/throw {:type :comment-error}))
               (rx/ignore))
-         (rx/of (ptk/data-event ::ev/event
-                                {::ev/name "delete-comment-thread"
-                                 ::ev/origin "viewer"
-                                 :id id})))))))
+         (rx/of (ev/event
+                 {::ev/name "delete-comment-thread"
+                  ::ev/origin "viewer"
+                  :id id})))))))
 (defn delete-comment
   [{:keys [id thread-id] :as comment}]
   (dm/assert!
@@ -404,6 +414,10 @@
 (defn retrieve-comment-threads
   [file-id]
   (ptk/reify ::retrieve-comment-threads
+    ptk/UpdateEvent
+    (update [_ state]
+      (dissoc state :comment-threads))
+
     ptk/WatchEvent
     (watch [_ state _]
       (let [share-id (-> state :viewer-local :share-id)]
@@ -411,8 +425,8 @@
          (->> (rp/cmd! :get-comment-threads {:file-id file-id :share-id share-id})
               (rx/map comment-threads-fetched))
 
-         ;; Refresh team members
-         (rx/of (dtm/fetch-members)))))))
+         (when (:workspace-local state)
+           (rx/of (dtm/fetch-members))))))))
 
 (defn retrieve-comments
   [thread-id]
@@ -450,6 +464,26 @@
                       (rx/map #(partial fetched-users %))))))
              (rx/catch #(rx/throw {:type :comment-error})))))))
 
+(defn mark-all-threads-as-read
+  "Mark all threads as read"
+  [team-id]
+  (ptk/reify ::mark-all-threads-as-read
+    ev/Event
+    (-data [_] {})
+    ptk/WatchEvent
+    (watch [_ state _]
+      (let [threads (-> state :comment-threads vals)]
+        (rx/concat
+         (->> (rp/cmd! :mark-all-threads-as-read {:threads (mapv :id threads)})
+              (rx/map #(retrieve-unread-comment-threads team-id))
+              (rx/catch #(rx/throw {:type :comment-error})))
+         (rx/of (ntf/show {:level :info
+                           :type :toast
+                           :content (tr "dashboard.mark-all-as-read.success")
+                           :timeout 7000})))))))
+
+
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Local State
@@ -470,7 +504,7 @@
       (-> state
           (update :comments-local assoc :open id)
           (update :comments-local assoc :options nil)
-          (update :workspace-drawing dissoc :comment)))))
+          (update :comments-local dissoc :draft :expanded)))))
 
 (defn close-thread
   []
@@ -478,8 +512,54 @@
     ptk/UpdateEvent
     (update [_ state]
       (-> state
-          (update :comments-local dissoc :open :draft :options)
-          (update :workspace-drawing dissoc :comment)))))
+          (update :comments-local dissoc :open :draft :options :expanded)))))
+
+(defn expand-comment-group
+  "Temporarily mark a proximity cluster of threads as expanded so its bubbles
+   can be laid out visually without altering their stored positions."
+  [thread-ids]
+  (ptk/reify ::expand-comment-group
+    ptk/UpdateEvent
+    (update [_ state]
+      (-> state
+          (update :comments-local assoc :expanded (set thread-ids))
+          (update :comments-local dissoc :open :draft :options)))))
+
+(defn collapse-comment-group
+  []
+  (ptk/reify ::collapse-comment-group
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :comments-local dissoc :expanded))))
+
+(def ^:private hide-resolved-comments-storage-key
+  :app.main.data.comments/hide-resolved-comments?)
+
+(defn- load-hide-resolved-comments?
+  []
+  (= true (get @storage/user hide-resolved-comments-storage-key)))
+
+(defn- persist-hide-resolved-comments!
+  [hide?]
+  (swap! storage/user assoc hide-resolved-comments-storage-key hide?))
+
+(defn merge-persisted-filters
+  "Merge persisted hide-resolved preference into comments local state."
+  [local]
+  (let [local (or local {})]
+    (if (contains? local :show)
+      local
+      (assoc local :show (if (load-hide-resolved-comments?)
+                           :pending
+                           :all)))))
+
+(defn initialize-comments-filters
+  "Load persisted comment filter preferences into `:comments-local`."
+  []
+  (ptk/reify ::initialize-comments-filters
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :comments-local merge-persisted-filters))))
 
 (defn update-filters
   [{:keys [mode show list] :as params}]
@@ -496,7 +576,12 @@
                   (assoc :show show)
 
                   (some? list)
-                  (assoc :list list)))))))
+                  (assoc :list list)))))
+
+    ptk/EffectEvent
+    (effect [_ _ _]
+      (when (some? show)
+        (persist-hide-resolved-comments! (= :pending show))))))
 
 (defn update-options
   [params]
@@ -520,7 +605,6 @@
     ptk/UpdateEvent
     (update [_ state]
       (-> state
-          (update :workspace-drawing assoc :comment params)
           (update :comments-local assoc :draft params)))))
 
 (defn update-draft-thread
@@ -529,7 +613,6 @@
     ptk/UpdateEvent
     (update [_ state]
       (-> state
-          (d/update-in-when [:workspace-drawing :comment] merge data)
           (d/update-in-when [:comments-local :draft] merge data)))))
 
 (defn toggle-comment-options
@@ -627,9 +710,7 @@
 (defn detach-comment-thread
   "Detach comment threads that are inside a frame when that frame is deleted"
   [ids]
-  (dm/assert!
-   "expected a valid coll of uuid's"
-   (sm/check-coll-of-uuid! ids))
+  (assert (sm/check-coll-of-uuid ids))
 
   (ptk/reify ::detach-comment-thread
     ptk/WatchEvent

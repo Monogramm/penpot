@@ -2,21 +2,24 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.http.websocket
   "A penpot notification service for file cooperative edition."
   (:require
+   [app.binfile.common :as bfc]
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [app.common.pprint :as pp]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [app.db :as db]
    [app.http.session :as session]
    [app.metrics :as mtx]
    [app.msgbus :as mbus]
-   [app.util.time :as dt]
+   [app.rpc.commands.files :as files]
+   [app.rpc.commands.teams :as teams]
    [app.util.websocket :as ws]
    [integrant.core :as ig]
    [promesa.exec.csp :as sp]
@@ -131,8 +134,9 @@
       (mbus/pub! msgbus :topic topic :message msg))))
 
 (defmethod handle-message :subscribe-team
-  [{:keys [::mbus/msgbus]} {:keys [::ws/id ::ws/state ::ws/output-ch ::session-id]} {:keys [team-id] :as params}]
+  [{:keys [::mbus/msgbus ::db/pool]} {:keys [::ws/id ::ws/state ::ws/output-ch ::session-id ::profile-id]} {:keys [team-id] :as params}]
   (l/trace :fn "handle-message" :event "subscribe-team" :team-id team-id :conn-id id)
+  (teams/check-read-permissions! pool profile-id team-id)
   (let [prev-subs (get @state ::team-subscription)
         channel   (sp/chan :buf (sp/dropping-buffer 64)
                            :xf  (remove #(= (:session-id %) session-id)))]
@@ -150,8 +154,10 @@
 
 
 (defmethod handle-message :subscribe-file
-  [{:keys [::mbus/msgbus]} {:keys [::ws/id ::ws/state ::ws/output-ch ::session-id ::profile-id]} {:keys [file-id] :as params}]
+  [{:keys [::mbus/msgbus ::db/pool]} {:keys [::ws/id ::ws/state ::ws/output-ch ::session-id ::profile-id]} {:keys [file-id] :as params}]
   (l/trace :fn "handle-message" :event "subscribe-file" :file-id file-id :conn-id id)
+  (bfc/check-file-exists pool file-id)
+  (files/check-read-permissions! pool profile-id file-id)
   (let [psub (::file-subscription @state)
         fch  (sp/chan :buf (sp/dropping-buffer 64)
                       :xf  (remove #(= (:session-id %) session-id)))]
@@ -239,7 +245,7 @@
 
 (defn- on-connect
   [{:keys [::mtx/metrics]} {:keys [::ws/id] :as wsp}]
-  (let [created-at (dt/now)]
+  (let [created-at (ct/now)]
     (l/trace :fn "on-connect" :conn-id id)
     (swap! state assoc id wsp)
     (mtx/run! metrics
@@ -253,7 +259,7 @@
              (mtx/run! metrics :id :websocket-active-connections :dec 1)
              (mtx/run! metrics
                        :id :websocket-session-timing
-                       :val (/ (inst-ms (dt/diff created-at (dt/now))) 1000.0))))))
+                       :val (/ (inst-ms (ct/diff created-at (ct/now))) 1000.0))))))
 
 (defn- on-rcv-message
   [{:keys [::mtx/metrics ::profile-id ::session-id]} message]
@@ -273,7 +279,7 @@
 
 (defn- http-handler
   [cfg {:keys [params ::session/profile-id] :as request}]
-  (let [session-id (some-> params :session-id sm/parse-uuid)]
+  (let [session-id (some-> params :session-id uuid/parse*)]
     (when-not (uuid? session-id)
       (ex/raise :type :validation
                 :code :missing-session-id

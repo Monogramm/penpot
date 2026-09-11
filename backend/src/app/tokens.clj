@@ -2,41 +2,54 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.tokens
   "Tokens generation API."
   (:require
    [app.common.data :as d]
-   [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
+   [app.common.time :as ct]
    [app.common.transit :as t]
-   [app.util.time :as dt]
+   [app.setup :as-alias setup]
    [buddy.sign.jwe :as jwe]))
 
 (defn generate
-  [{:keys [tokens-key]} claims]
+  ([cfg claims] (generate cfg claims nil))
+  ([{:keys [::setup/props] :as cfg} claims header]
+   (assert (contains? props :tokens-key) "expect props to have tokens-key")
 
-  (dm/assert!
-   "expexted token-key to be bytes instance"
-   (bytes? tokens-key))
+   (let [tokens-key
+         (get props :tokens-key)
 
-  (let [payload (-> claims
-                    (assoc :iat (dt/now))
-                    (d/without-nils)
-                    (t/encode))]
-    (jwe/encrypt payload tokens-key {:alg :a256kw :enc :a256gcm})))
+         payload
+         (-> claims
+             (update :iat (fn [v] (or v (ct/now))))
+             (d/without-nils)
+             (t/encode))]
+
+     (jwe/encrypt payload tokens-key {:alg :a256kw :enc :a256gcm :header header}))))
+
+(defn decode-header
+  [token]
+  (ex/ignoring
+   (jwe/decode-header token)))
 
 (defn decode
-  [{:keys [tokens-key]} token]
-  (let [payload (jwe/decrypt token tokens-key {:alg :a256kw :enc :a256gcm})]
+  [{:keys [::setup/props] :as cfg} token]
+  (let [tokens-key
+        (get props :tokens-key)
+
+        payload
+        (jwe/decrypt token tokens-key {:alg :a256kw :enc :a256gcm})]
+
     (t/decode payload)))
 
 (defn verify
-  [sprops {:keys [token] :as params}]
-  (let [claims (decode sprops token)]
-    (when (and (dt/instant? (:exp claims))
-               (dt/is-before? (:exp claims) (dt/now)))
+  [cfg {:keys [token] :as params}]
+  (let [claims (decode cfg token)]
+    (when (and (ct/inst? (:exp claims))
+               (ct/is-before? (:exp claims) (ct/now)))
       (ex/raise :type :validation
                 :code :invalid-token
                 :reason :token-expired

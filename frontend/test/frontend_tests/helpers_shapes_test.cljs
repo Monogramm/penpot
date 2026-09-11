@@ -2,13 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns frontend-tests.helpers-shapes-test
   (:require
-   [app.common.colors :as clr]
    [app.common.data :as d]
    [app.common.geom.point :as gpt]
+   [app.common.types.color :as clr]
    [app.main.data.workspace.libraries :as dwl]
    [beicon.v2.core :as rx]
    [cljs.pprint :refer [pprint]]

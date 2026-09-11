@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.files.changes
   (:require
@@ -16,21 +16,22 @@
    [app.common.schema.desc-native :as smd]
    [app.common.schema.generators :as sg]
    [app.common.types.color :as ctc]
-   [app.common.types.colors-list :as ctcl]
    [app.common.types.component :as ctk]
    [app.common.types.components-list :as ctkl]
    [app.common.types.container :as ctn]
    [app.common.types.file :as ctf]
    [app.common.types.grid :as ctg]
+   [app.common.types.library :as ctl]
    [app.common.types.page :as ctp]
    [app.common.types.pages-list :as ctpl]
+   [app.common.types.path :as path]
    [app.common.types.shape :as cts]
    [app.common.types.shape-tree :as ctst]
    [app.common.types.token :as cto]
-   [app.common.types.token-theme :as ctot]
    [app.common.types.tokens-lib :as ctob]
    [app.common.types.typographies-list :as ctyl]
    [app.common.types.typography :as ctt]
+   [app.common.types.variant :as ctv]
    [app.common.uuid :as uuid]
    [clojure.set :as set]))
 
@@ -48,14 +49,14 @@
      [:type [:= :assign]]
      ;; NOTE: the full decoding is happening on the handler because it
      ;; needs a proper context of the current shape and its type
-     [:value [:map-of :keyword :any]]
+     [:value [:map-of :keyword ::sm/any]]
      [:ignore-touched {:optional true} :boolean]
      [:ignore-geometry {:optional true} :boolean]]]
    [:set
     [:map {:title "SetOperation"}
      [:type [:= :set]]
      [:attr :keyword]
-     [:val :any]
+     [:val ::sm/any]
      [:ignore-touched {:optional true} :boolean]
      [:ignore-geometry {:optional true} :boolean]]]
    [:set-touched
@@ -83,24 +84,25 @@
 
     [:multi {:decode/json #(update % :grid-type keyword)
              :gen/gen gen
+             :title "SetDefaultGridChange"
              :dispatch :grid-type
              ::smd/simplified true}
      [:square
-      [:map
+      [:map {:title "SetDefautSquareGridAttrs"}
        [:type [:= :set-default-grid]]
        [:page-id ::sm/uuid]
        [:grid-type [:= :square]]
        [:params [:maybe ctg/schema:square-params]]]]
 
      [:column
-      [:map
+      [:map {:title "SetDefaultColumnGridAttrs"}
        [:type [:= :set-default-grid]]
        [:page-id ::sm/uuid]
        [:grid-type [:= :column]]
        [:params [:maybe ctg/schema:column-params]]]]
 
      [:row
-      [:map
+      [:map {:title "SetDefaultRowGridAttrs"}
        [:type [:= :set-default-grid]]
        [:page-id ::sm/uuid]
        [:grid-type [:= :row]]
@@ -111,20 +113,20 @@
                 [:type [:= :set-guide]]
                 [:page-id ::sm/uuid]
                 [:id ::sm/uuid]
-                [:params [:maybe ::ctp/guide]]]
+                [:params [:maybe ctp/schema:guide]]]
         gen    (->> (sg/generator schema)
                     (sg/fmap (fn [change]
                                (if (some? (:params change))
                                  (update change :params assoc :id (:id change))
                                  change))))]
-    [:schema {:gen/gen gen} schema]))
+    (sm/update-properties schema assoc :gen/gen gen)))
 
 (def schema:set-flow-change
   (let [schema [:map {:title "SetFlowChange"}
                 [:type [:= :set-flow]]
                 [:page-id ::sm/uuid]
                 [:id ::sm/uuid]
-                [:params [:maybe ::ctp/flow]]]
+                [:params [:maybe ctp/schema:flow]]]
 
         gen    (->> (sg/generator schema)
                     (sg/fmap (fn [change]
@@ -132,7 +134,7 @@
                                  (update change :params assoc :id (:id change))
                                  change))))]
 
-    [:schema {:gen/gen gen} schema]))
+    (sm/update-properties schema assoc :gen/gen gen)))
 
 (def schema:set-plugin-data-change
   (let [types  #{:file :page :shape :color :typography :component}
@@ -169,324 +171,272 @@
 
                                  :else
                                  (dissoc change :page-id)))))]
-
-    [:and {:gen/gen gen} schema check1]))
+    [:and (sm/update-properties schema assoc :gen/gen gen) check1]))
 
 (def schema:change
-  [:schema
-   [:multi {:dispatch :type
-            :title "Change"
-            :decode/json #(update % :type keyword)
-            ::smd/simplified true}
-    [:set-option
+  [:multi {:dispatch :type
+           :title "Change"
+           :decode/json #(update % :type keyword)
+           ::smd/simplified true}
 
-     ;; DEPRECATED: remove before 2.3 release
-     ;;
-     ;; Is still there for not cause error when event is received
-     [:map {:title "SetOptionChange"}]]
+   [:set-comment-thread-position
+    [:map {:title "SetCommentThreadPositionChange"}
+     [:comment-thread-id ::sm/uuid]
+     [:page-id ::sm/uuid]
+     [:frame-id [:maybe ::sm/uuid]]
+     [:position [:maybe ::gpt/point]]]]
 
-    [:set-comment-thread-position
-     [:map
-      [:comment-thread-id ::sm/uuid]
-      [:page-id ::sm/uuid]
-      [:frame-id [:maybe ::sm/uuid]]
-      [:position [:maybe ::gpt/point]]]]
+   [:add-obj
+    [:map {:title "AddObjChange"}
+     [:type [:= :add-obj]]
+     [:id ::sm/uuid]
+     [:obj cts/schema:shape]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:frame-id ::sm/uuid]
+     [:parent-id {:optional true} [:maybe ::sm/uuid]]
+     [:index {:optional true} [:maybe :int]]
+     [:ignore-touched {:optional true} :boolean]]]
 
-    [:add-obj
-     [:map {:title "AddObjChange"}
-      [:type [:= :add-obj]]
-      [:id ::sm/uuid]
-      [:obj :map]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:frame-id ::sm/uuid]
-      [:parent-id {:optional true} [:maybe ::sm/uuid]]
-      [:index {:optional true} [:maybe :int]]
-      [:ignore-touched {:optional true} :boolean]]]
+   [:mod-obj
+    [:map {:title "ModObjChange"}
+     [:type [:= :mod-obj]]
+     [:id ::sm/uuid]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:operations [:vector {:gen/max 5} schema:operation]]]]
 
-    [:mod-obj
-     [:map {:title "ModObjChange"}
-      [:type [:= :mod-obj]]
-      [:id ::sm/uuid]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:operations [:vector {:gen/max 5} schema:operation]]]]
+   [:del-obj
+    [:map {:title "DelObjChange"}
+     [:type [:= :del-obj]]
+     [:id ::sm/uuid]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:ignore-touched {:optional true} :boolean]]]
 
-    [:del-obj
-     [:map {:title "DelObjChange"}
-      [:type [:= :del-obj]]
-      [:id ::sm/uuid]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:ignore-touched {:optional true} :boolean]]]
+   [:set-guide schema:set-guide-change]
+   [:set-flow schema:set-flow-change]
+   [:set-default-grid schema:set-default-grid-change]
 
-    [:set-guide schema:set-guide-change]
-    [:set-flow schema:set-flow-change]
-    [:set-default-grid schema:set-default-grid-change]
+   [:fix-obj
+    [:map {:title "FixObjChange"}
+     [:type [:= :fix-obj]]
+     [:id ::sm/uuid]
+     [:fix {:optional true} :keyword]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]]]
 
-    [:fix-obj
-     [:map {:title "FixObjChange"}
-      [:type [:= :fix-obj]]
-      [:id ::sm/uuid]
-      [:fix {:optional true} :keyword]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]]]
+   [:mov-objects
+    [:map {:title "MovObjectsChange"}
+     [:type [:= :mov-objects]]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:ignore-touched {:optional true} :boolean]
+     [:parent-id ::sm/uuid]
+     [:shapes ::sm/any]
+     [:index {:optional true} [:maybe :int]]
+     [:after-shape {:optional true} ::sm/any]
+     [:allow-altering-copies {:optional true} :boolean]]]
 
-    [:mov-objects
-     [:map {:title "MovObjectsChange"}
-      [:type [:= :mov-objects]]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:ignore-touched {:optional true} :boolean]
-      [:parent-id ::sm/uuid]
-      [:shapes :any]
-      [:index {:optional true} [:maybe :int]]
-      [:after-shape {:optional true} :any]
-      [:component-swap {:optional true} :boolean]]]
+   [:reorder-children
+    [:map {:title "ReorderChildrenChange"}
+     [:type [:= :reorder-children]]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:ignore-touched {:optional true} :boolean]
+     [:allow-altering-copies {:optional true} :boolean]
+     [:parent-id ::sm/uuid]
+     [:shapes ::sm/any]]]
 
-    [:reorder-children
-     [:map {:title "ReorderChildrenChange"}
-      [:type [:= :reorder-children]]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:ignore-touched {:optional true} :boolean]
-      [:parent-id ::sm/uuid]
-      [:shapes :any]]]
+   [:add-page
+    [:map {:title "AddPageChange"}
+     [:type [:= :add-page]]
+     [:id {:optional true} ::sm/uuid]
+     [:name {:optional true} :string]
+     [:page {:optional true} ::sm/any]]]
 
-    [:add-page
-     [:map {:title "AddPageChange"}
-      [:type [:= :add-page]]
-      [:id {:optional true} ::sm/uuid]
-      [:name {:optional true} :string]
-      [:page {:optional true} :any]]]
+   [:mod-page
+    [:map {:title "ModPageChange"}
+     [:type [:= :mod-page]]
+     [:id ::sm/uuid]
+     ;; All props are optional, background can be nil because is the
+     ;; way to remove already set background
+     [:background {:optional true} [:maybe ctc/schema:hex-color]]
+     [:name {:optional true} :string]
+     ;; Pixel grid display controls — nil removes the per-page override
+     ;; and falls back to the default hardcoded grid color/opacity.
+     [:pixel-grid-color {:optional true} [:maybe ctc/schema:hex-color]]
+     [:pixel-grid-opacity {:optional true} [:maybe ::sm/safe-number]]]]
 
-    [:mod-page
-     [:map {:title "ModPageChange"}
-      [:type [:= :mod-page]]
-      [:id ::sm/uuid]
-      ;; All props are optional, background can be nil because is the
-      ;; way to remove already set background
-      [:background {:optional true} [:maybe ::ctc/rgb-color]]
-      [:name {:optional true} :string]]]
+   [:set-plugin-data schema:set-plugin-data-change]
 
-    [:set-plugin-data schema:set-plugin-data-change]
+   [:del-page
+    [:map {:title "DelPageChange"}
+     [:type [:= :del-page]]
+     [:id ::sm/uuid]]]
 
-    [:del-page
-     [:map {:title "DelPageChange"}
-      [:type [:= :del-page]]
-      [:id ::sm/uuid]]]
+   [:mov-page
+    [:map {:title "MovPageChange"}
+     [:type [:= :mov-page]]
+     [:id ::sm/uuid]
+     [:index :int]]]
 
-    [:mov-page
-     [:map {:title "MovPageChange"}
-      [:type [:= :mov-page]]
-      [:id ::sm/uuid]
-      [:index :int]]]
+   [:reg-objects
+    [:map {:title "RegObjectsChange"}
+     [:type [:= :reg-objects]]
+     [:page-id {:optional true} ::sm/uuid]
+     [:component-id {:optional true} ::sm/uuid]
+     [:shapes [:vector {:gen/max 5} ::sm/uuid]]]]
 
-    [:reg-objects
-     [:map {:title "RegObjectsChange"}
-      [:type [:= :reg-objects]]
-      [:page-id {:optional true} ::sm/uuid]
-      [:component-id {:optional true} ::sm/uuid]
-      [:shapes [:vector {:gen/max 5} ::sm/uuid]]]]
+   [:add-color
+    [:map {:title "AddColorChange"}
+     [:type [:= :add-color]]
+     [:color ctc/schema:library-color]]]
 
-    [:add-color
-     [:map {:title "AddColorChange"}
-      [:type [:= :add-color]]
-      [:color ::ctc/color]]]
+   [:mod-color
+    [:map {:title "ModColorChange"}
+     [:type [:= :mod-color]]
+     [:color ctc/schema:library-color]]]
 
-    [:mod-color
-     [:map {:title "ModColorChange"}
-      [:type [:= :mod-color]]
-      [:color ::ctc/color]]]
+   [:del-color
+    [:map {:title "DelColorChange"}
+     [:type [:= :del-color]]
+     [:id ::sm/uuid]]]
 
-    [:del-color
-     [:map {:title "DelColorChange"}
-      [:type [:= :del-color]]
-      [:id ::sm/uuid]]]
+   [:add-media
+    [:map {:title "AddMediaChange"}
+     [:type [:= :add-media]]
+     [:object ctf/schema:media]]]
 
-    ;; DEPRECATED: remove before 2.3
-    [:add-recent-color
-     [:map {:title "AddRecentColorChange"}]]
+   [:mod-media
+    [:map {:title "ModMediaChange"}
+     [:type [:= :mod-media]]
+     [:object ctf/schema:media]]]
 
-    [:add-media
-     [:map {:title "AddMediaChange"}
-      [:type [:= :add-media]]
-      [:object ::ctf/media-object]]]
+   [:del-media
+    [:map {:title "DelMediaChange"}
+     [:type [:= :del-media]]
+     [:id ::sm/uuid]]]
 
-    [:mod-media
-     [:map {:title "ModMediaChange"}
-      [:type [:= :mod-media]]
-      [:object ::ctf/media-object]]]
+   [:add-component
+    [:map {:title "AddComponentChange"}
+     [:type [:= :add-component]]
+     [:id ::sm/uuid]
+     [:name :string]
+     [:path :string]
+     [:main-instance-id ::sm/uuid]
+     [:main-instance-page ::sm/uuid]
+     ;; Only used by external processes (like Penpot SDK)
+     [:variant-id {:optional true} ::sm/uuid]
+     [:variant-properties {:optional true} [:vector ctv/schema:variant-property]]]]
 
-    [:del-media
-     [:map {:title "DelMediaChange"}
-      [:type [:= :del-media]]
-      [:id ::sm/uuid]]]
+   [:mod-component
+    [:map {:title "ModComponentChange"}
+     [:type [:= :mod-component]]
+     [:id ::sm/uuid]
+     [:name {:optional true} :string]
+     [:path {:optional true} :string]
+     [:variant-id {:optional true} ::sm/uuid]
+     [:variant-properties {:optional true} [:vector ctv/schema:variant-property]]]]
 
-    [:add-component
-     [:map {:title "AddComponentChange"}
-      [:type [:= :add-component]]
-      [:id ::sm/uuid]
-      [:name :string]
-      [:shapes {:optional true} [:vector {:gen/max 3} :any]]
-      [:path {:optional true} :string]]]
+   [:del-component
+    [:map {:title "DelComponentChange"}
+     [:type [:= :del-component]]
+     [:id ::sm/uuid]
+     ;; when it is an undo of a cut-paste, we need to undo the movement
+     ;; of the shapes so we need to move them delta
+     [:delta {:optional true} ::gpt/point]
+     [:skip-undelete? {:optional true} :boolean]]]
 
-    [:mod-component
-     [:map {:title "ModCompoenentChange"}
-      [:type [:= :mod-component]]
-      [:id ::sm/uuid]
-      [:shapes {:optional true} [:vector {:gen/max 3} :any]]
-      [:name {:optional true} :string]]]
+   [:restore-component
+    [:map {:title "RestoreComponentChange"}
+     [:type [:= :restore-component]]
+     [:id ::sm/uuid]
+     [:page-id ::sm/uuid]]]
 
-    [:del-component
-     [:map {:title "DelComponentChange"}
-      [:type [:= :del-component]]
-      [:id ::sm/uuid]
-      [:main-instance {:optional true} :any]
-      [:skip-undelete? {:optional true} :boolean]]]
+   [:purge-component
+    [:map {:title "PurgeComponentChange"}
+     [:type [:= :purge-component]]
+     [:id ::sm/uuid]]]
 
-    [:restore-component
-     [:map {:title "RestoreComponentChange"}
-      [:type [:= :restore-component]]
-      [:id ::sm/uuid]
-      [:page-id ::sm/uuid]]]
+   [:add-typography
+    [:map {:title "AddTypogrphyChange"}
+     [:type [:= :add-typography]]
+     [:typography ctt/schema:typography]]]
 
-    [:purge-component
-     [:map {:title "PurgeComponentChange"}
-      [:type [:= :purge-component]]
-      [:id ::sm/uuid]]]
+   [:mod-typography
+    [:map {:title "ModTypogrphyChange"}
+     [:type [:= :mod-typography]]
+     [:typography ctt/schema:typography]]]
 
-    [:add-typography
-     [:map {:title "AddTypogrphyChange"}
-      [:type [:= :add-typography]]
-      [:typography ::ctt/typography]]]
+   [:del-typography
+    [:map {:title "DelTypogrphyChange"}
+     [:type [:= :del-typography]]
+     [:id ::sm/uuid]]]
 
-    [:mod-typography
-     [:map {:title "ModTypogrphyChange"}
-      [:type [:= :mod-typography]]
-      [:typography ::ctt/typography]]]
+   [:set-tokens-lib
+    [:map {:title "SetTokensLib"}
+     [:type [:= :set-tokens-lib]]
+     [:tokens-lib [:maybe ctob/schema:tokens-lib]]]]
 
-    [:del-typography
-     [:map {:title "DelTypogrphyChange"}
-      [:type [:= :del-typography]]
-      [:id ::sm/uuid]]]
+   [:set-token
+    [:map {:title "SetTokenChange"}
+     [:type [:= :set-token]]
+     [:set-id ::sm/uuid]
+     [:token-id ::sm/uuid]
+     [:attrs [:maybe cto/schema:token-attrs]]]]
 
-    [:add-temporary-token-theme
-     [:map {:title "AddTemporaryTokenThemeChange"}
-      [:type [:= :add-temporary-token-theme]]
-      [:token-theme ::ctot/token-theme]]]
+   [:set-token-set
+    [:map {:title "SetTokenSetChange"}
+     [:type [:= :set-token-set]]
+     [:id ::sm/uuid]
+     [:attrs [:maybe ctob/schema:token-set-attrs]]]]
 
-    [:update-active-token-themes
-     [:map {:title "UpdateActiveTokenThemes"}
-      [:type [:= :update-active-token-themes]]
-      [:theme-ids [:set :string]]]]
+   [:set-token-theme
+    [:map {:title "SetTokenThemeChange"}
+     [:type [:= :set-token-theme]]
+     [:id ::sm/uuid]
+     [:attrs [:maybe ctob/schema:token-theme-attrs]]]]
 
-    [:delete-temporary-token-theme
-     [:map {:title "DeleteTemporaryTokenThemeChange"}
-      [:type [:= :delete-temporary-token-theme]]
-      [:id ::sm/uuid]
-      [:name :string]]]
+   [:set-active-token-themes
+    [:map {:title "SetActiveTokenThemes"}
+     [:type [:= :set-active-token-themes]]
+     [:theme-paths [:set :string]]]]
 
-    [:add-token-theme
-     [:map {:title "AddTokenThemeChange"}
-      [:type [:= :add-token-theme]]
-      [:token-theme ::ctot/token-theme]]]
+   [:rename-token-set-group
+    [:map {:title "RenameTokenSetGroup"}
+     [:type [:= :rename-token-set-group]]
+     [:set-group-path [:vector :string]]
+     [:set-group-fname :string]]]
 
-    [:mod-token-theme
-     [:map {:title "ModTokenThemeChange"}
-      [:type [:= :mod-token-theme]]
-      [:group :string]
-      [:name :string]
-      [:token-theme ::ctot/token-theme]]]
+   [:move-token-set
+    [:map {:title "MoveTokenSet"}
+     [:type [:= :move-token-set]]
+     [:from-path [:vector :string]]
+     [:to-path [:vector :string]]
+     [:before-path [:maybe [:vector :string]]]
+     [:before-group [:maybe :boolean]]]]
 
-    [:del-token-theme
-     [:map {:title "DelTokenThemeChange"}
-      [:type [:= :del-token-theme]]
-      [:group :string]
-      [:name :string]]]
+   [:move-token-set-group
+    [:map {:title "MoveTokenSetGroup"}
+     [:type [:= :move-token-set-group]]
+     [:from-path [:vector :string]]
+     [:to-path [:vector :string]]
+     [:before-path [:maybe [:vector :string]]]
+     [:before-group [:maybe :boolean]]]]
 
-    [:add-token-set
-     [:map {:title "AddTokenSetChange"}
-      [:type [:= :add-token-set]]
-      [:token-set ::ctot/token-set]]]
-
-    [:add-token-sets
-     [:map {:title "AddTokenSetsChange"}
-      [:type [:= :add-token-sets]]
-      [:token-sets [:sequential ::ctot/token-set]]]]
-
-    [:rename-token-set-group
-     [:map {:title "RenameTokenSetGroup"}
-      [:type [:= :rename-token-set-group]]
-      [:set-group-path [:vector :string]]
-      [:set-group-fname :string]]]
-
-    [:mod-token-set
-     [:map {:title "ModTokenSetChange"}
-      [:type [:= :mod-token-set]]
-      [:name :string]
-      [:token-set ::ctot/token-set]]]
-
-    [:move-token-set-before
-     [:map {:title "MoveTokenSetBefore"}
-      [:type [:= :move-token-set-before]]
-      [:from-path [:vector :string]]
-      [:to-path [:vector :string]]
-      [:before-path [:maybe [:vector :string]]]
-      [:before-group? [:maybe :boolean]]]]
-
-    [:move-token-set-group-before
-     [:map {:title "MoveTokenSetGroupBefore"}
-      [:type [:= :move-token-set-group-before]]
-      [:from-path [:vector :string]]
-      [:to-path [:vector :string]]
-      [:before-path [:maybe [:vector :string]]]
-      [:before-group? [:maybe :boolean]]]]
-
-    [:del-token-set
-     [:map {:title "DelTokenSetChange"}
-      [:type [:= :del-token-set]]
-      [:name :string]]]
-
-    [:del-token-set-path
-     [:map {:title "DelTokenSetPathChange"}
-      [:type [:= :del-token-set-path]]
-      [:path :string]]]
-
-    [:set-tokens-lib
-     [:map {:title "SetTokensLib"}
-      [:type [:= :set-tokens-lib]]
-      [:tokens-lib :any]]]
-
-    [:add-token
-     [:map {:title "AddTokenChange"}
-      [:type [:= :add-token]]
-      [:set-name :string]
-      [:token ::cto/token]]]
-
-    [:mod-token
-     [:map {:title "ModTokenChange"}
-      [:type [:= :mod-token]]
-      [:set-name :string]
-      [:name :string]
-      [:token ::cto/token]]]
-
-    [:del-token
-     [:map {:title "DelTokenChange"}
-      [:type [:= :del-token]]
-      [:set-name :string]
-      [:name :string]]]]])
+   [:set-base-font-size
+    [:map {:title "ModBaseFontSize"}
+     [:type [:= :set-base-font-size]]
+     [:base-font-size :string]]]])
 
 (def schema:changes
   [:sequential {:gen/max 5 :gen/min 1} schema:change])
 
-(sm/register! ::change schema:change)
-(sm/register! ::changes schema:changes)
-
 (def valid-change?
   (sm/lazy-validator schema:change))
 
-(def check-changes!
+(def check-changes
   (sm/check-fn schema:changes))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -494,7 +444,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn- without-obj
-  "Clear collection from specified obj and without nil values."
+  "Return a vector with all elements equal to `o` removed."
   [coll o]
   (into [] (filter #(not= % o)) coll))
 
@@ -519,33 +469,16 @@
 
 ;; Changes Processing Impl
 
-(defn validate-shapes!
-  [data-old data-new items]
-  (letfn [(validate-shape! [[page-id id]]
-            (let [shape-old (dm/get-in data-old [:pages-index page-id :objects id])
-                  shape-new (dm/get-in data-new [:pages-index page-id :objects id])]
-
-              ;; If object has changed or is new verify is correct
-              (when (and (some? shape-new)
-                         (not= shape-old shape-new))
-                (when-not (and (cts/valid-shape? shape-new)
-                               (cts/shape? shape-new))
-                  (ex/raise :type :assertion
-                            :code :data-validation
-                            :hint "invalid shape found after applying changes"
-                            ::sm/explain (cts/explain-shape shape-new))))))]
-
-    (->> (into #{} (map :page-id) items)
-         (mapcat (fn [page-id]
-                   (filter #(= page-id (:page-id %)) items)))
-         (mapcat (fn [{:keys [type id page-id] :as item}]
-                   (sequence
-                    (map (partial vector page-id))
-                    (case type
-                      (:add-obj :mod-obj :del-obj) (cons id nil)
-                      (:mov-objects :reg-objects)  (:shapes item)
-                      nil))))
-         (run! validate-shape!))))
+#_:clj-kondo/ignore
+(defn- validate-shape
+  [{:keys [id] :as shape} page-id]
+  (when-not (cts/valid-shape? shape)
+    (ex/raise :type :assertion
+              :code :data-validation
+              :hint (str "invalid shape found '" id "'")
+              :page-id page-id
+              :shape-id id
+              ::sm/explain (cts/explain-shape shape))))
 
 (defn- process-touched-change
   [data {:keys [id page-id component-id]}]
@@ -569,23 +502,11 @@
    ;; When verify? false we spec the schema validation. Currently used
    ;; to make just 1 validation even if the changes are applied twice
    (when verify?
-     (check-changes! items))
+     (check-changes items))
 
-   (binding [*touched-changes* (volatile! #{})
-             cts/*wasm-sync* true]
-     (let [result (reduce #(or (process-change %1 %2) %1) data items)
-           result (reduce process-touched-change result @*touched-changes*)]
-       ;; Validate result shapes (only on the backend)
-       ;;
-       ;; TODO: (PERF) add changed shapes tracking and only validate
-       ;; the tracked changes instead of iterate over all shapes
-       #?(:clj (validate-shapes! data result items))
-       result))))
-
-;; DEPRECATED: remove after 2.3 release
-(defmethod process-change :set-option
-  [data _]
-  data)
+   (binding [*touched-changes* (volatile! #{})]
+     (let [result (reduce #(or (process-change %1 %2) %1) data items)]
+       (reduce process-touched-change result @*touched-changes*)))))
 
 ;; --- Comment Threads
 
@@ -673,9 +594,10 @@
 
 (defmethod process-change :add-obj
   [data {:keys [id obj page-id component-id frame-id parent-id index ignore-touched]}]
-  (let [update-container
-        (fn [container]
-          (ctst/add-shape id obj container frame-id parent-id index ignore-touched))]
+  ;; NOTE: we only perform hard validation on backend
+  #?(:clj (validate-shape obj page-id))
+
+  (let [update-container #(ctst/add-shape id obj % frame-id parent-id index ignore-touched)]
 
     (when *state*
       (swap! *state* collect-shape-media-refs obj page-id))
@@ -685,7 +607,7 @@
       (d/update-in-when data [:components component-id] update-container))))
 
 (defn- process-operations
-  [objects {:keys [id operations] :as change}]
+  [objects {:keys [page-id id operations] :as change}]
   (if-let [shape (get objects id)]
     (let [shape    (reduce process-operation shape operations)
           touched? (-> shape meta ::ctn/touched)]
@@ -694,6 +616,13 @@
       ;; need to report them for to be used in the second
       ;; phase of changes procesing
       (when touched? (some-> *touched-changes* (vswap! conj change)))
+
+      (when (and *state* page-id)
+        (swap! *state* collect-shape-media-refs shape page-id))
+
+      ;; NOTE: we only perform hard validation on backend
+      #?(:clj (validate-shape shape page-id))
+
       (assoc objects id shape))
 
     objects))
@@ -705,22 +634,26 @@
     (d/update-in-when data [:components component-id :objects] process-operations change)))
 
 (defn- process-children-reordering
-  [objects {:keys [parent-id shapes] :as change}]
+  [objects {:keys [parent-id shapes allow-altering-copies] :as change}]
   (if-let [old-shapes (dm/get-in objects [parent-id :shapes])]
-    (let [id->idx
-          (update-vals
-           (->> (d/enumerate shapes)
-                (group-by second))
-           (comp first first))
+    ;; Component sync owns copy child ordering.
+    (if (and (not allow-altering-copies)
+             (ctk/in-component-copy? (get objects parent-id)))
+      objects
+      (let [id->idx
+            (update-vals
+             (->> (d/enumerate shapes)
+                  (group-by second))
+             (comp first first))
 
-          new-shapes
-          (vec (sort-by #(d/nilv (id->idx %) -1) < old-shapes))]
+            new-shapes
+            (vec (sort-by #(d/nilv (id->idx %) -1) < old-shapes))]
 
-      (if (not= old-shapes new-shapes)
-        (do
-          (some-> *touched-changes* (vswap! conj change))
-          (update objects parent-id assoc :shapes new-shapes))
-        objects))
+        (if (not= old-shapes new-shapes)
+          (do
+            (some-> *touched-changes* (vswap! conj change))
+            (update objects parent-id assoc :shapes new-shapes))
+          objects)))
 
     objects))
 
@@ -748,8 +681,6 @@
       (d/update-in-when data [:pages-index page-id] fix-container)
       (d/update-in-when data [:components component-id] fix-container))))
 
-;; FIXME: remove, seems like this method is already unused
-;; reg-objects operation "regenerates" the geometry and selrect of the parent groups
 (defmethod process-change :reg-objects
   [data {:keys [page-id component-id shapes]}]
   ;; FIXME: Improve performance
@@ -778,46 +709,60 @@
 
           (update-group [group objects]
             (let [lookup   (d/getf objects)
-                  children (->> group :shapes (map lookup))]
-              (cond
-                ;; If the group is empty we don't make any changes. Will be removed by a later process
-                (empty? children)
-                group
+                  children (get group :shapes)
+                  group    (cond
+                             ;; If the group is empty we don't make any changes. Will be removed by a later process
+                             (empty? children)
+                             group
 
-                (= :bool (:type group))
-                (gsh/update-bool-selrect group children objects)
+                             (= :bool (:type group))
+                             (path/update-bool-shape group objects)
 
-                (:masked-group group)
-                (set-mask-selrect group children)
+                             (:masked-group group)
+                             (->> (map lookup children)
+                                  (set-mask-selrect group))
 
-                :else
-                (gsh/update-group-selrect group children))))]
+                             :else
+                             (->> (map lookup children)
+                                  (gsh/update-group-selrect group)))]
+              #?(:clj (validate-shape group page-id))
+              group))]
 
     (if page-id
       (d/update-in-when data [:pages-index page-id :objects] reg-objects)
       (d/update-in-when data [:components component-id :objects] reg-objects))))
 
 (defmethod process-change :mov-objects
-  [data {:keys [parent-id shapes index page-id component-id ignore-touched after-shape component-swap syncing]}]
+  ;; FIXME: ignore-touched is no longer used, so we can consider it deprecated
+  [data {:keys [parent-id shapes index page-id component-id #_ignore-touched after-shape allow-altering-copies syncing]}]
   (letfn [(calculate-invalid-targets [objects shape-id]
             (let [reduce-fn #(into %1 (calculate-invalid-targets objects %2))]
               (->> (get-in objects [shape-id :shapes])
                    (reduce reduce-fn #{shape-id}))))
 
-          ;; Avoid placing a shape as a direct or indirect child of itself,
-          ;; or inside its main component if it's in a copy,
-          ;; or inside a copy, or from a copy
+          ;; Avoid placing a shape as a direct or indirect child of itself, or
+          ;; inside its main component if it's in a copy, or inside a copy, or
+          ;; from a copy
           (is-valid-move? [objects shape-id]
             (let [invalid-targets (calculate-invalid-targets objects shape-id)
                   shape (get objects shape-id)]
               (and shape
                    (not (invalid-targets parent-id))
                    (not (cfh/components-nesting-loop? objects shape-id parent-id))
-                   (or component-swap ;; On a component swap it's allowed to change the structure of a copy
-                       syncing ;; If we are syncing the changes of a main component, it's allowed to change the structure of a copy
-                       (and
-                        (not (ctk/in-component-copy? (get objects (:parent-id shape)))) ;; We don't want to change the structure of component copies
-                        (not (ctk/in-component-copy? (get objects parent-id))))))))     ;; We need to check the origin and target frames
+                   (or
+                    ;; In some cases (like a component
+                    ;; swap) it's allowed to change the
+                    ;; structure of a copy
+                    allow-altering-copies
+
+                    ;; DEPRECATED, remove once v2.12 released
+                    syncing
+
+                    (and
+                     ;; We don't want to change the structure of component copies
+                     (not (ctk/in-component-copy? (get objects (:parent-id shape))))
+                     ;; We need to check the origin and target frames
+                     (not (ctk/in-component-copy? (get objects parent-id))))))))
 
           (insert-items [prev-shapes index shapes]
             (let [prev-shapes (or prev-shapes [])]
@@ -826,17 +771,13 @@
                 (cfh/append-at-the-end prev-shapes shapes))))
 
           (add-to-parent [parent index shapes]
-            (let [parent (-> parent
-                             (update :shapes insert-items index shapes)
-                             ;; We need to ensure that no `nil` in the
-                             ;; shapes list after adding all the
-                             ;; incoming shapes to the parent.
-                             (update :shapes d/vec-without-nils))]
-              (cond-> parent
-                (and (:shape-ref parent)
-                     (#{:group :frame} (:type parent))
-                     (not ignore-touched))
-                (dissoc :remote-synced))))
+            (update parent :shapes
+                    (fn [parent-shapes]
+                      (-> parent-shapes
+                          (insert-items index shapes)
+                          ;; We need to ensure that no `nil` in the shapes list
+                          ;; after adding all the incoming shapes to the parent.
+                          (d/vec-without-nils)))))
 
           (remove-from-old-parent [old-objects objects shape-id]
             (let [prev-parent-id (dm/get-in old-objects [shape-id :parent-id])]
@@ -844,58 +785,63 @@
               ;; the new destination target parent id.
               (if (= prev-parent-id parent-id)
                 objects
-                (let [sid        shape-id
-                      pid        prev-parent-id
-                      obj        (get objects pid)
-                      component? (and (:shape-ref obj)
-                                      (= (:type obj) :group)
-                                      (not ignore-touched))]
-                  (-> objects
-                      (d/update-in-when [pid :shapes] d/without-obj sid)
-                      (d/update-in-when [pid :shapes] d/vec-without-nils)
-                      (cond-> component? (d/update-when pid #(dissoc % :remote-synced))))))))
+                (d/update-in-when objects [prev-parent-id :shapes]
+                                  (fn [shapes]
+                                    (-> shapes
+                                        (d/without-obj shape-id)
+                                        (d/vec-without-nils)))))))
 
           (update-parent-id [objects id]
-            (-> objects
-                (d/update-when id assoc :parent-id parent-id)))
+            (d/update-when objects id assoc :parent-id parent-id))
 
           ;; Updates the frame-id references that might be outdated
-          (assign-frame-id [frame-id objects id]
-            (let [objects (d/update-when objects id assoc :frame-id frame-id)
-                  obj     (get objects id)]
+          (update-frame-id [frame-id objects id]
+            (let [obj (some-> (get objects id)
+                              (assoc :frame-id frame-id))]
               (cond-> objects
-                ;; If we moving frame, the parent frame is the root
-                ;; and we DO NOT NEED update children because the
-                ;; children will point correctly to the frame what we
-                ;; are currently moving
-                (not= :frame (:type obj))
-                (as-> $$ (reduce (partial assign-frame-id frame-id) $$ (:shapes obj))))))
+                (some? obj)
+                (assoc id obj)
+
+                ;; If we moving a frame, we DO NOT NEED update
+                ;; children because the children will point correctly
+                ;; to the frame what we are currently moving
+                (not (cfh/frame-shape? obj))
+                (as-> $$ (reduce (partial update-frame-id frame-id) $$ (:shapes obj))))))
+
+          (validate-shape [objects #_:clj-kondo/ignore shape-id]
+            #?(:clj (when-let [shape (get objects shape-id)]
+                      (validate-shape shape page-id)))
+            objects)
 
           (move-objects [objects]
-            (let [valid?   (every? (partial is-valid-move? objects) shapes)
-                  parent   (get objects parent-id)
-                  after-shape-index (d/index-of (:shapes parent) after-shape)
-                  index (if (nil? after-shape-index) index (inc after-shape-index))
-                  frame-id (if (= :frame (:type parent))
-                             (:id parent)
-                             (:frame-id parent))]
+            (let [parent (get objects parent-id)]
+              ;; Do not proceed with the move if parent does not
+              ;; exists; this can happen on a race condition when an
+              ;; inflight move operations lands when parent is deleted
+              (if (and (seq shapes) (every? (partial is-valid-move? objects) shapes) parent)
+                (let [index    (or (some-> (d/index-of (:shapes parent) after-shape) inc) index)
+                      frame-id (if (cfh/frame-shape? parent)
+                                 (:id parent)
+                                 (:frame-id parent))]
+                  (as-> objects $
+                    ;; Add the new shapes to the parent object.
+                    (d/update-when $ parent-id #(add-to-parent % index shapes))
 
-              (if (and valid? (seq shapes))
-                (as-> objects $
-                  ;; Add the new shapes to the parent object.
-                  (d/update-when $ parent-id #(add-to-parent % index shapes))
+                    ;; Update each individual shape link to the new parent
+                    (reduce update-parent-id $ shapes)
 
-                  ;; Update each individual shape link to the new parent
-                  (reduce update-parent-id $ shapes)
+                    ;; Analyze the old parents and clear the old links
+                    ;; only if the new parent is different form old
+                    ;; parent.
+                    (reduce (partial remove-from-old-parent objects) $ shapes)
 
-                  ;; Analyze the old parents and clear the old links
-                  ;; only if the new parent is different form old
-                  ;; parent.
-                  (reduce (partial remove-from-old-parent objects) $ shapes)
+                    ;; Ensure that all shapes of the new parent has a
+                    ;; correct link to the topside frame.
+                    (reduce (partial update-frame-id frame-id) $ shapes)
 
-                  ;; Ensure that all shapes of the new parent has a
-                  ;; correct link to the topside frame.
-                  (reduce (partial assign-frame-id frame-id) $ shapes))
+                    ;; Perform validation of the affected shapes
+                    (reduce validate-shape $ shapes)))
+
                 objects)))]
 
     (if page-id
@@ -916,8 +862,10 @@
   [data {:keys [id] :as params}]
   (d/update-in-when data [:pages-index id]
                     (fn [page]
-                      (let [name (get params :name)
-                            bg   (get params :background :not-found)]
+                      (let [name       (get params :name)
+                            bg         (get params :background :not-found)
+                            grid-color (get params :pixel-grid-color :not-found)
+                            grid-op    (get params :pixel-grid-opacity :not-found)]
                         (cond-> page
                           (string? name)
                           (assoc :name name)
@@ -926,14 +874,26 @@
                           (assoc :background bg)
 
                           (nil? bg)
-                          (dissoc :background))))))
+                          (dissoc :background)
+
+                          (string? grid-color)
+                          (assoc :pixel-grid-color grid-color)
+
+                          (and (not= grid-color :not-found) (nil? grid-color))
+                          (dissoc :pixel-grid-color)
+
+                          (number? grid-op)
+                          (assoc :pixel-grid-opacity grid-op)
+
+                          (and (not= grid-op :not-found) (nil? grid-op))
+                          (dissoc :pixel-grid-opacity))))))
 
 (defmethod process-change :set-plugin-data
   [data {:keys [object-type object-id page-id namespace key value]}]
   (letfn [(update-fn [data]
             (if (some? value)
               (assoc-in data [:plugin-data namespace key] value)
-              (update-in data [:plugin-data namespace] dissoc key)))]
+              (d/update-in-when data [:plugin-data namespace] dissoc key)))]
 
     (case object-type
       :file
@@ -964,21 +924,15 @@
 
 (defmethod process-change :add-color
   [data {:keys [color]}]
-  (ctcl/add-color data color))
+  (ctl/add-color data color))
 
 (defmethod process-change :mod-color
   [data {:keys [color]}]
-  (ctcl/set-color data color))
+  (ctl/set-color data color))
 
 (defmethod process-change :del-color
   [data {:keys [id]}]
-  (ctcl/delete-color data id))
-
-;; DEPRECATED: remove before 2.3
-(defmethod process-change :add-recent-color
-  [data _]
-  data)
-
+  (ctl/delete-color data id))
 
 ;; -- Media
 
@@ -1005,8 +959,8 @@
   (ctkl/mod-component data params))
 
 (defmethod process-change :del-component
-  [data {:keys [id skip-undelete? main-instance]}]
-  (ctf/delete-component data id skip-undelete? main-instance))
+  [data {:keys [id skip-undelete? delta]}]
+  (ctf/delete-component data id skip-undelete? delta))
 
 (defmethod process-change :restore-component
   [data {:keys [id page-id]}]
@@ -1030,85 +984,66 @@
   [data {:keys [id]}]
   (ctyl/delete-typography data id))
 
-;; -- Tokens
+;; -- Design Tokens
 
 (defmethod process-change :set-tokens-lib
   [data {:keys [tokens-lib]}]
   (assoc data :tokens-lib tokens-lib))
 
-(defmethod process-change :add-token
-  [data {:keys [set-name token]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/add-token-in-set set-name (ctob/make-token token)))))
+(defmethod process-change :set-token
+  [data {:keys [set-id token-id attrs]}]
+  (update data :tokens-lib
+          (fn [lib]
+            (let [lib' (ctob/ensure-tokens-lib lib)]
+              (cond
+                (not attrs)
+                (ctob/delete-token lib' set-id token-id)
 
-(defmethod process-change :mod-token
-  [data {:keys [set-name name token]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/update-token-in-set
-                                 set-name
-                                 name
-                                 (fn [old-token]
-                                   (ctob/make-token (merge old-token token)))))))
+                (not (ctob/get-token lib' set-id token-id))
+                (ctob/add-token lib' set-id (ctob/make-token attrs))
 
-(defmethod process-change :del-token
-  [data {:keys [set-name name]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/delete-token-from-set
-                                 set-name
-                                 name))))
+                :else
+                (ctob/update-token lib' set-id token-id
+                                   (fn [prev-token]
+                                     (ctob/make-token (merge prev-token attrs)))))))))
 
-(defmethod process-change :add-temporary-token-theme
-  [data {:keys [token-theme]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/add-theme (ctob/make-token-theme token-theme)))))
+(defmethod process-change :set-token-set
+  [data {:keys [id attrs]}]
+  (update data :tokens-lib
+          (fn [lib]
+            (let [lib' (ctob/ensure-tokens-lib lib)]
+              (cond
+                (not attrs)
+                (ctob/delete-set lib' id)
 
-(defmethod process-change :update-active-token-themes
-  [data {:keys [theme-ids]}]
+                (not (ctob/get-set lib' id))
+                (ctob/add-set lib' (ctob/make-token-set attrs))
+
+                :else
+                (ctob/update-set lib' id (fn [_] (ctob/make-token-set attrs))))))))
+
+(defmethod process-change :set-token-theme
+  [data {:keys [id attrs]}]
+  (update data :tokens-lib
+          (fn [lib]
+            (let [lib' (ctob/ensure-tokens-lib lib)]
+              (cond
+                (not attrs)
+                (ctob/delete-theme lib' id)
+
+                (not (ctob/get-theme lib' id))
+                (ctob/add-theme lib' (ctob/make-token-theme attrs))
+
+                :else
+                (ctob/update-theme lib'
+                                   id
+                                   (fn [prev-token-theme]
+                                     (ctob/make-token-theme (merge prev-token-theme attrs)))))))))
+
+(defmethod process-change :set-active-token-themes
+  [data {:keys [theme-paths]}]
   (update data :tokens-lib #(-> % (ctob/ensure-tokens-lib)
-                                (ctob/set-active-themes theme-ids))))
-
-(defmethod process-change :delete-temporary-token-theme
-  [data {:keys [group name]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/delete-theme group name))))
-
-(defmethod process-change :add-token-theme
-  [data {:keys [token-theme]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/add-theme (-> token-theme
-                                                    (ctob/make-token-theme))))))
-
-(defmethod process-change :mod-token-theme
-  [data {:keys [name group token-theme]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/update-theme group name
-                                                   (fn [prev-theme]
-                                                     (merge prev-theme token-theme))))))
-
-(defmethod process-change :del-token-theme
-  [data {:keys [group name]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/delete-theme group name))))
-
-(defmethod process-change :add-token-set
-  [data {:keys [token-set]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/add-set (ctob/make-token-set token-set)))))
-
-(defmethod process-change :add-token-sets
-  [data {:keys [token-sets]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/add-sets (map ctob/make-token-set token-sets)))))
+                                (ctob/set-active-themes theme-paths))))
 
 (defmethod process-change :rename-token-set-group
   [data {:keys [set-group-path set-group-fname]}]
@@ -1117,55 +1052,44 @@
                                  (ctob/ensure-tokens-lib)
                                  (ctob/rename-set-group set-group-path set-group-fname)))))
 
-(defmethod process-change :mod-token-set
-  [data {:keys [name token-set]}]
-  (update data :tokens-lib (fn [lib]
-                             (-> lib
-                                 (ctob/ensure-tokens-lib)
-                                 (ctob/update-set name (fn [prev-set]
-                                                         (merge prev-set (dissoc token-set :tokens))))))))
-
-(defmethod process-change :move-token-set-before
-  [data {:keys [from-path to-path before-path before-group?] :as changes}]
+(defmethod process-change :move-token-set
+  [data {:keys [from-path to-path before-path before-group] :as changes}]
   (update data :tokens-lib #(-> %
                                 (ctob/ensure-tokens-lib)
-                                (ctob/move-set from-path to-path before-path before-group?))))
+                                (ctob/move-set from-path to-path before-path before-group))))
 
-(defmethod process-change :move-token-set-group-before
-  [data {:keys [from-path to-path before-path before-group?]}]
+(defmethod process-change :move-token-set-group
+  [data {:keys [from-path to-path before-path before-group]}]
   (update data :tokens-lib #(-> %
                                 (ctob/ensure-tokens-lib)
-                                (ctob/move-set-group from-path to-path before-path before-group?))))
+                                (ctob/move-set-group from-path to-path before-path before-group))))
 
-(defmethod process-change :del-token-set
-  [data {:keys [name]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/delete-set-path name))))
+;; === Design Tokens configuration
 
-(defmethod process-change :del-token-set-path
-  [data {:keys [path]}]
-  (update data :tokens-lib #(-> %
-                                (ctob/ensure-tokens-lib)
-                                (ctob/delete-set-path path))))
+(defmethod process-change :set-base-font-size
+  [data {:keys [base-font-size]}]
+  (ctf/set-base-font-size data base-font-size))
+
 
 ;; === Operations
 
-(def ^:private decode-shape
-  (sm/decoder cts/schema:shape sm/json-transformer))
+(def  decode-shape-attrs
+  (sm/decoder cts/schema:shape-attrs sm/json-transformer))
 
 (defmethod process-operation :assign
   [{:keys [type] :as shape} {:keys [value] :as op}]
   (let [modifications (assoc value :type type)
-        modifications (decode-shape modifications)]
+        modifications (decode-shape-attrs modifications)]
     (reduce-kv (fn [shape k v]
-                 (process-operation shape {:type :set
-                                           :attr k
-                                           :val v
-                                           :ignore-touched (:ignore-touched op)
-                                           :ignore-geometry (:ignore-geometry op)}))
+                 (if (not= v (get shape k))
+                   (process-operation shape {:type :set
+                                             :attr k
+                                             :val v
+                                             :ignore-touched (:ignore-touched op)
+                                             :ignore-geometry (:ignore-geometry op)})
+                   shape))
                shape
-               modifications)))
+               (dissoc modifications :type))))
 
 (defmethod process-operation :set
   [shape op]
@@ -1275,7 +1199,7 @@
 ;; frames. Return the ids of the frames affected
 
 (defn- parents-frames
-  "Go trough the parents and get all of them that are a frame."
+  "Go through the parents and get all of them that are a frame."
   [id objects]
   (->> (cfh/get-parents-with-self objects id)
        (filter cfh/frame-shape?)))
@@ -1290,9 +1214,9 @@
                        ; Check if the shape has changed any
                        ; attribute that participates in components synchronization.
                        (and (= (:type operation) :set)
-                            (get ctk/sync-attrs (:attr operation))))
-          any-sync? (some need-sync? operations)]
-      (when any-sync?
+                            (contains? ctk/sync-attrs (:attr operation))))]
+
+      (when (some need-sync? operations)
         (parents-frames id (:objects page))))))
 
 (defmethod frames-changed :mov-objects

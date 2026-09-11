@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns common-tests.types.shape-decode-encode-test
   (:require
@@ -12,10 +12,10 @@
    [app.common.schema.generators :as sg]
    [app.common.schema.test :as smt]
    [app.common.types.color :refer [schema:color schema:gradient]]
+   [app.common.types.path :as path]
    [app.common.types.plugins :refer [schema:plugin-data]]
-   [app.common.types.shape :as tsh]
+   [app.common.types.shape :as tsh :refer [schema:shape]]
    [app.common.types.shape.interactions :refer [schema:animation schema:interaction]]
-   [app.common.types.shape.path :refer [schema:path-content]]
    [app.common.types.shape.shadow :refer [schema:shadow]]
    [app.common.uuid :as uuid]
    [clojure.test :as t]))
@@ -112,17 +112,14 @@
          (= interaction interaction-3)))
      {:num 500})))
 
-
 (t/deftest shape-path-content-json-roundtrip
-  (let [encode (sm/encoder schema:path-content (sm/json-transformer))
-        decode (sm/decoder schema:path-content (sm/json-transformer))]
+  (let [encode (sm/encoder path/schema:content (sm/json-transformer))
+        decode (sm/decoder path/schema:content (sm/json-transformer))]
     (smt/check!
-     (smt/for [path-content (sg/generator schema:path-content)]
+     (smt/for [path-content (sg/generator path/schema:content)]
        (let [path-content-1 (encode path-content)
              path-content-2 (json-roundtrip path-content-1)
              path-content-3 (decode path-content-2)]
-         ;; (app.common.pprint/pprint path-content)
-         ;; (app.common.pprint/pprint path-content-3)
          (= path-content path-content-3)))
      {:num 500})))
 
@@ -138,14 +135,35 @@
      {:num 500})))
 
 (t/deftest shape-json-roundtrip
-  (let [encode (sm/encoder ::tsh/shape (sm/json-transformer))
-        decode (sm/decoder ::tsh/shape (sm/json-transformer))]
+  (let [encode (sm/encoder schema:shape (sm/json-transformer))
+        decode (sm/decoder schema:shape (sm/json-transformer))]
     (smt/check!
-     (smt/for [shape (sg/generator ::tsh/shape)]
+     (smt/for [shape (sg/generator schema:shape)]
        (let [shape-1 (encode shape)
              shape-2 (json-roundtrip shape-1)
              shape-3 (decode shape-2)]
          ;; (app.common.pprint/pprint shape)
          ;; (app.common.pprint/pprint shape-3)
          (= shape shape-3)))
-     {:num 100})))
+     {:num 200})))
+
+(t/deftest shape-generator-key-presence
+  "The generator must produce the keys the schema declares required, even when
+  nilable. This is a targeted check for the attributes added to
+  `schema:shape-generic-attrs` and `schema:nilable-geom-attrs`."
+  (let [shapes (sg/sample (sg/generator schema:shape) {:size 200})
+        by-type (group-by :type shapes)]
+    ;; All shapes: rotation, flip-x, flip-y are base record fields, always
+    ;; present (possibly nil).
+    (doseq [shape shapes]
+      (t/is (contains? shape :rotation) "missing :rotation")
+      (t/is (contains? shape :flip-x) "missing :flip-x")
+      (t/is (contains? shape :flip-y) "missing :flip-y"))
+    ;; Bool and path: x/y/width/height are required-but-nilable in the
+    ;; schema. The generator must produce them (nil is a valid value).
+    (doseq [shape (concat (get by-type :bool [])
+                          (get by-type :path []))]
+      (t/is (contains? shape :x) "bool/path missing :x")
+      (t/is (contains? shape :y) "bool/path missing :y")
+      (t/is (contains? shape :width) "bool/path missing :width")
+      (t/is (contains? shape :height) "bool/path missing :height"))))

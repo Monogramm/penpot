@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.db.sql
   (:refer-clojure :exclude [update])
@@ -39,7 +39,10 @@
 
 (defn insert-many
   [table cols rows opts]
-  (let [opts (merge default-opts opts)]
+  (let [opts (merge default-opts opts)
+        opts (cond-> opts
+               (::on-conflict-do-nothing opts)
+               (assoc :suffix "ON CONFLICT DO NOTHING"))]
     (sql/for-insert-multi table cols rows opts)))
 
 (defn select
@@ -50,8 +53,15 @@
          opts (cond-> opts
                 (::order-by opts)   (assoc :order-by (::order-by opts))
                 (::columns opts)    (assoc :columns (::columns opts))
-                (::for-update opts) (assoc :suffix "FOR UPDATE")
-                (::for-share opts)  (assoc :suffix "FOR SHARE"))]
+
+                (or (::db/for-update opts)
+                    (::for-update opts))
+                (assoc :suffix "FOR UPDATE")
+
+                (or (::db/for-share opts)
+                    (::for-share opts))
+                (assoc :suffix "FOR SHARE"))]
+
      (sql/for-query table where-params opts))))
 
 (defn update

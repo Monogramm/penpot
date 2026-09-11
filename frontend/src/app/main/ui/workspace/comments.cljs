@@ -2,21 +2,25 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.comments
   (:require-macros [app.main.style :as stl])
   (:require
    [app.main.data.comments :as dcmt]
+   [app.main.data.event :as ev]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.comments :as dwcm]
+   [app.main.data.workspace.drawing.common :as dwdc]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.comments :as cmt]
    [app.main.ui.components.dropdown :refer [dropdown]]
    [app.main.ui.context :as ctx]
-   [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.ds.foundations.assets.icon :as i]
+   [app.main.ui.ds.product.empty-state :refer [empty-state*]]
+   [app.main.ui.ds.product.panel-title :refer [panel-title*]]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [rumext.v2 :as mf]))
@@ -52,25 +56,25 @@
            :on-click update-mode}
 
       [:span {:class (stl/css :label)} (tr "labels.show-all-comments")]
-      [:span {:class (stl/css :icon)} i/tick]]
+      [:span {:class (stl/css :icon)} deprecated-icon/tick]]
      [:li {:class  (stl/css-case :dropdown-item true
                                  :selected (= :yours cmode))
            :data-value "yours"
            :on-click update-mode}
       [:span {:class (stl/css :label)}  (tr "labels.show-your-comments")]
-      [:span {:class (stl/css :icon)} i/tick]]
+      [:span {:class (stl/css :icon)} deprecated-icon/tick]]
      [:li {:class (stl/css-case :dropdown-item true
                                 :selected (= :mentions cmode))
            :data-value "mentions"
            :on-click update-mode}
       [:span {:class (stl/css :label)} (tr "labels.show-mentions")]
-      [:span {:class (stl/css :icon)} i/tick]]
+      [:span {:class (stl/css :icon)} deprecated-icon/tick]]
      [:li {:class (stl/css :separator)}]
      [:li {:class (stl/css-case :dropdown-item true
                                 :selected (= :pending cshow))
            :on-click update-show}
       [:span {:class (stl/css :label)}  (tr "labels.hide-resolved-comments")]
-      [:span {:class (stl/css :icon)} i/tick]]]))
+      [:span {:class (stl/css :icon)} deprecated-icon/tick]]]))
 
 (mf/defc comments-sidebar*
   [{:keys [profiles threads page-id from-viewer]}]
@@ -96,7 +100,8 @@
          (fn []
            (if from-viewer
              (st/emit! (dcmt/update-options {:show-sidebar? false}))
-             (st/emit! (dw/clear-edition-mode)
+             (st/emit! (dwdc/clear-drawing)
+                       (dw/clear-edition-mode)
                        (dw/deselect-all true)))))
 
         tgroups     (->> threads
@@ -112,19 +117,18 @@
 
         on-thread-click
         (mf/use-fn
-         (mf/deps page-id)
+         (mf/deps page-id from-viewer)
          (fn [thread]
-           (st/emit! (dwcm/navigate-to-comment thread))))]
+           (if from-viewer
+             (st/emit! (with-meta (dcmt/open-thread thread) {::ev/origin "viewer"}))
+             (st/emit! (dwcm/navigate-to-comment thread)))))]
 
-    [:div  {:class (stl/css-case :comments-section true
-                                 :from-viewer  from-viewer)}
-     [:div {:class (stl/css-case :comments-section-title true
-                                 :viewer-title from-viewer)}
-      [:span (tr "labels.comments")]
-      [:> icon-button* {:variant "ghost"
-                        :aria-label (tr "labels.close")
-                        :on-click close-section
-                        :icon "close"}]]
+    [:div {:class (stl/css-case :comments-section true
+                                :from-viewer from-viewer)}
+
+     [:> panel-title* {:class (stl/css :comments-title)
+                       :text (tr "labels.comments")
+                       :on-close close-section}]
 
      [:button {:class (stl/css :mode-dropdown-wrapper)
                :on-click toggle-mode-selector}
@@ -134,7 +138,7 @@
          (nil :all) (tr "labels.show-all-comments")
          :yours     (tr "labels.show-your-comments")
          :mentions     (tr "labels.show-mentions"))]
-      [:div {:class (stl/css :arrow-icon)} i/arrow]]
+      [:div {:class (stl/css :arrow-icon)} deprecated-icon/arrow]]
 
      [:& dropdown {:show options?
                    :on-close #(reset! state* false)}
@@ -156,6 +160,5 @@
              :key (:page-id tgroup)}])]
 
         [:div {:class (stl/css :thread-group-placeholder)}
-         [:span {:class (stl/css :placeholder-icon)} i/comments]
-         [:span {:class (stl/css :placeholder-label)}
-          (tr "labels.no-comments-available")]])]]))
+         [:> empty-state* {:icon i/comments
+                           :text (tr "labels.no-comments-available")}]])]]))

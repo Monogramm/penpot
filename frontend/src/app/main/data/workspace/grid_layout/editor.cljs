@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.grid-layout.editor
   (:require
@@ -10,6 +10,8 @@
    [app.common.geom.rect :as grc]
    [app.common.types.shape.layout :as ctl]
    [app.main.data.helpers :as dsh]
+   [app.main.data.workspace.viewport-wasm :as dwvw]
+   [app.main.streams :as ms]
    [potok.v2.core :as ptk]))
 
 (defn hover-grid-cell
@@ -87,7 +89,11 @@
   (ptk/reify ::stop-grid-layout-editing
     ptk/UpdateEvent
     (update [_ state]
-      (update state :workspace-grid-edition dissoc grid-id))))
+      (update state :workspace-grid-edition dissoc grid-id))
+
+    ptk/EffectEvent
+    (effect [_ _ _]
+      (ms/clear-transform-preview!))))
 
 (defn locate-board
   [grid-id]
@@ -104,7 +110,11 @@
                             y     (+ y (/ height 2) (- (/ (:height vport) 2 zoom)))
                             srect (grc/make-rect x y width height)]
                         (-> local
-                            (update :vbox merge (select-keys srect [:x :y :x1 :x2 :y1 :y2])))))))))))
+                            (update :vbox merge (select-keys srect [:x :y :x1 :x2 :y1 :y2])))))))))
+
+    ptk/EffectEvent
+    (effect [_ state _]
+      (dwvw/maybe-sync-workspace-local-viewport! state))))
 
 (defn select-track-cells
   [grid-id type index]

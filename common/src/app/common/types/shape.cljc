@@ -2,12 +2,11 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.shape
   (:require
    #?(:clj [app.common.fressian :as fres])
-   [app.common.colors :as clr]
    [app.common.data :as d]
    [app.common.files.helpers :as cfh]
    [app.common.geom.matrix :as gmt]
@@ -18,25 +17,28 @@
    [app.common.record :as cr]
    [app.common.schema :as sm]
    [app.common.schema.generators :as sg]
-   [app.common.text :as txt]
    [app.common.transit :as t]
-   [app.common.types.color :as ctc]
+   [app.common.types.color :as clr]
+   [app.common.types.fills :refer [schema:fills fill->color]]
    [app.common.types.grid :as ctg]
+   [app.common.types.path :as path]
    [app.common.types.plugins :as ctpg]
    [app.common.types.shape.attrs :refer [default-color]]
+   [app.common.types.shape.background-blur :as ctsbb]
    [app.common.types.shape.blur :as ctsb]
    [app.common.types.shape.export :as ctse]
    [app.common.types.shape.interactions :as ctsi]
    [app.common.types.shape.layout :as ctsl]
-   [app.common.types.shape.path :as ctsp]
    [app.common.types.shape.shadow :as ctss]
    [app.common.types.shape.text :as ctsx]
+   [app.common.types.stroke :as stroke]
+   [app.common.types.text :as txt]
    [app.common.types.token :as cto]
+   [app.common.types.variant :as ctv]
    [app.common.uuid :as uuid]
    [clojure.set :as set]))
 
-(defonce ^:dynamic *wasm-sync* false)
-
+(defonce ^:dynamic *shape-changes* nil)
 (defonce wasm-enabled? false)
 (defonce wasm-create-shape (constantly nil))
 
@@ -61,8 +63,8 @@
              (map->Shape attrs))
      :clj  (map->Shape attrs)))
 
-(def stroke-caps-line #{:round :square})
-(def stroke-caps-marker #{:line-arrow :triangle-arrow :square-marker :circle-marker :diamond-marker})
+(def stroke-caps-line stroke/stroke-caps-line)
+(def stroke-caps-marker stroke/stroke-caps-marker)
 (def stroke-caps (conj (set/union stroke-caps-line stroke-caps-marker) nil))
 
 (def shape-types
@@ -117,38 +119,54 @@
 (def schema:points
   [:vector {:gen/max 4 :gen/min 4} ::gpt/point])
 
-(def schema:fill
-  [:map {:title "Fill"}
-   [:fill-color {:optional true} ::ctc/rgb-color]
-   [:fill-opacity {:optional true} ::sm/safe-number]
-   [:fill-color-gradient {:optional true} [:maybe ::ctc/gradient]]
-   [:fill-color-ref-file {:optional true} [:maybe ::sm/uuid]]
-   [:fill-color-ref-id {:optional true} [:maybe ::sm/uuid]]
-   [:fill-image {:optional true} ::ctc/image-color]])
+(def valid-stroke-attrs
+  "A set used for proper check if color should contain only one of the
+  attrs listed in this set."
+  #{:stroke-image :stroke-color :stroke-color-gradient})
 
-(sm/register! ::fill schema:fill)
+(defn has-valid-stroke-attrs?
+  "Check if color has correct color attrs"
+  [color]
+  (let [attrs  (set (keys color))
+        result (set/intersection attrs valid-stroke-attrs)]
+    (= 1 (count result))))
 
-(def ^:private schema:stroke
-  [:map {:title "Stroke"}
-   [:stroke-color {:optional true} :string]
+(def schema:stroke-attrs
+  [:map {:title "StrokeAttrs" :closed true}
    [:stroke-color-ref-file {:optional true} ::sm/uuid]
    [:stroke-color-ref-id {:optional true} ::sm/uuid]
    [:stroke-opacity {:optional true} ::sm/safe-number]
    [:stroke-style {:optional true}
-    [::sm/one-of #{:solid :dotted :dashed :mixed :none :svg}]]
+    [::sm/one-of #{:solid :dotted :dashed :mixed}]]
    [:stroke-width {:optional true} ::sm/safe-number]
+   ;; wasm-render only, backwards compatible
+   [:stroke-per-side {:optional true} :boolean]
+   [:stroke-width-top {:optional true} ::sm/safe-number]
+   [:stroke-width-right {:optional true} ::sm/safe-number]
+   [:stroke-width-bottom {:optional true} ::sm/safe-number]
+   [:stroke-width-left {:optional true} ::sm/safe-number]
+   [:stroke-dash {:optional true} ::sm/safe-number]
+   [:stroke-gap {:optional true} ::sm/safe-number]
    [:stroke-alignment {:optional true}
     [::sm/one-of #{:center :inner :outer}]]
    [:stroke-cap-start {:optional true}
     [::sm/one-of stroke-caps]]
    [:stroke-cap-end {:optional true}
     [::sm/one-of stroke-caps]]
-   [:stroke-color-gradient {:optional true} ::ctc/gradient]
-   [:stroke-image {:optional true} ::ctc/image-color]])
+   [:stroke-color {:optional true} clr/schema:hex-color]
+   [:stroke-color-gradient {:optional true} clr/schema:gradient]
+   [:stroke-image {:optional true} clr/schema:image]
+   [:hidden {:optional true} :boolean]])
 
-(sm/register! ::stroke schema:stroke)
+(def stroke-attrs
+  "A set of attrs that corresponds to stroke data type"
+  (sm/keys schema:stroke-attrs))
 
-(def check-stroke!
+(def schema:stroke
+  [:and schema:stroke-attrs
+   [:fn has-valid-stroke-attrs?]])
+
+(def check-stroke
   (sm/check-fn schema:stroke))
 
 (def schema:shape-base-attrs
@@ -170,9 +188,8 @@
    [:width ::sm/safe-number]
    [:height ::sm/safe-number]])
 
-;; FIXME: rename to shape-generic-attrs
-(def schema:shape-attrs
-  [:map {:title "ShapeAttrs"}
+(def schema:shape-generic-attrs
+  [:map {:title "ShapeGenericAttrs"}
    [:page-id {:optional true} ::sm/uuid]
    [:component-id {:optional true}  ::sm/uuid]
    [:component-file {:optional true} ::sm/uuid]
@@ -186,8 +203,7 @@
    [:locked {:optional true} :boolean]
    [:hidden {:optional true} :boolean]
    [:masked-group {:optional true} :boolean]
-   [:fills {:optional true}
-    [:vector {:gen/max 2} schema:fill]]
+   [:fills {:optional true} schema:fills]
    [:proportion {:optional true} ::sm/safe-number]
    [:proportion-lock {:optional true} :boolean]
    [:constraints-h {:optional true}
@@ -201,22 +217,66 @@
    [:r4 {:optional true} ::sm/safe-number]
    [:opacity {:optional true} ::sm/safe-number]
    [:grids {:optional true}
-    [:vector {:gen/max 2} ::ctg/grid]]
+    [:vector {:gen/max 2} ctg/schema:grid]]
    [:exports {:optional true}
-    [:vector {:gen/max 2} ::ctse/export]]
+    [:vector {:gen/max 2} ctse/schema:export]]
    [:strokes {:optional true}
     [:vector {:gen/max 2} schema:stroke]]
    [:blend-mode {:optional true}
     [::sm/one-of blend-modes]]
    [:interactions {:optional true}
-    [:vector {:gen/max 2} ::ctsi/interaction]]
+    [:vector {:gen/max 2} ctsi/schema:interaction]]
    [:shadow {:optional true}
-    [:vector {:gen/max 1} ::ctss/shadow]]
-   [:blur {:optional true} ::ctsb/blur]
+    [:vector {:gen/max 1} ctss/schema:shadow]]
+   [:blur {:optional true} ctsb/schema:blur]
+   [:background-blur {:optional true} ctsbb/schema:background-blur]
    [:grow-type {:optional true}
     [::sm/one-of grow-types]]
-   [:applied-tokens {:optional true} ::cto/applied-tokens]
-   [:plugin-data {:optional true} ::ctpg/plugin-data]])
+   [:applied-tokens {:optional true} cto/schema:applied-tokens]
+   [:plugin-data {:optional true} ctpg/schema:plugin-data]
+
+   ;; `rotation`, `flip-x` and `flip-y` are fields of the `Shape` record (see
+   ;; `cr/defrecord Shape` above) and this schema did not declare them.
+   ;; `rotation` was already named in `allowed-shape-attrs` here and in
+   ;; `app.common.types.shape.attrs/editable-attrs`, so the omission was in this
+   ;; schema and not in the model. Anything reading the model from the schema
+   ;; rather than from a live shape missed all three: the graph projection
+   ;; derives one column per entry (`app.graph.schema.projection`), so shape
+   ;; nodes carried no rotation at all, and a consumer cannot place a shape
+   ;; without it.
+   ;;
+   ;; Nilable, because `app.common.record/defrecord` cannot remove a base
+   ;; field: its `without` assocs nil and its `containsKey` answers true
+   ;; whatever the field holds, so nil is how a record field says "unset".
+   ;; `flip-x` and `flip-y` are nil on every shape `setup-shape` builds, since
+   ;; `make-minimal-shape` gives them no default.
+   ;;
+   ;; Optional as well, unlike the geometry group below, because this schema
+   ;; has a second job: `check-shape-generic-attrs` validates partial update
+   ;; payloads with it, such as the `{:blocked true}` that
+   ;; `app.main.data.workspace/update-shape` passes. A required key here would
+   ;; reject every such payload.
+   [:rotation {:optional true} [:maybe ::sm/safe-number]]
+   [:flip-x {:optional true} [:maybe :boolean]]
+   [:flip-y {:optional true} [:maybe :boolean]]
+
+   ;; Carried on circles, rects and texts too, not only on frames, so it
+   ;; belongs here rather than in `schema:frame-attrs`. Not nilable: the key
+   ;; lives outside the record, `app.common.logic.shapes` dissocs it to unset
+   ;; it, and `setup-shape` drops it when a caller passes nil.
+   [:hide-in-viewer {:optional true} :boolean]
+
+   ;; The SVG provenance an import leaves on a shape. Typed `:map` rather than
+   ;; more precisely on purpose: legacy files hold `svg-transform` as a plain
+   ;; `{:a … :f}` map rather than a `::gmt/matrix` record, and `svg-viewbox` as
+   ;; either a `::grc/rect` record or a plain map, so a tighter schema here
+   ;; would reject files that are otherwise valid. The graph *column* types are
+   ;; tightened separately, where a wrong guess costs a column rather than a
+   ;; rejected file (`app.graph.schema.contract/type-overrides`).
+   [:svg-attrs {:optional true} :map]
+   [:svg-defs {:optional true} :map]
+   [:svg-transform {:optional true} :map]
+   [:svg-viewbox {:optional true} :map]])
 
 (def schema:group-attrs
   [:map {:title "GroupAttrs"}
@@ -227,22 +287,69 @@
    [:shapes [:vector {:gen/max 10 :gen/min 1} ::sm/uuid]]
    [:hide-fill-on-export {:optional true} :boolean]
    [:show-content {:optional true} :boolean]
-   [:hide-in-viewer {:optional true} :boolean]])
+   ;; `hide-in-viewer` moved to `schema:shape-generic-attrs`: stored files carry
+   ;; it on circles, rects and texts too, not only on frames.
+   ;; `use-for-thumbnail` is a frame attribute the model has long had, since
+   ;; `app.common.files.migrations` renames `:use-for-thumbnail?` to it and
+   ;; `app.common.logic.libraries` reads it, and this schema had not declared.
+   [:use-for-thumbnail {:optional true} :boolean]])
+
+(def ^:private schema:nilable-geom-attrs
+  "`schema:shape-geom-attrs`, but nilable.
+
+  Bools and paths are the only two shape types whose geometry can be nil:
+  `make-minimal-shape` gives `x`, `y`, `width` and `height` a default for every
+  other type and skips those two, whose extent their content and `selrect`
+  imply instead. The four keys stay required, because they are `Shape` record
+  fields and `app.common.record/defrecord` keeps a base field present whatever
+  it holds. So these two branches cannot merge `schema:shape-geom-attrs`, which
+  rejects the nil, and declare the same four keys nilable instead. A
+  schema-derived reader previously saw a bool or a path as having no position or
+  size at all."
+  [:map {:title "NilableGeometryAttrs"}
+   [:x [:maybe ::sm/safe-number]]
+   [:y [:maybe ::sm/safe-number]]
+   [:width [:maybe ::sm/safe-number]]
+   [:height [:maybe ::sm/safe-number]]])
 
 (def ^:private schema:bool-attrs
   [:map {:title "BoolAttrs"}
    [:shapes [:vector {:gen/max 10 :gen/min 1} ::sm/uuid]]
    [:bool-type [::sm/one-of bool-types]]
-   [:bool-content ::ctsp/content]])
+   [:content path/schema:content]])
 
 (def ^:private schema:rect-attrs
-  [:map {:title "RectAttrs"}])
+  [:map {:title "RectAttrs"}
+   ;; Legacy radii, set by SVG import (`app.common.files.shapes-builder` parses
+   ;; `rx`/`ry` off the element) and by migration 0003, which assocs `0`.
+   ;; Superseded by `r1` to `r4`, but stored files still carry them. Not
+   ;; nilable: both keys live outside the `Shape` record, so a dissoc removes
+   ;; them, and `setup-shape` drops a nil before the merge.
+   [:rx {:optional true} ::sm/safe-number]
+   [:ry {:optional true} ::sm/safe-number]])
 
 (def ^:private schema:circle-attrs
-  [:map {:title "CircleAttrs"}])
+  [:map {:title "CircleAttrs"}
+   [:rx {:optional true} ::sm/safe-number]
+   [:ry {:optional true} ::sm/safe-number]])
 
 (def ^:private schema:svg-raw-attrs
-  [:map {:title "SvgRawAttrs"}])
+  [:map {:title "SvgRawAttrs"}
+   ;; An svg-raw shape can be a container: importing an SVG builds a
+   ;; tree of svg-raw shapes, and `cfh/group-like-shape?` treats an
+   ;; svg-raw with children as group-like. Declaring `:shapes` here
+   ;; keeps the child ids typed as uuid, so a JSON round trip (binfile
+   ;; export/import) decodes them back to uuids instead of leaving
+   ;; strings that no longer resolve against the objects map.
+   [:shapes {:optional true} [:vector {:gen/max 10} ::sm/uuid]]
+   ;; The raw SVG node an import kept.
+   ;; `app.common.files.shapes-builder/create-raw-svg` sets it and
+   ;; `allowed-svg-attrs` names it. Usually the parsed element,
+   ;; `{:tag … :attrs … :content …}`, but a bare text node arrives as the
+   ;; string itself: `<text>hi</text>` becomes one svg-raw for the element
+   ;; and another for `"hi"`. `app.common.files.shapes-builder/parse-svg-element`
+   ;; carries a FIXME about exactly that. Both forms are legal and stored.
+   [:content {:optional true} [:or :map :string]]])
 
 (def schema:image-attrs
   [:map {:title "ImageAttrs"}
@@ -258,11 +365,12 @@
 
 (def ^:private schema:path-attrs
   [:map {:title "PathAttrs"}
-   [:content ::ctsp/content]])
+   [:content path/schema:content]])
 
 (def ^:private schema:text-attrs
   [:map {:title "TextAttrs"}
-   [:content {:optional true} [:maybe ::ctsx/content]]])
+   [:position-data {:optional true} [:maybe ctsx/schema:position-data]]
+   [:content {:optional true} [:maybe ctsx/schema:content]]])
 
 (defn- decode-shape
   [o]
@@ -275,8 +383,11 @@
   []
   (->> (sg/generator schema:shape-base-attrs)
        (sg/mcat (fn [{:keys [type] :as shape}]
-                  (sg/let [attrs1 (sg/generator schema:shape-attrs)
-                           attrs2 (sg/generator schema:shape-geom-attrs)
+                  (sg/let [attrs1 (sg/generator schema:shape-generic-attrs)
+                           attrs2 (if (or (= type :path)
+                                          (= type :bool))
+                                    (sg/generator schema:nilable-geom-attrs)
+                                    (sg/generator schema:shape-geom-attrs))
                            attrs3 (case type
                                     :text    (sg/generator schema:text-attrs)
                                     :path    (sg/generator schema:path-attrs)
@@ -287,98 +398,103 @@
                                     :bool    (sg/generator schema:bool-attrs)
                                     :group   (sg/generator schema:group-attrs)
                                     :frame   (sg/generator schema:frame-attrs))]
-                    (if (or (= type :path)
-                            (= type :bool))
-                      (merge attrs1 shape attrs3)
-                      (merge attrs1 shape attrs2 attrs3)))))
+                    (merge attrs1 shape attrs2 attrs3))))
        (sg/fmap create-shape)))
+
+(def schema:shape-attrs
+  [:multi {:dispatch :type
+           :decode/json (fn [shape]
+                          (update shape :type keyword))
+           :title "Shape"}
+   [:group
+    [:merge {:title "GroupShape"}
+     ctsl/schema:layout-child-attrs
+     schema:group-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:frame
+    [:merge {:title "FrameShape"}
+     ctsl/schema:layout-child-attrs
+     ctsl/schema:layout-attrs
+     schema:frame-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs
+     ctv/schema:variant-shape
+     ctv/schema:variant-container]]
+
+   [:bool
+    [:merge {:title "BoolShape"}
+     ctsl/schema:layout-child-attrs
+     schema:bool-attrs
+     schema:shape-generic-attrs
+     schema:nilable-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:rect
+    [:merge {:title "RectShape"}
+     ctsl/schema:layout-child-attrs
+     schema:rect-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:circle
+    [:merge {:title "CircleShape"}
+     ctsl/schema:layout-child-attrs
+     schema:circle-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:image
+    [:merge {:title "ImageShape"}
+     ctsl/schema:layout-child-attrs
+     schema:image-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:svg-raw
+    [:merge {:title "SvgRawShape"}
+     ctsl/schema:layout-child-attrs
+     schema:svg-raw-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:path
+    [:merge {:title "PathShape"}
+     ctsl/schema:layout-child-attrs
+     schema:path-attrs
+     schema:shape-generic-attrs
+     schema:nilable-geom-attrs
+     schema:shape-base-attrs]]
+
+   [:text
+    [:merge {:title "TextShape"}
+     ctsl/schema:layout-child-attrs
+     schema:text-attrs
+     schema:shape-generic-attrs
+     schema:shape-geom-attrs
+     schema:shape-base-attrs]]])
 
 (def schema:shape
   [:and {:title "Shape"
          :gen/gen (shape-generator)
          :decode/json {:leave decode-shape}}
    [:fn shape?]
-   [:multi {:dispatch :type
-            :decode/json (fn [shape]
-                           (update shape :type keyword))
-            :title "Shape"}
-    [:group
-     [:merge {:title "GroupShape"}
-      ::ctsl/layout-child-attrs
-      schema:group-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
+   schema:shape-attrs])
 
-    [:frame
-     [:merge {:title "FrameShape"}
-      ::ctsl/layout-child-attrs
-      ::ctsl/layout-attrs
-      schema:frame-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
+(def check-shape-generic-attrs
+  (sm/check-fn schema:shape-generic-attrs))
 
-    [:bool
-     [:merge {:title "BoolShape"}
-      ::ctsl/layout-child-attrs
-      schema:bool-attrs
-      schema:shape-attrs
-      schema:shape-base-attrs]]
-
-    [:rect
-     [:merge {:title "RectShape"}
-      ::ctsl/layout-child-attrs
-      schema:rect-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
-
-    [:circle
-     [:merge {:title "CircleShape"}
-      ::ctsl/layout-child-attrs
-      schema:circle-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
-
-    [:image
-     [:merge {:title "ImageShape"}
-      ::ctsl/layout-child-attrs
-      schema:image-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
-
-    [:svg-raw
-     [:merge {:title "SvgRawShape"}
-      ::ctsl/layout-child-attrs
-      schema:svg-raw-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]
-
-    [:path
-     [:merge {:title "PathShape"}
-      ::ctsl/layout-child-attrs
-      schema:path-attrs
-      schema:shape-attrs
-      schema:shape-base-attrs]]
-
-    [:text
-     [:merge {:title "TextShape"}
-      ::ctsl/layout-child-attrs
-      schema:text-attrs
-      schema:shape-attrs
-      schema:shape-geom-attrs
-      schema:shape-base-attrs]]]])
-
-(sm/register! ::shape schema:shape)
-
-(def check-shape-attrs!
+(def check-shape-attrs
   (sm/check-fn schema:shape-attrs))
 
-(def check-shape!
+(def check-shape
   (sm/check-fn schema:shape
                :hint "expected valid shape"))
 
@@ -392,6 +508,57 @@
   [{:keys [fills strokes]}]
   (or (some :fill-image fills)
       (some :stroke-image strokes)))
+
+;; Valid attributes for keeping on a switch
+(def ^:private allowed-shape-attrs
+  #{:page-id :component-id :component-file :component-root :main-instance
+    :remote-synced :shape-ref :touched :blocked :collapsed :locked
+    :hidden :masked-group :fills :proportion :proportion-lock :constraints-h
+    :constraints-v :fixed-scroll :r1 :r2 :r3 :r4 :rotation :opacity :grids :exports
+    :strokes :blend-mode :interactions :shadow :blur :background-blur :grow-type :applied-tokens
+    :plugin-data})
+
+(def ^:private allowed-shape-geom-attrs #{:x :y :width :height})
+(def ^:private allowed-shape-base-attrs #{:id :name :type :selrect :points :transform
+                                          :transform-inverse :parent-id :frame-id})
+(def ^:private allowed-bool-attrs #{:shapes :bool-type :content})
+(def ^:private allowed-group-attrs #{:shapes})
+(def ^:private allowed-frame-attrs #{:shapes :hide-fill-on-export :show-content :hide-in-viewer
+                                     :layout :layout-flex-dir :layout-gap-type :layout-gap
+                                     :layout-align-items :layout-justify-content :layout-align-content
+                                     :layout-wrap-type :layout-padding-type :layout-padding
+                                     :layout-grid-dir :layout-justify-items :layout-grid-columns
+                                     :layout-grid-rows})
+(def ^:private allowed-image-attrs #{:metadata})
+(def ^:private allowed-svg-attrs #{:content})
+(def ^:private allowed-path-attrs #{:content})
+(def ^:private allowed-text-attrs #{:content})
+(def ^:private allowed-generic-attrs (set/union allowed-shape-attrs allowed-shape-geom-attrs allowed-shape-base-attrs))
+
+(defn is-allowed-switch-keep-attr?
+  [attr type]
+  (case type
+    :group   (or (contains? allowed-group-attrs attr)
+                 (contains? allowed-generic-attrs attr))
+    :frame   (or (contains? allowed-frame-attrs attr)
+                 (contains? allowed-generic-attrs attr))
+    :bool    (or (contains? allowed-bool-attrs attr)
+                 (contains? allowed-shape-attrs attr)
+                 (contains? allowed-shape-base-attrs attr))
+    :rect    (contains? allowed-generic-attrs attr)
+    :circle  (contains? allowed-generic-attrs attr)
+    :image   (or (contains? allowed-image-attrs attr)
+                 (contains? allowed-generic-attrs attr))
+    :svg-raw (or (contains? allowed-svg-attrs attr)
+                 (contains? allowed-generic-attrs attr))
+    :path    (or (contains? allowed-path-attrs attr)
+                 (contains? allowed-shape-attrs attr)
+                 (contains? allowed-shape-base-attrs attr))
+    :text    (or (contains? allowed-text-attrs attr)
+                 (contains? allowed-generic-attrs attr))))
+
+
+
 
 ;; --- Initialization
 
@@ -457,9 +624,10 @@
   {:type :path
    :name "Path"
    :fills []
+   ;; Paths use centered strokes by default.
    :strokes [{:stroke-style :solid
-              :stroke-alignment :inner
-              :stroke-width 2
+              :stroke-alignment :center
+              :stroke-width 1
               :stroke-color clr/black
               :stroke-opacity 1}]})
 
@@ -490,10 +658,15 @@
   [type]
   (let [type  (if (= type :curve) :path type)
         attrs (get-minimal-shape type)
-        attrs (cond-> attrs
-                (and (not= :path type)
-                     (not= :bool type))
-                (-> (assoc :x 0)
+        attrs (if (or (= :path type)
+                      (= :bool type))
+                (-> attrs
+                    (assoc :x nil)
+                    (assoc :y nil)
+                    (assoc :width nil)
+                    (assoc :height nil))
+                (-> attrs
+                    (assoc :x 0)
                     (assoc :y 0)
                     (assoc :width 0.01)
                     (assoc :height 0.01)))
@@ -522,12 +695,16 @@
 (defn setup-path
   [{:keys [content selrect points] :as shape}]
   (let [selrect (or selrect
-                    (gsh/content->selrect content)
+                    (path/calc-selrect content)
                     (grc/make-rect))
-        points  (or points  (grc/rect->points selrect))]
+        points  (or points
+                    (grc/rect->points selrect))
+        ;; Ensure we hace correct type here for Path Data
+        content (path/content content)]
     (-> shape
         (assoc :selrect selrect)
-        (assoc :points points))))
+        (assoc :points points)
+        (assoc :content content))))
 
 (defn- setup-image
   [{:keys [metadata] :as shape}]
@@ -586,53 +763,63 @@
 ;;  - Contraints
 ;;  - Shadow
 ;;  - Blur
+;;  - Background blur
 ;;  - Border radius
 (def ^:private basic-extract-props
-  [:fills
-   :strokes
-   :opacity
+  #{:fills
+    :strokes
+    :opacity
 
-   ;; Layout Item
-   :layout-item-margin
-   :layout-item-margin-type
-   :layout-item-h-sizing
-   :layout-item-v-sizing
-   :layout-item-max-h
-   :layout-item-min-h
-   :layout-item-max-w
-   :layout-item-min-w
-   :layout-item-absolute
-   :layout-item-z-index
+    ;; Layout Item
+    :layout-item-margin
+    :layout-item-margin-type
+    :layout-item-h-sizing
+    :layout-item-v-sizing
+    :layout-item-max-h
+    :layout-item-min-h
+    :layout-item-max-w
+    :layout-item-min-w
+    :layout-item-absolute
+    :layout-item-z-index
 
-   ;; Constraints
-   :constraints-h
-   :constraints-v
+    ;; Constraints
+    :constraints-h
+    :constraints-v
 
-   :shadow
-   :blur
+    :shadow
+    :blur
+    :background-blur
 
-   ;; Radius
-   :r1
-   :r2
-   :r3
-   :r4])
+    ;; Radius
+    :r1
+    :r2
+    :r3
+    :r4})
+
+(def ^:private text-extract-props
+  (into #{} cat [txt/root-attrs txt/paragraph-attrs txt/text-node-attrs]))
 
 (def ^:private layout-extract-props
-  [:layout
-   :layout-flex-dir
-   :layout-gap-type
-   :layout-gap
-   :layout-wrap-type
-   :layout-align-items
-   :layout-align-content
-   :layout-justify-items
-   :layout-justify-content
-   :layout-padding-type
-   :layout-padding
-   :layout-grid-dir
-   :layout-grid-rows
-   :layout-grid-columns
-   :layout-grid-cells])
+  (set ctsl/layout-attrs))
+
+;; Token attrs are not shape attrs (:fill token vs :fills attr, :m1..:m4 vs
+;; :layout-item-margin). A token may only travel with the value it resolves to,
+;; so its domain is derived from the props that are actually written. The attrs
+;; holding a map of edges are patched edge by edge, so only the edges present
+;; in the map are written.
+(defn- token-attrs
+  [props]
+  (reduce-kv (fn [result attr value]
+               (let [sub-attrs (when (map? value)
+                                 (not-empty (set (keys value))))]
+                 (into result
+                       (if (= :layout-gap attr)
+                         (if (some? sub-attrs)
+                           (filter cto/spacing-gap-keys sub-attrs)
+                           cto/spacing-gap-keys)
+                         (cto/shape-attr->token-attrs attr sub-attrs)))))
+             #{}
+             props))
 
 (defn extract-props
   "Retrieves an object with the 'pasteable' properties for a shape."
@@ -664,17 +851,28 @@
                       (assoc-props node txt/text-node-attrs)))
                   props)))
 
-          (extract-layout-props
-            [props shape]
-            (d/patch-object props (select-keys shape layout-extract-props)))]
+          (extract-layout-attrs [props shape]
+            (d/patch-object props (select-keys shape ctsl/layout-attrs)))
 
-    (-> shape
-        (select-keys basic-extract-props)
-        (cond-> (cfh/text-shape? shape) (extract-text-props shape))
-        (cond-> (ctsl/any-layout? shape) (extract-layout-props shape)))))
+          (extract-token-props [props shape]
+            (let [tokens (-> (:applied-tokens shape)
+                             (select-keys (token-attrs props))
+                             (not-empty))]
+              (cond-> props
+                (some? tokens)
+                (assoc :applied-tokens tokens))))]
+
+    (let [;; For texts we don't extract the fill
+          extract-props
+          (cond-> basic-extract-props (cfh/text-shape? shape) (disj :fills))]
+      (-> shape
+          (select-keys extract-props)
+          (cond-> (cfh/text-shape? shape) (extract-text-props shape))
+          (cond-> (ctsl/any-layout? shape) (extract-layout-attrs shape))
+          (extract-token-props shape)))))
 
 (defn patch-props
-  "Given the object of `extract-props` applies it to a shape. Adapt the shape if necesary"
+  "Given the object of `extract-props` applies it to a shape. Adapt the shape if necessary"
   [shape props objects]
 
   (letfn [(patch-text-props [shape props]
@@ -696,12 +894,231 @@
                              (d/patch-object (select-keys props txt/text-node-attrs))))))))))
 
           (patch-layout-props [shape props]
-            (let [shape (d/patch-object shape (select-keys props layout-extract-props))]
+            (let [shape (d/patch-object shape (select-keys props ctsl/layout-attrs))]
               (cond-> shape
                 (ctsl/grid-layout? shape)
-                (ctsl/assign-cells objects))))]
+                (ctsl/assign-cells objects))))
+
+          (patched-props [shape props]
+            (let [text?  (cfh/text-shape? shape)
+                  frame? (cfh/frame-shape? shape)]
+              (select-keys props
+                           (filter (fn [attr]
+                                     (or (contains? basic-extract-props attr)
+                                         (and text? (contains? text-extract-props attr))
+                                         (and frame? (contains? layout-extract-props attr))))
+                                   (keys props)))))
+
+          (patch-token-props [shape props]
+            (let [attrs  (token-attrs (patched-props shape props))
+                  tokens (-> (:applied-tokens shape)
+                             (d/without-keys attrs)
+                             (merge (select-keys (:applied-tokens props) attrs))
+                             (not-empty))]
+              (if (some? tokens)
+                (assoc shape :applied-tokens tokens)
+                (dissoc shape :applied-tokens))))]
 
     (-> shape
         (d/patch-object (select-keys props basic-extract-props))
         (cond-> (cfh/text-shape? shape) (patch-text-props props))
-        (cond-> (cfh/frame-shape? shape) (patch-layout-props props)))))
+        (cond-> (cfh/frame-shape? shape) (patch-layout-props props))
+        (patch-token-props props))))
+
+
+
+(defn- set-fill-color
+  [shape position color opacity gradient image]
+  (update-in shape [:fills position]
+             (fn [fill]
+               (d/without-nils (assoc fill
+                                      :fill-color color
+                                      :fill-opacity opacity
+                                      :fill-color-gradient gradient
+                                      :fill-image image)))))
+
+
+(defn- attach-fill-color
+  [shape position ref-id ref-file]
+  (d/update-in-when shape [:fills position]
+                    (fn [fill]
+                      (-> fill
+                          (assoc :fill-color-ref-file ref-file)
+                          (assoc :fill-color-ref-id ref-id)))))
+
+(defn- detach-fill-color
+  [shape position]
+  (d/update-in-when shape [:fills position] dissoc :fill-color-ref-id :fill-color-ref-file))
+
+
+(defn- set-stroke-color
+  [shape position color opacity gradient image]
+  (d/update-in-when shape [:strokes position]
+                    (fn [stroke]
+                      (-> stroke
+                          (assoc :stroke-color color)
+                          (assoc :stroke-opacity opacity)
+                          (assoc :stroke-color-gradient gradient)
+                          (assoc :stroke-image image)
+                          (d/without-nils)))))
+
+(defn- attach-stroke-color
+  [shape position ref-id ref-file]
+  (d/update-in-when shape [:strokes position]
+                    (fn [stroke]
+                      (-> stroke
+                          (assoc :stroke-color-ref-id ref-id)
+                          (assoc :stroke-color-ref-file ref-file)))))
+
+(defn- detach-stroke-color
+  [shape position]
+  (d/update-in-when shape [:strokes position] dissoc :stroke-color-ref-id :stroke-color-ref-file))
+
+(defn- set-shadow-color
+  [shape position color opacity gradient]
+  (d/update-in-when shape [:shadow position :color]
+                    (fn [shadow-color]
+                      (-> shadow-color
+                          (assoc :color color)
+                          (assoc :opacity opacity)
+                          (assoc :gradient gradient)
+                          (d/without-nils)))))
+
+(defn- attach-shadow-color
+  [shape position ref-id ref-file]
+  (d/update-in-when shape [:shadow position :color]
+                    (fn [color]
+                      (-> color
+                          (assoc :ref-id ref-id)
+                          (assoc :ref-file ref-file)))))
+
+(defn- detach-shadow-color
+  [shape position]
+  (d/update-in-when shape [:shadow position :color] dissoc :ref-id :ref-file))
+
+(defn- set-grid-color
+  [shape position color opacity gradient]
+  (d/update-in-when shape [:grids position :params :color]
+                    (fn [grid-color]
+                      (-> grid-color
+                          (assoc :color color)
+                          (assoc :opacity opacity)
+                          (assoc :gradient gradient)
+                          (d/without-nils)))))
+
+(defn- attach-grid-color
+  [shape position ref-id ref-file]
+  (d/update-in-when shape [:grids position :params :color]
+                    (fn [color]
+                      (-> color
+                          (assoc :ref-id ref-id)
+                          (assoc :ref-file ref-file)))))
+
+(defn- detach-grid-color
+  [shape position]
+  (d/update-in-when shape [:grids position :params :color] dissoc :ref-id :ref-file))
+
+(defn process-shape-colors
+  "Execute an update function on all colors of a shape."
+  [shape process-fn]
+  (let [process-fill (fn [shape [position fill]]
+                       (process-fn shape
+                                   position
+                                   (fill->color fill)
+                                   set-fill-color
+                                   attach-fill-color
+                                   detach-fill-color))
+
+        process-stroke (fn [shape [position stroke]]
+                         (process-fn shape
+                                     position
+                                     (clr/stroke->color stroke)
+                                     set-stroke-color
+                                     attach-stroke-color
+                                     detach-stroke-color))
+
+        process-shadow (fn [shape [position shadow]]
+                         (process-fn shape
+                                     position
+                                     (clr/shadow->color shadow)
+                                     set-shadow-color
+                                     attach-shadow-color
+                                     detach-shadow-color))
+
+        process-grid (fn [shape [position grid]]
+                       (process-fn shape
+                                   position
+                                   (clr/grid->color grid)
+                                   set-grid-color
+                                   attach-grid-color
+                                   detach-grid-color))
+
+        process-text-node (fn [node]
+                            (as-> node $
+                              (reduce process-fill $ (d/enumerate (:fills $)))
+                              (reduce process-stroke $ (d/enumerate (:strokes $)))))
+
+        process-text (fn [shape]
+                       (let [content     (:content shape)
+                             new-content (txt/transform-nodes process-text-node content)]
+                         (if (not= content new-content)
+                           (assoc shape :content new-content)
+                           shape)))]
+
+    (as-> shape $
+      (reduce process-fill $ (d/enumerate (:fills $)))
+      (reduce process-stroke $ (d/enumerate (:strokes $)))
+      (reduce process-shadow $ (d/enumerate (:shadow $)))
+      (reduce process-grid $ (d/enumerate (:grids $)))
+      (process-text $))))
+
+(defn- get-text-node-colors
+  "Get all colors used by a node of a text shape"
+  [node]
+  (concat (map fill->color (:fills node))
+          (map clr/stroke->color (:strokes node))))
+
+(defn get-all-colors
+  "Get all colors used by a shape, in any section."
+  [shape]
+  ;; FIXME: all this functions should be really in color?
+  (concat (map fill->color (:fills shape))
+          (map clr/stroke->color (:strokes shape))
+          (map clr/shadow->color (:shadow shape))
+          (when (= (:type shape) :frame)
+            (map clr/grid->color (:grids shape)))
+          (when (= (:type shape) :text)
+            (reduce (fn [colors node]
+                      (concat colors (get-text-node-colors node)))
+                    ()
+                    (txt/node-seq (:content shape))))))
+
+(defn uses-library-color?
+  "Check if the shape uses the given library color."
+  [shape library-id color-id]
+  (let [all-colors (get-all-colors shape)]
+    (some #(and (= (:ref-id %) color-id)
+                (= (:ref-file %) library-id))
+          all-colors)))
+
+(defn uses-library-colors?
+  "Check if the shape uses any color in the given library."
+  [shape library-id]
+  (let [all-colors (get-all-colors shape)]
+    (some #(and (some? (:ref-id %))
+                (= (:ref-file %) library-id))
+          all-colors)))
+
+(defn remap-colors
+  "Change the shape so that any use of the given color now points to
+  the given library."
+  [shape library-id color]
+  (letfn [(remap-color [shape position shape-color _ attach-fn _]
+            (if (= (:ref-id shape-color) (:id color))
+              (attach-fn shape
+                         position
+                         (:id color)
+                         library-id)
+              shape))]
+
+    (process-shape-colors shape remap-color)))

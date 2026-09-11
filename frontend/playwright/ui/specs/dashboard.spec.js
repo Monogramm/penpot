@@ -3,14 +3,9 @@ import DashboardPage from "../pages/DashboardPage";
 
 test.beforeEach(async ({ page }) => {
   await DashboardPage.init(page);
-  await DashboardPage.mockRPC(
-    page,
-    "get-profile",
-    "logged-in-user/get-profile-logged-in-no-onboarding.json",
-  );
 });
 
-test("Dashboad page has title ", async ({ page }) => {
+test("Dashboard page has title ", async ({ page }) => {
   const dashboardPage = new DashboardPage(page);
 
   await dashboardPage.goToDashboard();
@@ -84,6 +79,33 @@ test("User has context menu options for edit file", async ({ page }) => {
   await expect(dashboardPage.page.getByText("delete")).toBeVisible();
 });
 
+test("Multiple elements in context", async ({ page }) => {
+  await DashboardPage.mockRPC(
+    page,
+    "get-all-projects",
+    "dashboard/get-all-projects.json",
+  );
+
+  const dashboardPage = new DashboardPage(page);
+  await dashboardPage.setupDrafts();
+  await dashboardPage.goToDrafts();
+
+  const button = dashboardPage.page.getByRole("button", { name: /New File 1/ });
+  await button.click();
+
+  const button2 = dashboardPage.page.getByRole("button", {
+    name: /New File 2/,
+  });
+  await button2.click({ modifiers: ["Shift"] });
+
+  await button.click({ button: "right" });
+
+  await expect(page.getByTestId("duplicate-multi")).toBeVisible();
+  await expect(page.getByTestId("file-move-multi")).toBeVisible();
+  await expect(page.getByTestId("file-binary-export-multi")).toBeVisible();
+  await expect(page.getByTestId("file-delete-multi")).toBeVisible();
+});
+
 test("User has create file button", async ({ page }) => {
   const dashboardPage = new DashboardPage(page);
   await dashboardPage.setupDrafts();
@@ -130,4 +152,32 @@ test("Bug 9927, Don't show the banner to invite team members if the user has dis
   await page.reload();
   await expect(page.getByText("Second team")).toBeVisible();
   await expect(page.getByText("Team Up")).not.toBeVisible();
+});
+
+test("Bug 10141, The team does not disappear from the team list after deletion", async ({
+  page,
+}) => {
+  const dashboardPage = new DashboardPage(page);
+  await dashboardPage.setupDashboardFull();
+  await DashboardPage.mockRPC(
+    page,
+    "get-teams",
+    "logged-in-user/get-teams-complete-owner.json",
+  );
+  await dashboardPage.goToDashboard();
+  await dashboardPage.teamDropdown.click();
+  await expect(page.getByText("Second Team")).toBeVisible();
+  await page.getByText("Second Team").click();
+  await page.getByRole("button", { name: "team-management" }).click();
+  await page.getByTestId("delete-team").click();
+
+  await DashboardPage.mockRPC(
+    page,
+    "get-teams",
+    "logged-in-user/get-teams-default.json",
+  );
+
+  await page.getByRole("button", { name: "Delete team" }).click();
+  await dashboardPage.teamDropdown.click();
+  await expect(page.getByText("Second Team")).not.toBeVisible();
 });

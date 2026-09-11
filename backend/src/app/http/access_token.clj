@@ -2,80 +2,61 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.http.access-token
   (:require
    [app.common.logging :as l]
    [app.config :as cf]
    [app.db :as db]
+   [app.http :as-alias http]
    [app.main :as-alias main]
    [app.setup :as-alias setup]
-   [app.tokens :as tokens]
-   [yetti.request :as yreq]))
+   [app.tokens :as tokens]))
 
-(def header-re #"^Token\s+(.*)")
-
-(defn- get-token
-  [request]
-  (some->> (yreq/get-header request "authorization")
-           (re-matches header-re)
-           (second)))
-
-(defn- decode-token
-  [props token]
-  (when token
-    (tokens/verify props {:token token :iss "access-token"})))
+(defn decode-token
+  [cfg token]
+  (try
+    (tokens/verify cfg {:token token :iss "access-token"})
+    (catch Throwable cause
+      (l/trc :hint "exception on decoding token"
+             :token token
+             :cause cause))))
 
 (def sql:get-token-data
-  "SELECT perms, profile_id, expires_at
+  "SELECT perms, profile_id, expires_at, type
      FROM access_token
     WHERE id = ?
       AND (expires_at IS NULL
            OR (expires_at > now()));")
 
 (defn- get-token-data
-  [pool token-id]
+  [pool claims]
   (when-not (db/read-only? pool)
-    (some-> (db/exec-one! pool [sql:get-token-data token-id])
-            (update :perms db/decode-pgarray #{}))))
-
-(defn- wrap-soft-auth
-  "Soft Authentication, will be executed synchronously on the undertow
-  worker thread."
-  [handler {:keys [::setup/props]}]
-  (letfn [(handle-request [request]
-            (try
-              (let [token  (get-token request)
-                    claims (decode-token props token)]
-                (cond-> request
-                  (map? claims)
-                  (assoc ::id (:tid claims))))
-              (catch Throwable cause
-                (l/trace :hint "exception on decoding malformed token" :cause cause)
-                request)))]
-
-    (fn [request]
-      (handler (handle-request request)))))
+    (when-let [token-id (get claims :tid)]
+      (some-> (db/exec-one! pool [sql:get-token-data token-id])
+              (update :perms db/decode-pgarray #{})))))
 
 (defn- wrap-authz
-  "Authorization middleware, will be executed synchronously on vthread."
   [handler {:keys [::db/pool]}]
   (fn [request]
-    (let [{:keys [perms profile-id expires-at]} (some->> (::id request) (get-token-data pool))]
-      (handler (cond-> request
-                 (some? perms)
-                 (assoc ::perms perms)
-                 (some? profile-id)
-                 (assoc ::profile-id profile-id)
-                 (some? expires-at)
-                 (assoc ::expires-at expires-at))))))
+    (let [{:keys [type claims]} (get request ::http/auth-data)]
+      (if (= :token type)
+        (let [{:keys [perms profile-id expires-at type]} (some->> claims (get-token-data pool))
+              token-id (get claims :tid)]
+          (handler (cond-> request
+                     (some? perms)
+                     (assoc ::perms perms)
+                     (some? profile-id)
+                     (assoc ::profile-id profile-id)
+                     (some? expires-at)
+                     (assoc ::expires-at expires-at)
+                     (some? token-id)
+                     (assoc ::id token-id)
+                     (some? type)
+                     (assoc ::type type))))
 
-(def soft-auth
-  {:name ::soft-auth
-   :compile (fn [& _]
-              (when (contains? cf/flags :access-tokens)
-                wrap-soft-auth))})
+        (handler request)))))
 
 (def authz
   {:name ::authz

@@ -2,87 +2,83 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "common/refactor/common-refactor.scss" as *;
-@use "./common.scss";
+@use "./common";
+@use "ds/_utils.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/_borders.scss" as *;
+@use "ds/typography.scss" as *;
 
-.accept-terms-and-privacy-wrapper {
-  :global(a) {
-    color: var(--color-foreground-secondary);
-    font-weight: $fw700;
-  }
+.checkbox-newsletter-updates {
+  align-items: flex-start;
 }
 
 .checkbox-terms-and-privacy {
   align-items: flex-start;
 }
+
 .register-form {
-  gap: $s-24;
+  gap: var(--sp-xxl);
 }
 
-.register-success {
-  gap: $s-24;
-  .auth-title {
-    @include medTitleTipography;
-  }
-}
-
-.notification-icon {
-  fill: var(--main-icon-foreground);
+.account-row {
   display: flex;
   justify-content: center;
-  margin-bottom: $s-32;
-  svg {
-    width: $s-92;
-    height: $s-92;
-  }
+  gap: var(--sp-s);
+  padding: 0;
 }
 
-.notification-text {
-  @include bodyMediumTypography;
-  color: var(--title-foreground-color);
+.account-text {
+  @include use-typography("title-small");
+
+  text-align: right;
+  color: var(--color-foreground-secondary);
 }
 
-.notification-text-email {
-  @include medTitleTipography;
-  font-size: $fs-20;
-  color: var(--register-confirmation-color);
-  margin-inline: $s-36;
-}
+.account-link {
+  @include use-typography("title-small");
 
-.logo-btn {
-  height: $s-40;
-  svg {
-    width: $s-120;
-    height: $s-40;
-    fill: var(--main-icon-foreground);
-  }
-}
+  text-align: left;
+  background-color: transparent;
+  border: none;
+  display: inline;
+  color: var(--color-accent-primary);
 
-.logo-container {
-  display: flex;
-  justify-content: flex-start;
-  width: $s-120;
-  margin-block-end: $s-24;
-}
-
-.terms-register {
-  @include bodySmallTypography;
-  display: flex;
-  gap: $s-4;
-  justify-content: center;
-  width: 100%;
-}
-
-.and-text {
-  border-bottom: $s-1 solid transparent;
-  color: var(--title-foreground-color);
-}
-
-.auth-link {
-  color: var(--link-foreground-color);
   &:hover {
     text-decoration: underline;
   }
+}
+
+.register-success {
+  gap: var(--sp-xxl);
+}
+
+.register-success-title {
+  @include use-typography("title-medium");
+
+  line-height: 1.2;
+  color: var(--color-foreground-primary);
+}
+
+.terms {
+  @include use-typography("body-small");
+
+  display: flex;
+  gap: var(--sp-xs);
+  justify-content: center;
+  inline-size: 100%;
+}
+
+.terms-link {
+  color: var(--color-accent-primary);
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.terms-and {
+  border-block-end: $b-1 solid transparent;
+  color: var(--color-foreground-secondary);
 }

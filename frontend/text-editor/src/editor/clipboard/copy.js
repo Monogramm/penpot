@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright (c) KALEIDOS INC
+ * Copyright (c) KALEIDOS SUBSIDIARY SL
  */
 
 /**
@@ -16,4 +16,4 @@
  * @param {ClipboardEvent} event
  * @param {TextEditor} editor
  */
-export function copy(event, editor) {}
+export function copy(event, editor, selectionController) {}

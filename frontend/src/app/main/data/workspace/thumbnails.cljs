@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.thumbnails
   (:require
@@ -10,17 +10,21 @@
    [app.common.files.helpers :as cfh]
    [app.common.logging :as l]
    [app.common.thumbnails :as thc]
+   [app.common.time :as ct]
+   [app.common.types.component :as ctc]
+   [app.common.types.shape-tree :as ctt]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
    [app.main.data.helpers :as dsh]
    [app.main.data.persistence :as-alias dps]
    [app.main.data.workspace.notifications :as-alias wnt]
+   [app.main.data.workspace.pages :as-alias dwpg]
    [app.main.rasterizer :as thr]
    [app.main.refs :as refs]
    [app.main.render :as render]
    [app.main.repo :as rp]
    [app.util.queue :as q]
-   [app.util.time :as tp]
+   [app.util.storage :as storage]
    [app.util.timers :as tm]
    [app.util.webapi :as wapi]
    [beicon.v2.core :as rx]
@@ -64,8 +68,8 @@
   "Returns the thumbnail for the given ids"
   [state file-id page-id frame-id tag]
   (let [object-id (thc/fmt-object-id file-id page-id frame-id tag)
-        tp        (tp/tpoint-ms)
-        objects   (-> (dsh/lookup-file state file-id)
+        tp        (ct/tpoint-ms)
+        objects   (-> (dsh/lookup-file-data state file-id)
                       (dsh/get-page page-id)
                       :objects)
         shape     (get objects frame-id)]
@@ -83,49 +87,82 @@
   (let [request (create-request file-id page-id shape-id tag)]
     (q/enqueue-unique queue request (partial render-thumbnail state file-id page-id shape-id tag))))
 
+(defn- clear-thumbnail-batch
+  []
+  (let [pending (volatile! nil)]
+    (ptk/reify ::clear-thumbnail-batch
+      ptk/UpdateEvent
+      (update [_ state]
+        (let [items (get state ::thumbnails-deletion-queue)]
+          (when (seq items)
+            (vreset! pending items))
+          (dissoc state ::thumbnails-deletion-queue)))
+
+      ptk/WatchEvent
+      (watch [_ _ _]
+        (let [items (reduce-kv (fn [acc object-id uri]
+                                 (when (str/starts-with? uri "blob:")
+                                   (tm/schedule-on-idle (partial wapi/revoke-uri uri)))
+                                 (conj acc object-id))
+                               []
+                               @pending)]
+          (l/dbg :hint "clear-thumbnail-batch" :total (count items))
+          (->> (rx/from (partition-all 200 items))
+               (rx/mapcat
+                (fn [batch]
+                  (l/dbg :hint "clear-thumbnail-batch" :batch-size (count batch))
+                  (->> (rp/cmd! :delete-file-object-thumbnails
+                                {:object-ids (vec batch)})
+                       (rx/catch rx/empty)
+                       (rx/ignore))))))))))
+
+(defn remove-from-deletion-queue
+  "Removes an object-id from the pending deletion queue in state.
+   Used by update-thumbnail to cancel a pending batched delete before
+   creating a new thumbnail for the same object."
+  [object-id]
+  (ptk/reify ::remove-from-deletion-queue
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state ::thumbnails-deletion-queue dissoc object-id))))
+
 (defn clear-thumbnail
   ([file-id page-id frame-id tag]
    (clear-thumbnail file-id (thc/fmt-object-id file-id page-id frame-id tag)))
-  ([file-id object-id]
-   (let [pending (volatile! false)]
-     (ptk/reify ::clear-thumbnail
-       cljs.core/IDeref
-       (-deref [_] object-id)
+  ([_file-id object-id]
+   (ptk/reify ::clear-thumbnail
+     cljs.core/IDeref
+     (-deref [_] object-id)
 
-       ptk/UpdateEvent
-       (update [_ state]
-         (update state :workspace-thumbnails
-                 (fn [thumbs]
-                   (if-let [uri (get thumbs object-id)]
-                     (do (vreset! pending uri)
-                         (dissoc thumbs object-id))
-                     thumbs))))
+     ptk/UpdateEvent
+     (update [_ state]
+       (let [uri (dm/get-in state [:thumbnails object-id :uri])]
+         (l/dbg :hint "clear-thumbnail" :object-id object-id :uri uri)
+         (-> state
+             (update ::thumbnails-deletion-queue assoc object-id uri)
+             (update :thumbnails dissoc object-id))))
 
-       ptk/WatchEvent
-       (watch [_ _ _]
-         (if-let [uri @pending]
-           (do
-             (l/trc :hint "clear-thumbnail" :uri uri)
-             (when (str/starts-with? uri "blob:")
-               (tm/schedule-on-idle (partial wapi/revoke-uri uri)))
+     ptk/WatchEvent
+     (watch [_ _ stream]
+       (let [stopper-s (->> stream
+                            (rx/filter (ptk/type? ::clear-thumbnail)))]
+         (->> (rx/timer 200)
+              (rx/take 1)
+              (rx/map (fn [_] (clear-thumbnail-batch)))
+              (rx/take-until stopper-s)))))))
 
-             (let [params {:file-id file-id
-                           :object-id object-id}]
-               (->> (rp/cmd! :delete-file-object-thumbnail params)
-                    (rx/catch rx/empty)
-                    (rx/ignore))))
-           (rx/empty)))))))
-
-(defn- assoc-thumbnail
+(defn assoc-thumbnail
   [object-id uri]
   (let [prev-uri* (volatile! nil)]
     (ptk/reify ::assoc-thumbnail
       ptk/UpdateEvent
       (update [_ state]
-        (let [prev-uri (dm/get-in state [:workspace-thumbnails object-id])]
-          (some->> prev-uri (vreset! prev-uri*))
+        (let [prev-entry (dm/get-in state [:thumbnails object-id])
+              now        (ct/now)]
+          (some->> prev-entry :uri (vreset! prev-uri*))
           (l/trc :hint "assoc thumbnail" :object-id object-id :uri uri)
-          (update state :workspace-thumbnails assoc object-id uri)))
+          (-> state
+              (update :thumbnails assoc object-id {:uri uri :rendered-at now}))))
 
       ptk/EffectEvent
       (effect [_ _ _]
@@ -141,8 +178,8 @@
     (update [_ state]
       (let [old-id (dm/str old-id)
             new-id (dm/str new-id)
-            thumbnail (dm/get-in state [:workspace-thumbnails old-id])]
-        (update state :workspace-thumbnails assoc new-id thumbnail)))))
+            thumbnail (dm/get-in state [:thumbnails old-id])]
+        (update state :thumbnails assoc new-id thumbnail)))))
 
 (defn update-thumbnail
   "Updates the thumbnail information for the given `id`"
@@ -155,7 +192,7 @@
       ptk/WatchEvent
       (watch [_ state stream]
         (l/dbg :hint "update thumbnail" :requester requester :object-id object-id :tag tag)
-        (let [tp (tp/tpoint-ms)]
+        (let [tp (ct/tpoint-ms)]
           ;; Send the update to the back-end
           (->> (request-thumbnail state file-id page-id frame-id tag)
                (rx/mapcat (fn [blob]
@@ -166,7 +203,8 @@
                                           :tag (or tag "frame")}]
 
                               (rx/merge
-                               (rx/of (assoc-thumbnail object-id uri))
+                               (rx/of (assoc-thumbnail object-id uri)
+                                      (remove-from-deletion-queue object-id))
                                (->> (rp/cmd! :create-file-object-thumbnail params)
                                     (rx/catch rx/empty)
                                     (rx/ignore))))))
@@ -184,57 +222,121 @@
                      (rx/filter (ptk/type? ::clear-thumbnail))
                      (rx/filter #(= (deref %) object-id))))))))))
 
-(defn- extract-root-frame-changes
+(defn- extract-frame-changes
   "Process a changes set in a commit to extract the frames that are changing"
   [page-id [event [old-data new-data]]]
+
   (let [changes (:changes event)
+        ;; cache for the get-frame-ids function
+        frame-id-cache (atom {})]
 
-        lookup-data-objects
-        (fn [data page-id]
-          (dm/get-in data [:pages-index page-id :objects]))
+    (letfn [(lookup-data-objects [data page-id]
+              (dm/get-in data [:pages-index page-id :objects]))
 
+            (extract-ids [{:keys [page-id type] :as change}]
+              (case type
+                :add-obj [[page-id (:id change)]]
+                :mod-obj [[page-id (:id change)]]
+                :del-obj [[page-id (:id change)]]
+                :mov-objects (->> (:shapes change) (map #(vector page-id %)))
+                []))
 
-        extract-ids
-        (fn [{:keys [page-id type] :as change}]
-          (case type
-            :add-obj [[page-id (:id change)]]
-            :mod-obj [[page-id (:id change)]]
-            :del-obj [[page-id (:id change)]]
-            :mov-objects (->> (:shapes change) (map #(vector page-id %)))
-            []))
+            (get-frame-ids [id]
+              (let [old-objects     (lookup-data-objects old-data page-id)
+                    new-objects     (lookup-data-objects new-data page-id)
 
-        get-frame-ids
-        (fn get-frame-ids [id]
-          (let [old-objects  (lookup-data-objects old-data page-id)
-                new-objects  (lookup-data-objects new-data page-id)
+                    new-shape       (get new-objects id)
+                    old-shape       (get old-objects id)
 
-                new-shape    (get new-objects id)
-                old-shape    (get old-objects id)
+                    old-frame-id    (if (cfh/frame-shape? old-shape) id (:frame-id old-shape))
+                    new-frame-id    (if (cfh/frame-shape? new-shape) id (:frame-id new-shape))
 
-                old-frame-id (if (cfh/frame-shape? old-shape) id (:frame-id old-shape))
-                new-frame-id (if (cfh/frame-shape? new-shape) id (:frame-id new-shape))]
+                    root-frame-old? (cfh/root-frame? old-objects old-frame-id)
+                    root-frame-new? (cfh/root-frame? new-objects new-frame-id)
+                    instance-root?  (ctc/instance-root? new-shape)
+                    local-result    (cond-> #{}
+                                      root-frame-old?
+                                      (conj ["frame" old-frame-id])
 
-            (cond-> #{}
-              (cfh/root-frame? old-objects old-frame-id)
-              (conj old-frame-id)
+                                      root-frame-new?
+                                      (conj ["frame" new-frame-id])
 
-              (cfh/root-frame? new-objects new-frame-id)
-              (conj new-frame-id)
+                                      instance-root?
+                                      (conj ["component" id]))]
 
-              (and (uuid? (:frame-id old-shape))
-                   (not= uuid/zero (:frame-id old-shape)))
-              (into (get-frame-ids (:frame-id old-shape)))
+                (swap! frame-id-cache assoc id local-result)
 
-              (and (uuid? (:frame-id new-shape))
-                   (not= uuid/zero (:frame-id new-shape)))
-              (into (get-frame-ids (:frame-id new-shape))))))]
+                (let [result
+                      (cond-> local-result
+                        (and (uuid? (:frame-id old-shape))
+                             (not= uuid/zero (:frame-id old-shape))
+                             (not= id (:frame-id old-shape)))
+                        (into (get-frame-ids-cached (:frame-id old-shape)))
 
-    (into #{}
-          (comp (mapcat extract-ids)
-                (filter (fn [[page-id']] (= page-id page-id')))
-                (map (fn [[_ id]] id))
-                (mapcat get-frame-ids))
-          changes)))
+                        (and (uuid? (:frame-id new-shape))
+                             (not= uuid/zero (:frame-id new-shape))
+                             (not= id (:frame-id new-shape)))
+                        (into (get-frame-ids-cached (:frame-id new-shape))))]
+                  (swap! frame-id-cache assoc id result)
+                  result)))
+
+            (get-frame-ids-cached [id]
+              (if (contains? @frame-id-cache id)
+                (get @frame-id-cache id)
+                (get-frame-ids id)))]
+      (into #{}
+            (comp (mapcat extract-ids)
+                  (filter (fn [[page-id']] (= page-id page-id')))
+                  (map (fn [[_ id]] id))
+                  (mapcat get-frame-ids-cached))
+            changes))))
+
+;; Board thumbnails used to render text shapes without position-data as
+;; nothing instead of falling back to the foreignObject renderer (see
+;; frame-imposter in app.main.render), so any board thumbnail cached before
+;; that fix may be missing its text. The backend doesn't tell the client
+;; when a fetched thumbnail was generated, so we can't tell stale apart from
+;; fresh by inspecting it; instead each board thumbnail with text content is
+;; regenerated at most once per browser, tracked via local-storage so repeat
+;; visits (once healed) don't keep re-rendering it.
+(def ^:private healed-storage-key ::healed-text-thumbnails)
+
+(defn- frame-has-text?
+  [objects frame-id]
+  (->> (cfh/get-children-with-self objects frame-id)
+       (some cfh/text-shape?)
+       (some?)))
+
+(defn- unhealed-text-thumbnail?
+  [state object-id]
+  (and (some? (dm/get-in state [:thumbnails object-id :uri]))
+       (not (contains? (get @storage/global healed-storage-key) object-id))))
+
+(defn- mark-thumbnail-healed!
+  [object-id]
+  (swap! storage/global update healed-storage-key (fnil conj #{}) object-id))
+
+(defn- heal-stale-text-thumbnails
+  "Emits an `update-thumbnail` for every board on the page that has text
+  content and hasn't already been healed (see `healed-storage-key`) in this
+  browser."
+  [state file-id page-id]
+  (let [objects   (-> (dsh/lookup-file-data state file-id)
+                      (dsh/get-page page-id)
+                      :objects)
+        frame-ids (ctt/get-root-frames-ids objects)
+        xf        (comp
+                   (filter #(frame-has-text? objects %))
+                   (keep
+                    (fn [frame-id]
+                      (let [object-id (thc/fmt-object-id file-id page-id frame-id "frame")]
+                        (when (unhealed-text-thumbnail? state object-id)
+                          [frame-id object-id])))))]
+    (->> (rx/from (eduction xf frame-ids))
+         (rx/map
+          (fn [[frame-id object-id]]
+            (mark-thumbnail-healed! object-id)
+            (update-thumbnail file-id page-id frame-id "frame" "heal-stale-text-thumbnails"))))))
 
 (defn watch-state-changes
   "Watch the state for changes inside frames. If a change is detected will force a rendering
@@ -242,11 +344,11 @@
   [file-id page-id]
   (ptk/reify ::watch-state-changes
     ptk/WatchEvent
-    (watch [_ _ stream]
+    (watch [_ state stream]
       (let [stopper-s (rx/filter
                        (fn [event]
                          (as-> (ptk/type event) type
-                           (or (= :app.main.data.workspace/finalize-page type)
+                           (or (= ::dwpg/finalize-page type)
                                (= ::watch-state-changes type))))
                        stream)
 
@@ -266,7 +368,7 @@
                  (rx/map deref)
                  (rx/observe-on :async)
                  (rx/with-latest-from workspace-data-s)
-                 (rx/merge-map (partial extract-root-frame-changes page-id))
+                 (rx/merge-map (partial extract-frame-changes page-id))
                  (rx/tap #(l/trc :hint "inconming change" :origin "all" :frame-id (dm/str %)))
                  (rx/share))
 
@@ -277,18 +379,31 @@
                  (rx/tap #(l/trc :hint "buffer initialized")))]
 
         (->> (rx/merge
+              ;; Heal boards with text whose cached thumbnail may predate the
+              ;; text-position fix (see heal-stale-text-thumbnails).
+              (heal-stale-text-thumbnails state file-id page-id)
+
               ;; Perform instant thumbnail cleaning of affected frames
               ;; and interrupt any ongoing update-thumbnail process
               ;; related to current frame-id
               (->> all-commits-s
-                   (rx/map (fn [frame-id]
-                             (clear-thumbnail file-id page-id frame-id "frame"))))
+                   ;; Ensure each clear-thumbnail event is dispatched in its
+                   ;; own macrotask tick. Without this, multiple changes
+                   ;; arriving on the same synchronous tick would emit
+                   ;; several clear-thumbnail events back-to-back, causing
+                   ;; their debounce timers (rx/take-until stopper-s) to
+                   ;; race and potentially leave multiple clear-thumbnail-batch
+                   ;; timers alive simultaneously.
+                   (rx/observe-on :async)
+                   (rx/mapcat (fn [[tag frame-id]]
+                                (rx/of (clear-thumbnail file-id page-id frame-id tag)))))
 
               ;; Generate thumbnails in batches, once user becomes
               ;; inactive for some instant.
               (->> all-commits-s
                    (rx/buffer-until notifier-s)
                    (rx/mapcat #(into #{} %))
-                   (rx/map #(update-thumbnail file-id page-id % "frame" "watch-state-changes"))))
+                   (rx/map (fn [[tag frame-id]]
+                             (update-thumbnail file-id page-id frame-id tag "watch-state-changes")))))
 
              (rx/take-until stopper-s))))))

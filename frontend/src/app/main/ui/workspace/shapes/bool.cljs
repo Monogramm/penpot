@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.shapes.bool
   (:require
@@ -35,11 +35,11 @@
 
             shape      (cond-> shape
                          ^boolean child-sel?
-                         (dissoc :bool-content))]
+                         (dissoc :content))]
 
         [:> shape-container {:shape shape}
          [:& bool-shape {:shape shape
                          :childs childs}]
          (when *assert*
-           [:& wsd/shape-debug {:shape shape}])]))))
+           [:> wsd/shape-debug* {:shape shape}])]))))
 

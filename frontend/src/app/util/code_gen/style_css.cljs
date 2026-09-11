@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.code-gen.style-css
   (:require
@@ -12,11 +12,12 @@
    [app.common.geom.matrix :as gmt]
    [app.common.geom.shapes.bounds :as gsb]
    [app.common.geom.shapes.points :as gpo]
-   [app.common.text :as txt]
+   [app.common.text :as legacy.txt]
    [app.common.types.shape.layout :as ctl]
+   [app.common.types.text :as types.text]
    [app.main.ui.shapes.text.styles :as sts]
    [app.util.code-gen.common :as cgc]
-   [app.util.code-gen.style-css-formats :refer [format-value format-shadow]]
+   [app.util.code-gen.style-css-formats :refer [format-value format-shadow->css]]
    [app.util.code-gen.style-css-values :refer [get-value]]
    [cuerdas.core :as str]))
 
@@ -49,7 +50,10 @@ body {
 
 (def shape-wrapper-css-properties
   #{:flex-shrink
-    :margin
+    :margin-block-start
+    :margin-block-end
+    :margin-inline-start
+    :margin-inline-end
     :max-height
     :min-height
     :max-width
@@ -72,11 +76,20 @@ body {
    :transform
    :background
    :border
-   :border-radius
+   :border-block-start-width
+   :border-inline-end-width
+   :border-block-end-width
+   :border-inline-start-width
+   :border-start-start-radius
+   :border-start-end-radius
+   :border-end-start-radius
+   :border-end-end-radius
    :box-shadow
    :filter
+   :backdrop-filter
    :opacity
    :overflow
+   :blend-mode
 
    ;; Flex/grid related properties
    :display
@@ -87,7 +100,10 @@ body {
    :gap
    :column-gap
    :row-gap
-   :padding
+   :padding-inline-start
+   :padding-inline-end
+   :padding-block-start
+   :padding-block-end
    :z-index
 
    ;; Flex related properties
@@ -104,11 +120,18 @@ body {
 
    ;; Flex/grid self properties
    :flex-shrink
-   :margin
+   :margin-block-start
+   :margin-block-end
+   :margin-inline-start
+   :margin-inline-end
    :max-height
+   :max-block-size
    :min-height
+   :min-block-size
    :max-width
+   :max-inline-size
    :min-width
+   :min-inline-size
    :align-self
    :justify-self
 
@@ -171,10 +194,15 @@ body {
      (format-value property value options))))
 
 (defn format-css-property
+  "Format a single CSS property in the format 'property: value;'."
   [[property value] options]
   (when (some? value)
-    (let [formatted-value (format-css-value property value options)]
-      (dm/fmt "%: %;" (d/name property) formatted-value))))
+    (let [formatted-value (format-css-value property value options)
+          ;; If the property is blend-mode, we should use a different property name.
+          property-name (if (= property :blend-mode)
+                          (dm/str "mix-" (d/name property))
+                          (d/name property))]
+      (dm/fmt "%: %;" property-name formatted-value))))
 
 (defn format-css-properties
   "Format a list of [property value] into a list of css properties in the format 'property: value;'"
@@ -226,8 +254,8 @@ body {
   (let [selector (cgc/shape->selector shape)]
     (->> shape
          :content
-         (txt/index-content)
-         (txt/node-seq)
+         (legacy.txt/index-content)
+         (types.text/node-seq)
          (map #(node->css shape selector %))
          (str/join "\n"))))
 
@@ -290,6 +318,7 @@ body {
        (format-css-property options))))
 
 (defn get-css-value
+  "Get the CSS value for a given property of a shape."
   ([objects shape property]
    (get-css-value objects shape property nil))
 
@@ -310,4 +339,4 @@ body {
 
 (defn shadow->css
   [shadow]
-  (dm/str "box-shadow: " (format-shadow shadow {})))
+  (dm/str "box-shadow: " (format-shadow->css shadow {}) ";"))

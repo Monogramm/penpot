@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.loggers.webhooks
   "A mattermost integration for error reporting."
@@ -10,12 +10,13 @@
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.logging :as l]
+   [app.common.time :as ct]
    [app.common.transit :as t]
    [app.common.uri :as uri]
    [app.config :as cf]
    [app.db :as db]
    [app.http.client :as http]
-   [app.util.time :as dt]
+   [app.loggers.audit :as audit]
    [app.worker :as wrk]
    [clojure.data.json :as json]
    [cuerdas.core :as str]
@@ -67,18 +68,27 @@
 (defmethod ig/init-key ::process-event-handler
   [_ cfg]
   (fn [{:keys [props] :as task}]
-    (l/dbg :hint "process webhook event" :name (:name props))
 
-    (when-let [items (lookup-webhooks cfg props)]
-      (l/trc :hint "webhooks found for event" :total (count items))
-      (db/tx-run! cfg (fn [cfg]
-                        (doseq [item items]
-                          (wrk/submit! (-> cfg
-                                           (assoc ::wrk/task :run-webhook)
-                                           (assoc ::wrk/queue :webhooks)
-                                           (assoc ::wrk/max-retries 3)
-                                           (assoc ::wrk/params {:event props
-                                                                :config item})))))))))
+    (let [items (lookup-webhooks cfg props)
+          event {:profile-id (:profile-id props)
+                 :name "webhook"
+                 :type "trigger"
+                 :props {:name (get props :name)
+                         :event-id (get props :id)
+                         :total-affected (count items)}}]
+
+      (audit/insert cfg event)
+
+      (when items
+        (l/trc :hint "webhooks found for event" :total (count items))
+        (db/tx-run! cfg (fn [cfg]
+                          (doseq [item items]
+                            (wrk/submit! (-> cfg
+                                             (assoc ::wrk/task :run-webhook)
+                                             (assoc ::wrk/queue :webhooks)
+                                             (assoc ::wrk/max-retries 3)
+                                             (assoc ::wrk/params {:event props
+                                                                  :config item}))))))))))
 ;; --- RUN
 
 (declare interpret-exception)
@@ -114,7 +124,7 @@
                               {:id (:id whook)})))
 
               (db/update! pool :webhook
-                          {:updated-at (dt/now)
+                          {:updated-at (ct/now)
                            :error-code nil
                            :error-count 0}
                           {:id (:id whook)})))
@@ -122,7 +132,7 @@
           (report-delivery! [whook req rsp err]
             (db/insert! pool :webhook-delivery
                         {:webhook-id (:id whook)
-                         :created-at (dt/now)
+                         :created-at (ct/now)
                          :error-code err
                          :req-data (db/tjson req)
                          :rsp-data (db/tjson rsp)}))]
@@ -145,11 +155,11 @@
         (let [req {:uri (:uri whook)
                    :headers {"content-type" (:mtype whook)
                              "user-agent" (str/ffmt "penpot/%" (:main cf/version))}
-                   :timeout (dt/duration "4s")
+                   :timeout (ct/duration "4s")
                    :method :post
                    :body body}]
           (try
-            (let [rsp (http/req! cfg req {:response-type :input-stream :sync? true})
+            (let [rsp (http/req cfg req {:response-type :input-stream :sync? true})
                   err (interpret-response rsp)]
               (report-delivery! whook req rsp err)
               (update-webhook! whook err))
@@ -180,4 +190,11 @@
     "invalid-uri"
 
     (instance? java.net.http.HttpConnectTimeoutException cause)
-    "timeout"))
+    "timeout"
+
+    :else
+    (let [data (ex-data cause)]
+      (if (and (= :validation (:type data))
+               (= :ssrf-blocked-target (:code data)))
+        (str "blocked-request:" (:hint data))
+        nil))))

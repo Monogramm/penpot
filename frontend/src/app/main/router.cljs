@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.router
   (:refer-clojure :exclude [resolve])
@@ -46,6 +46,10 @@
     (update [_ state]
       (assoc state :router (create routes)))))
 
+(defn encode-url
+  [url]
+  (js/encodeURIComponent url))
+
 (defn match
   "Given routing tree and current path, return match with possibly
   coerced parameters. Return nil if no match found."
@@ -62,18 +66,20 @@
 ;; --- Navigate (Event)
 
 (defn navigated
-  [match]
+  [match send-event-info?]
   (ptk/reify ::navigated
     IDeref
     (-deref [_] match)
 
-    ev/Event
-    (-data [_]
-      (let [route  (dm/get-in match [:data :name])
-            params (get match :path-params)]
-        (assoc params
-               ::ev/name "navigate"
-               :route (name route))))
+    ptk/WatchEvent
+    (watch [_ _ _]
+      (when send-event-info?
+        (let [route  (dm/get-in match [:data :name])
+              params (get match :query-params)]
+          (rx/of (ev/event
+                  (assoc params
+                         ::ev/name "navigate"
+                         :route (name route)))))))
 
     ptk/UpdateEvent
     (update [_ state]
@@ -120,9 +126,24 @@
   ([id params & {:as options}]
    (navigate id params options)))
 
+(defn lookup-name
+  [state]
+  (dm/get-in state [:route :data :name]))
+
+;; FIXME: rename to lookup-params
 (defn get-params
   [state]
   (dm/get-in state [:route :params :query]))
+
+(defn get-query-param
+  "Safely extracts a scalar value for a query param key from a params
+  map. When the same key appears multiple times in a URL,
+  query-string->map returns a vector for that key; this function
+  always returns a single (last) element in that case, so downstream
+  consumers such as parse-long always receive a plain string or nil."
+  [params k]
+  (let [v (get params k)]
+    (if (sequential? v) (peek v) v)))
 
 (defn nav-back
   []
@@ -181,6 +202,21 @@
 
 ;; --- History API
 
+;; Check the urls to see if we need to send the navigated event.
+;; If two paths are the same we only send the event when there is a
+;; change in the parameters `file-id`, `page-id` or `team-id`
+(defn- send-event-info?
+  [old-url new-url]
+  (let [params [:file-id :page-id :team-id]
+        new-uri (u/uri new-url)
+        new-path (:path new-uri)
+        new-params (-> new-uri :query u/query-string->map (select-keys params))
+        old-uri (u/uri old-url)
+        old-path (:path old-uri)
+        old-params (-> old-uri :query u/query-string->map (select-keys params))]
+    (or (not= old-path new-path)
+        (not= new-params old-params))))
+
 (defn initialize-history
   [on-change]
   (ptk/reify ::initialize-history
@@ -195,11 +231,19 @@
       (let [stopper (rx/filter (ptk/type? ::initialize-history) stream)
             history (:history state)
             router  (:router state)]
-        (ts/schedule #(on-change router (.getToken ^js history)))
-        (->> (rx/create (fn [subs]
-                          (let [key (e/listen history "navigate" (fn [o] (rx/push! subs (.-token ^js o))))]
-                            (fn []
-                              (bhistory/disable! history)
-                              (e/unlistenByKey key)))))
+        (ts/schedule #(on-change router (.getToken ^js history) true))
+        (->> (rx/concat
+              (rx/of nil nil)
+              (rx/create
+               (fn [subs]
+                 (let [key (e/listen history "navigate" (fn [o] (rx/push! subs (.-token ^js o))))]
+                   (fn []
+                     (bhistory/disable! history)
+                     (e/unlistenByKey key))))))
+             (rx/buffer 2 1)
              (rx/take-until stopper)
-             (rx/subs! #(on-change router %)))))))
+             (rx/subs!
+              (fn [[old-url new-url]]
+                (when (some? new-url)
+                  (let [send? (or (nil? old-url) (send-event-info? old-url new-url))]
+                    (on-change router new-url send?))))))))))

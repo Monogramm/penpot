@@ -2,15 +2,17 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.profile
   (:require
    [app.auth :as auth]
+   [app.auth.passwords :as passwords]
    [app.common.data :as d]
    [app.common.exceptions :as ex]
    [app.common.schema :as sm]
-   [app.common.types.plugins :refer [schema:plugin-registry]]
+   [app.common.time :as ct]
+   [app.common.types.plugins :as ctp]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
@@ -20,6 +22,8 @@
    [app.loggers.audit :as audit]
    [app.main :as-alias main]
    [app.media :as media]
+   [app.media.validation :as media.v]
+   [app.nitrate :as nitrate]
    [app.rpc :as-alias rpc]
    [app.rpc.climit :as climit]
    [app.rpc.doc :as-alias doc]
@@ -28,18 +32,14 @@
    [app.storage :as sto]
    [app.tokens :as tokens]
    [app.util.services :as sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]
-   [cuerdas.core :as str]
-   [promesa.exec :as px]))
+   [cuerdas.core :as str]))
 
 (declare check-profile-existence!)
 (declare decode-row)
-(declare derive-password)
 (declare filter-props)
 (declare get-profile)
 (declare strip-private-attrs)
-(declare verify-password)
 
 (def schema:props-notifications
   [:map {:title "props-notifications"}
@@ -47,30 +47,54 @@
    [:email-comments [::sm/one-of #{:all :partial :none}]]
    [:email-invites [::sm/one-of #{:all :none}]]])
 
+(def schema:nudge
+  [:map {:title "Nudge"}
+   [:big {:optional true} ::sm/number]
+   [:small {:optional true} ::sm/number]])
+
+(def system-managed-props
+  "Props keys managed by the system (not user-writable via RPC)."
+  #{:subscription :plugins})
+
 (def schema:props
-  [:map {:title "ProfileProps"}
-   [:plugins {:optional true} schema:plugin-registry]
+  [:map {:title "ProfileProps" :closed true}
+   [:plugins {:optional true} ctp/schema:plugin-registry]
+   [:renderer {:optional true} [::sm/one-of #{:svg :wasm}]]
+   [:mcp-enabled {:optional true} ::sm/boolean]
    [:newsletter-updates {:optional true} ::sm/boolean]
    [:newsletter-news {:optional true} ::sm/boolean]
    [:onboarding-team-id {:optional true} ::sm/uuid]
    [:onboarding-viewed {:optional true} ::sm/boolean]
+   [:onboarding-questions {:optional true} [:map-of :keyword :string]]
+   [:onboarding-questions-answered {:optional true} ::sm/boolean]
+   [:nitrate-onboarding-viewed {:optional true} ::sm/boolean]
    [:v2-info-shown {:optional true} ::sm/boolean]
    [:welcome-file-id {:optional true} [:maybe ::sm/boolean]]
    [:release-notes-viewed {:optional true}
     [::sm/text {:max 100}]]
-   [:notifications {:optional true} schema:props-notifications]])
+   [:notifications {:optional true} schema:props-notifications]
+   [:workspace-visited {:optional true} ::sm/boolean]
+   [:custom-shortcuts {:optional true}
+    [:map-of {:gen/max 10} :keyword [:map-of :keyword :string]]]
+   [:nudge {:optional true} schema:nudge]])
+
+(def schema:props-writeable
+  "Props schema for user-writable fields (excludes system-managed keys)."
+  (reduce sm/dissoc-key schema:props system-managed-props))
 
 (def schema:profile
   [:map {:title "Profile"}
    [:id ::sm/uuid]
    [:fullname [::sm/word-string {:max 250}]]
    [:email ::sm/email]
+   [:theme {:optional true} :string]
+   [:is-admin {:optional true} ::sm/boolean]
    [:is-active {:optional true} ::sm/boolean]
    [:is-blocked {:optional true} ::sm/boolean]
    [:is-demo {:optional true} ::sm/boolean]
    [:is-muted {:optional true} ::sm/boolean]
-   [:created-at {:optional true} ::sm/inst]
-   [:modified-at {:optional true} ::sm/inst]
+   [:created-at {:optional true} ::ct/inst]
+   [:modified-at {:optional true} ::ct/inst]
    [:default-project-id {:optional true} ::sm/uuid]
    [:default-team-id {:optional true} ::sm/uuid]
    [:props {:optional true} schema:props]])
@@ -88,7 +112,15 @@
                 email)]
     email))
 
+(defn- with-nitrate-licence
+  [profile cfg]
+  (if (contains? cf/flags :admin-console)
+    (nitrate/add-nitrate-licence-to-profile cfg profile)
+    profile))
+
 ;; --- QUERY: Get profile (own)
+
+
 
 (sv/defmethod ::get-profile
   {::rpc/auth false
@@ -100,11 +132,15 @@
   ;; no profile-id is in session, and when db call raises not found. In all other
   ;; cases we need to reraise the exception.
   (try
-    (-> (get-profile pool profile-id)
-        (strip-private-attrs)
-        (update :props filter-props))
-    (catch Throwable _
-      {:id uuid/zero :fullname "Anonymous User"})))
+    (let [profile (-> (get-profile pool profile-id)
+                      (strip-private-attrs)
+                      (update :props filter-props))]
+      (with-nitrate-licence profile cfg))
+
+    (catch Throwable cause
+      (if (= :not-found (-> cause ex-data :type))
+        {:id uuid/zero :fullname "Anonymous User"}
+        (throw cause)))))
 
 (defn get-profile
   "Get profile by id. Throws not-found exception if no profile found."
@@ -124,39 +160,44 @@
 (sv/defmethod ::update-profile
   {::doc/added "1.0"
    ::sm/params schema:update-profile
-   ::sm/result schema:profile}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id fullname lang theme] :as params}]
-  (db/with-atomic [conn pool]
-    ;; NOTE: we need to retrieve the profile independently if we use
-    ;; it or not for explicit locking and avoid concurrent updates of
-    ;; the same row/object.
-    (let [profile (-> (db/get-by-id conn :profile profile-id ::sql/for-update true)
-                      (decode-row))
+   ::sm/result schema:profile
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id fullname lang theme] :as params}]
+  ;; NOTE: we need to retrieve the profile independently if we use
+  ;; it or not for explicit locking and avoid concurrent updates of
+  ;; the same row/object.
+  (let [profile (get-profile conn profile-id ::db/for-update true)
+        fullname (d/normalize-string fullname)
+        lang     (if (contains? params :lang)
+                   (d/normalize-string lang)
+                   (:lang profile))
+        theme    (if (contains? params :theme)
+                   (d/normalize-string theme)
+                   (:theme profile))
+        ;; Update the profile map with direct params
+        profile (-> profile
+                    (assoc :fullname fullname)
+                    (assoc :lang lang)
+                    (assoc :theme theme))]
 
-          ;; Update the profile map with direct params
-          profile (-> profile
-                      (assoc :fullname fullname)
-                      (assoc :lang lang)
-                      (assoc :theme theme))]
+    (db/update! conn :profile
+                {:fullname fullname
+                 :lang lang
+                 :theme theme}
+                {:id profile-id}
+                {::db/return-keys false})
 
-      (db/update! conn :profile
-                  {:fullname fullname
-                   :lang lang
-                   :theme theme
-                   :props (db/tjson (:props profile))}
-                  {:id profile-id})
-
-      (-> profile
-          (strip-private-attrs)
-          (d/without-nils)
-          (rph/with-meta {::audit/props (audit/profile->props profile)})))))
+    (-> profile
+        (strip-private-attrs)
+        (d/without-nils)
+        (with-nitrate-licence cfg)
+        (rph/with-meta {::audit/props (audit/profile->props profile)}))))
 
 
 ;; --- MUTATION: Update Password
 
 (declare validate-password!)
 (declare update-profile-password!)
-(declare invalidate-profile-session!)
 
 (def ^:private
   schema:update-profile-password
@@ -168,33 +209,32 @@
 (sv/defmethod ::update-profile-password
   {::doc/added "1.0"
    ::sm/params schema:update-profile-password
-   ::climit/id :auth/global}
+   ::climit/id :auth/global
+   ::db/transaction true}
   [cfg {:keys [::rpc/profile-id password] :as params}]
+  (let [profile (validate-password! cfg (assoc params :profile-id profile-id))]
 
-  (db/tx-run! cfg (fn [cfg]
-                    (let [profile    (validate-password! cfg (assoc params :profile-id profile-id))
-                          session-id (::session/id params)]
+    (when (= (:email profile) (str/lower (:password params)))
+      (ex/raise :type :validation
+                :code :email-as-password
+                :hint "you can't use your email as password"))
 
-                      (when (= (:email profile) (str/lower (:password params)))
-                        (ex/raise :type :validation
-                                  :code :email-as-password
-                                  :hint "you can't use your email as password"))
+    ;; Validate password strength against common password dictionary
+    (passwords/validate-password (:password params))
 
-                      (update-profile-password! cfg (assoc profile :password password))
-                      (invalidate-profile-session! cfg profile-id session-id)
-                      nil))))
+    (update-profile-password! cfg (assoc profile :password password))
 
-(defn- invalidate-profile-session!
-  "Removes all sessions except the current one."
-  [{:keys [::db/conn]} profile-id session-id]
-  (let [sql "delete from http_session where profile_id = ? and id != ?"]
-    (:next.jdbc/update-count (db/exec-one! conn [sql profile-id session-id]))))
+    (->> (rph/get-request params)
+         (session/get-session)
+         (session/invalidate-others cfg))
+
+    nil))
 
 (defn- validate-password!
   [{:keys [::db/conn] :as cfg} {:keys [profile-id old-password] :as params}]
   (let [profile (db/get-by-id conn :profile profile-id ::sql/for-update true)]
     (when (and (not= (:password profile) "!")
-               (not (:valid (verify-password cfg old-password (:password profile)))))
+               (not (:valid (auth/verify-password old-password (:password profile)))))
       (ex/raise :type :validation
                 :code :old-password-not-match))
     profile))
@@ -203,7 +243,7 @@
   [{:keys [::db/conn] :as cfg} {:keys [id password] :as profile}]
   (when-not (db/read-only? conn)
     (db/update! conn :profile
-                {:password (derive-password cfg password)}
+                {:password (auth/derive-password password)}
                 {:id id})
     nil))
 
@@ -228,21 +268,22 @@
 
 (defn- update-notifications!
   [{:keys [::db/conn] :as cfg} {:keys [profile-id dashboard-comments email-comments email-invites]}]
-  (let [profile (get-profile conn profile-id)
+  (let [profile
+        (get-profile conn profile-id ::db/for-update true)
 
         notifications
         {:dashboard-comments dashboard-comments
          :email-comments email-comments
-         :email-invites email-invites}]
+         :email-invites email-invites}
 
-    (db/update!
-     conn :profile
-     {:props
-      (-> (:props profile)
-          (assoc :notifications notifications)
-          (db/tjson))}
-     {:id (:id profile)})
+        props
+        (-> (get profile :props)
+            (assoc :notifications notifications))]
 
+    (db/update! conn :profile
+                {:props (db/tjson props)}
+                {:id profile-id}
+                {::db/return-keys false})
     nil))
 
 ;; --- MUTATION: Update Photo
@@ -253,7 +294,7 @@
 (def ^:private
   schema:update-profile-photo
   [:map {:title "update-profile-photo"}
-   [:file ::media/upload]])
+   [:file media.v/schema:upload]])
 
 (sv/defmethod ::update-profile-photo
   {:doc/added "1.1"
@@ -261,7 +302,8 @@
    ::sm/result :nil}
   [cfg {:keys [::rpc/profile-id file] :as params}]
   ;; Validate incoming mime type
-  (media/validate-media-type! file #{"image/jpeg" "image/png" "image/webp"})
+  (media.v/validate-media-type! file #{"image/jpeg" "image/png" "image/webp"})
+  (media.v/validate-media-size! file)
   (update-profile-photo cfg (assoc params :profile-id profile-id)))
 
 (defn update-profile-photo
@@ -286,15 +328,15 @@
                          :file-path (str (:path file))
                          :file-mtype (:mtype file)}}))))
 
-(defn- generate-thumbnail!
-  [_ file]
-  (let [input   (media/run {:cmd :info :input file})
-        thumb   (media/run {:cmd :profile-thumbnail
-                            :format :jpeg
-                            :quality 85
-                            :width 256
-                            :height 256
-                            :input input})
+(defn- generate-thumbnail
+  [cfg input]
+  (let [input   (media/run cfg {:cmd :info :input input})
+        thumb   (media/run cfg {:cmd :profile-thumbnail
+                                :format :jpeg
+                                :quality 85
+                                :width 256
+                                :height 256
+                                :input input})
         hash    (sto/calculate-hash (:data thumb))
         content (-> (sto/content (:data thumb) (:size thumb))
                     (sto/wrap-with-hash hash))]
@@ -304,14 +346,32 @@
      :content-type (:mtype thumb)}))
 
 (defn upload-photo
-  [{:keys [::sto/storage ::wrk/executor] :as cfg} {:keys [file] :as params}]
+  [{:keys [::sto/storage] :as cfg} {:keys [file] :as params}]
   (let [params (-> cfg
                    (assoc ::climit/id [[:process-image/by-profile (:profile-id params)]
                                        [:process-image/global]])
                    (assoc ::climit/label "upload-photo")
-                   (assoc ::climit/executor executor)
-                   (climit/invoke! generate-thumbnail! file))]
+                   (climit/invoke! generate-thumbnail file))]
     (sto/put-object! storage params)))
+
+;; --- MUTATION: Delete Photo
+
+(sv/defmethod ::delete-profile-photo
+  {::doc/added "2.17"
+   ::sm/params [:map]
+   ::sm/result :nil
+   ::db/transaction true}
+  [{:keys [::db/conn ::sto/storage]} {:keys [::rpc/profile-id]}]
+  (let [profile (get-profile conn profile-id ::db/for-update true)]
+    (when-let [id (:photo-id profile)]
+      (sto/touch-object! storage id))
+
+    (db/update! conn :profile
+                {:photo-id nil}
+                {:id profile-id}
+                {::db/return-keys false})
+
+    nil))
 
 ;; --- MUTATION: Request Email Change
 
@@ -350,15 +410,15 @@
 
 (defn- request-email-change!
   [{:keys [::db/conn] :as cfg} {:keys [profile email] :as params}]
-  (let [token   (tokens/generate (::setup/props cfg)
+  (let [token   (tokens/generate cfg
                                  {:iss :change-email
-                                  :exp (dt/in-future "15m")
+                                  :exp (ct/in-future "15m")
                                   :profile-id (:id profile)
                                   :email email})
-        ptoken  (tokens/generate (::setup/props cfg)
+        ptoken  (tokens/generate cfg
                                  {:iss :profile-identity
                                   :profile-id (:id profile)
-                                  :exp (dt/in-future {:days 30})})]
+                                  :exp (ct/in-future {:days 30})})]
 
     (when (not= email (:email profile))
       (check-profile-existence! conn params))
@@ -407,11 +467,11 @@
 (def ^:private
   schema:update-profile-props
   [:map {:title "update-profile-props"}
-   [:props schema:props]])
+   [:props schema:props-writeable]])
 
 (defn update-profile-props
   [{:keys [::db/conn] :as cfg} profile-id props]
-  (let [profile (get-profile conn profile-id ::sql/for-update true)
+  (let [profile (get-profile conn profile-id ::db/for-update true)
         props   (reduce-kv (fn [props k v]
                              ;; We don't accept namespaced keys
                              (if (simple-ident? k)
@@ -420,57 +480,121 @@
                                  (assoc props k v))
                                props))
                            (:props profile)
-                           props)]
+                           (apply dissoc props system-managed-props))]
 
     (db/update! conn :profile
                 {:props (db/tjson props)}
-                {:id profile-id})
+                {:id profile-id}
+                {::db/return-keys false})
 
     (filter-props props)))
 
 (sv/defmethod ::update-profile-props
   {::doc/added "1.0"
-   ::sm/params schema:update-profile-props}
+   ::sm/params schema:update-profile-props
+   ::db/transaction true}
   [cfg {:keys [::rpc/profile-id props]}]
-  (db/tx-run! cfg (fn [cfg]
-                    (update-profile-props cfg profile-id props))))
+  (update-profile-props cfg profile-id props))
 
 ;; --- MUTATION: Delete Profile
 
 (declare ^:private get-owned-teams)
 
 (sv/defmethod ::delete-profile
-  {::doc/added "1.0"}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id] :as params}]
-  (db/with-atomic [conn pool]
-    (let [teams      (get-owned-teams conn profile-id)
-          deleted-at (dt/now)]
+  {::doc/added "1.0"
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id] :as params}]
+  (let [teams      (get-owned-teams conn profile-id)
+        deleted-at (ct/now)]
 
-      ;; If we found owned teams with participants, we don't allow
-      ;; delete profile until the user properly transfer ownership or
-      ;; explicitly removes all participants from the team
-      (when (some pos? (map :participants teams))
-        (ex/raise :type :validation
-                  :code :owner-teams-with-people
-                  :hint "The user need to transfer ownership of owned teams."
-                  :context {:teams (mapv :id teams)}))
+    ;; If we found owned teams with participants, we don't allow
+    ;; delete profile until the user properly transfer ownership or
+    ;; explicitly removes all participants from the team
+    (when (some pos? (map :participants teams))
+      (ex/raise :type :validation
+                :code :owner-teams-with-people
+                :hint "The user need to transfer ownership of owned teams."
+                :context {:teams (mapv :id teams)}))
 
-      ;; Mark profile deleted immediatelly
-      (db/update! conn :profile
-                  {:deleted-at deleted-at}
-                  {:id profile-id})
+    ;; Mark profile deleted immediatelly
+    (db/update! conn :profile
+                {:deleted-at deleted-at}
+                {:id profile-id})
 
-      ;; Schedule cascade deletion to a worker
-      (wrk/submit! {::db/conn conn
-                    ::wrk/task :delete-object
-                    ::wrk/params {:object :profile
-                                  :deleted-at deleted-at
-                                  :id profile-id}})
+    ;; Delete owned organizations on the fly (no grace period).
+    ;; Nitrate iterates the user's owned organizations and, per organization, calls
+    ;; Penpot back through two paths: ::notify-user-organizations-deletion
+    ;; (during delete-owned-organizations) and ::notify-organization-deletion.
+    ;; Both preserve organization teams unchanged and only prefix or delete
+    ;; imported "Personal Projects" teams according to whether they still have files.
+    ;; Let Nitrate clean up the data associated with the deleted Penpot user:
+    ;; owned organizations, remaining memberships, and subscription cancellation.
+    (when (contains? cf/flags :admin-console)
+      (nitrate/call cfg :cleanup-deleted-penpot-user
+                    {:profile-id profile-id}))
 
+    ;; Schedule cascade deletion to a worker
+    (wrk/submit! {::db/conn conn
+                  ::wrk/task :delete-object
+                  ::wrk/params {:object :profile
+                                :deleted-at deleted-at
+                                :id profile-id}})
 
-      (-> (rph/wrap nil)
-          (rph/with-transform (session/delete-fn cfg))))))
+    ;; Invalidate all sessions for this profile to ensure immediate
+    ;; access revocation across all devices
+    (session/invalidate-all cfg profile-id)
 
+    (-> (rph/wrap nil)
+        (rph/with-transform (session/delete-fn cfg)))))
+
+(def sql:get-subscription-editors
+  "SELECT DISTINCT
+          p.id,
+          p.fullname AS name,
+          p.email AS email
+     FROM team_profile_rel AS tpr1
+     JOIN team as t
+       ON tpr1.team_id = t.id
+     JOIN team_profile_rel AS tpr2
+       ON (tpr1.team_id = tpr2.team_id)
+     JOIN profile AS p
+       ON (tpr2.profile_id = p.id)
+    WHERE tpr1.profile_id = ?
+      AND tpr1.is_owner IS true
+      AND tpr2.can_edit IS true
+      AND t.deleted_at IS NULL")
+
+(sv/defmethod ::get-subscription-usage
+  {::doc/added "2.9"}
+  [cfg {:keys [::rpc/profile-id]}]
+  (let [editors (db/exec! cfg [sql:get-subscription-editors profile-id])]
+    {:editors editors}))
+
+;; --- QUERY: Owned Organizations Summary (for delete-account modal)
+
+(def ^:private schema:owned-organization-summary
+  [:map
+   [:id ::sm/uuid]
+   [:name ::sm/text]
+   [:slug ::sm/text]
+   [:team-count ::sm/int]
+   [:member-count ::sm/int]
+   [:avatar-bg-url {:optional true} [:maybe ::sm/uri]]
+   [:logo-id {:optional true} [:maybe ::sm/uuid]]
+   [:custom-photo {:optional true} [:maybe ::sm/text]]])
+
+(def ^:private schema:get-owned-organizations-summary-result
+  [:vector schema:owned-organization-summary])
+
+(sv/defmethod ::get-owned-organizations-summary
+  "List organizations owned by the current profile with team and member counts.
+   Used by the delete-account modal to warn the user about cascading deletion."
+  {::doc/added "2.18"
+   ::sm/result schema:get-owned-organizations-summary-result}
+  [cfg {:keys [::rpc/profile-id]}]
+  (if (contains? cf/flags :admin-console)
+    (or (nitrate/call cfg :get-owned-organizations-summary {:profile-id profile-id}) [])
+    []))
 
 ;; --- HELPERS
 
@@ -481,8 +605,7 @@
         JOIN team AS t ON (t.id = tpr.team_id)
        WHERE tpr.is_owner IS TRUE
          AND tpr.profile_id = ?
-         AND (t.deleted_at IS NULL OR
-              t.deleted_at > now())
+         AND t.deleted_at IS NULL
    )
    SELECT tpr.team_id AS id,
           count(tpr.profile_id) - 1 AS participants
@@ -529,15 +652,6 @@
   "Removes all namespace qualified props from `props` attr."
   [props]
   (into {} (filter (fn [[k _]] (simple-ident? k))) props))
-
-(defn derive-password
-  [{:keys [::wrk/executor]} password]
-  (when password
-    (px/invoke! executor (partial auth/derive-password password))))
-
-(defn verify-password
-  [{:keys [::wrk/executor]} password password-data]
-  (px/invoke! executor (partial auth/verify-password password password-data)))
 
 (defn decode-row
   [{:keys [props] :as row}]

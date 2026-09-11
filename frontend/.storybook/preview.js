@@ -1,5 +1,9 @@
 import { withThemeByClassName } from "@storybook/addon-themes";
 
+import Components from "@target/components";
+import translations from "@public/translation.en.js";
+Components.setDefaultTranslations(translations);
+
 import '../resources/public/css/ds.css';
 
 export const decorators = [
@@ -13,23 +17,30 @@ export const decorators = [
   }),
 ];
 
-/** @type { import('@storybook/react').Preview } */
+/** @type { import('@storybook/react-vite').Preview } */
 const preview = {
   decorators: decorators,
+
   parameters: {
     controls: {
+      disableSaveFromUI: true,
       matchers: {
         color: /(background|color)$/i,
         date: /Date$/i,
       },
     },
     backgrounds: {
-      values: [
-        { name: 'theme', value: 'var(--color-background-secondary)' },
-      ],
-      default: 'theme',
+      options: {
+        theme: { name: 'theme', value: 'var(--color-background-secondary)' }
+      }
     },
   },
+
+  initialGlobals: {
+    backgrounds: {
+      value: "theme"
+    }
+  }
 };
 
 export default preview;

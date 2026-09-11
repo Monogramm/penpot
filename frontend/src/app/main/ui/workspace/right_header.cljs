@@ -2,15 +2,15 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.right-header
   (:require-macros [app.main.style :as stl])
   (:require
    [app.main.data.common :as dcm]
    [app.main.data.event :as ev]
-   [app.main.data.modal :as modal]
    [app.main.data.shortcuts :as scd]
+   [app.main.data.team :as dtm]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.drawing.common :as dwc]
    [app.main.data.workspace.history :as dwh]
@@ -19,11 +19,13 @@
    [app.main.store :as st]
    [app.main.ui.components.dropdown :refer [dropdown]]
    [app.main.ui.context :as ctx]
+   [app.main.ui.dashboard.team]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
-   [app.main.ui.exports.assets :refer [export-progress-widget]]
+   [app.main.ui.ds.foundations.assets.icon :as i]
+   [app.main.ui.exports.assets :refer [progress-widget]]
    [app.main.ui.formats :as fmt]
-   [app.main.ui.icons :as i]
-   [app.main.ui.workspace.presence :refer [active-sessions]]
+   [app.main.ui.icons :as deprecated-icon]
+   [app.main.ui.workspace.presence :refer [active-sessions*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [okulary.core :as l]
@@ -32,47 +34,16 @@
 (def ref:persistence-status
   (l/derived :status refs/persistence))
 
-;; --- Persistence state Widget
-
-(mf/defc persistence-state-widget
-  {::mf/wrap [mf/memo]
-   ::mf/wrap-props false}
-  []
-  (let [status (mf/deref ref:persistence-status)
-        workspace-read-only? (mf/use-ctx ctx/workspace-read-only?)]
-    (when-not workspace-read-only?
-      [:div {:class (stl/css :persistence-status-widget)}
-       (case status
-         :pending
-         [:div {:class (stl/css :status-icon :pending-status)
-                :title (tr "workspace.header.unsaved")}
-          i/status-alert]
-
-         :saving
-         [:div {:class (stl/css :status-icon :pending-status)
-                :title (tr "workspace.header.unsaved")}
-          i/status-alert]
-
-         :saved
-         [:div {:class (stl/css :status-icon :saved-status)
-                :title (tr "workspace.header.saved")}
-          i/status-tick]
-
-         :error
-         [:div {:class (stl/css :status-icon :error-status)
-                :title "There was an error saving the data. Please refresh if this persists."}
-          i/status-wrong]
-
-         nil)])))
-
 ;; --- Zoom Widget
 
 (mf/defc zoom-widget-workspace
   {::mf/wrap [mf/memo]
    ::mf/wrap-props false}
   [{:keys [zoom on-increase on-decrease on-zoom-reset on-zoom-fit on-zoom-selected]}]
-  (let [open*           (mf/use-state false)
-        open?           (deref open*)
+  (let [open*            (mf/use-state false)
+        open?            (deref open*)
+        custom-shortcuts (mf/deref refs/custom-shortcuts)
+        get-tt           #(sc/get-effective-tooltip % custom-shortcuts)
 
         open-dropdown
         (mf/use-fn
@@ -115,12 +86,12 @@
          [:> icon-button* {:variant "ghost"
                            :aria-label (tr "shortcuts.decrease-zoom")
                            :on-click on-decrease
-                           :icon "remove"}]
+                           :icon i/remove}]
          [:p {:class (stl/css :zoom-text)} zoom]
          [:> icon-button* {:variant "ghost"
                            :aria-label (tr "shortcuts.increase-zoom")
                            :on-click on-increase
-                           :icon "add"}]]
+                           :icon i/add}]]
         [:button {:class (stl/css :reset-btn)
                   :on-click on-zoom-reset}
          (tr "workspace.header.reset-zoom")]]
@@ -128,26 +99,29 @@
              :on-click on-zoom-fit}
         (tr "workspace.header.zoom-fit-all")
         [:span {:class (stl/css :shortcuts)}
-         (for [sc (scd/split-sc (sc/get-tooltip :fit-all))]
+         (for [sc (scd/split-sc (get-tt :fit-all))]
            [:span {:class (stl/css :shortcut-key)
                    :key (str "zoom-fit-" sc)} sc])]]
        [:li {:class (stl/css :zoom-option)
              :on-click on-zoom-selected}
         (tr "workspace.header.zoom-selected")
         [:span {:class (stl/css :shortcuts)}
-         (for [sc (scd/split-sc (sc/get-tooltip :zoom-selected))]
+         (for [sc (scd/split-sc (get-tt :zoom-selected))]
            [:span {:class (stl/css :shortcut-key)
                    :key (str "zoom-selected-" sc)} sc])]]]]]))
 
 ;; --- Header Component
 
 (mf/defc right-header*
-  [{:keys [file layout page-id]}]
-  (let [file-id           (:id file)
+  [{:keys [file-id layout page-id]}]
+  (let [threads-map       (mf/deref refs/comment-threads)
 
         zoom              (mf/deref refs/selected-zoom)
         read-only?        (mf/use-ctx ctx/workspace-read-only?)
         selected-drawtool (mf/deref refs/selected-drawing-tool)
+
+        custom-shortcuts  (mf/deref refs/custom-shortcuts)
+        get-tt            #(sc/get-effective-tooltip % custom-shortcuts)
 
         on-increase       (mf/use-fn #(st/emit! (dw/increase-zoom nil)))
         on-decrease       (mf/use-fn #(st/emit! (dw/decrease-zoom nil)))
@@ -161,6 +135,19 @@
         input-ref         (mf/use-ref nil)
 
         team              (mf/deref refs/team)
+        permissions       (get team :permissions)
+
+        has-unread-comments?
+        (mf/with-memo [threads-map file-id]
+          (->> (vals threads-map)
+               (some #(and (= (:file-id %) file-id)
+                           (pos? (:count-unread-comments %))))
+               (boolean)))
+
+        display-share-button?
+        (and (not (:is-default team))
+             (or (:is-admin permissions)
+                 (:is-owner permissions)))
 
         nav-to-viewer
         (mf/use-fn
@@ -204,9 +191,8 @@
         (mf/use-fn
          (mf/deps team)
          (fn []
-           (st/emit! (modal/show {:type :invite-members
-                                  :team team
-                                  :origin :workspace}))))]
+           (st/emit! (dtm/check-and-invite-members {:team-id (:id team)
+                                                    :origin :workspace}))))]
 
     (mf/with-effect [editing?]
       (when ^boolean editing?
@@ -214,11 +200,9 @@
 
     [:div {:class (stl/css :workspace-header-right)}
      [:div {:class (stl/css :users-section)}
-      [:& active-sessions]]
+      [:> active-sessions*]]
 
-     [:& persistence-state-widget]
-
-     [:& export-progress-widget]
+     [:& progress-widget]
 
      [:div {:class (stl/css :separator)}]
 
@@ -232,13 +216,16 @@
         :on-zoom-selected on-zoom-selected}]]
 
      [:div {:class (stl/css :comments-section)}
-      [:button {:title (tr "workspace.toolbar.comments" (sc/get-tooltip :add-comment))
-                :aria-label (tr "workspace.toolbar.comments" (sc/get-tooltip :add-comment))
+      [:button {:title (tr "workspace.toolbar.comments" (get-tt :add-comment))
+                :aria-label (tr "workspace.toolbar.comments" (get-tt :add-comment))
                 :class (stl/css-case :comments-btn true
                                      :selected (= selected-drawtool :comments))
                 :on-click toggle-comments
-                :data-tool "comments"}
-       i/comments]]
+                :data-tool "comments"
+                :style {:position "relative"}}
+       deprecated-icon/comments
+       (when ^boolean has-unread-comments?
+         [:div {:class (stl/css :unread)}])]]
 
      (when-not ^boolean read-only?
        [:div {:class (stl/css :history-section)}
@@ -248,16 +235,16 @@
           :class (stl/css-case :selected (contains? layout :document-history)
                                :history-button true)
           :on-click toggle-history}
-         i/history]])
+         deprecated-icon/history]])
 
-     (when  (not (:is-default team))
+     (when display-share-button?
        [:a {:class (stl/css :viewer-btn)
             :title (tr "workspace.header.share")
             :on-click open-share-dialog}
-        i/share])
+        deprecated-icon/share])
 
      [:a {:class (stl/css :viewer-btn)
-          :title (tr "workspace.header.viewer" (sc/get-tooltip :open-viewer))
+          :title (tr "workspace.header.viewer" (get-tt :open-viewer))
           :on-click nav-to-viewer}
-      i/play]]))
+      deprecated-icon/play]]))
 

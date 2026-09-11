@@ -2,25 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
 
 .context-notification {
   --context-notification-bg-color: var(--alert-background-color-default);
   --context-notification-fg-color: var(--alert-text-foreground-color-default);
   --context-notification-icon-color: var(--alert-icon-foreground-color-default);
   --context-notification-border-color: var(--alert-border-color-default);
+
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: $s-16 1fr;
-  gap: $s-8;
-  min-height: $s-32;
+  grid-template-columns: deprecated.$s-16 1fr;
+  gap: deprecated.$s-8;
+  min-height: deprecated.$s-32;
   height: fit-content;
   width: 100%;
-  padding: $s-8;
-  border: $s-1 solid var(--context-notification-border-color);
-  border-radius: $br-8;
+  padding: deprecated.$s-8;
+  border: deprecated.$s-1 solid var(--context-notification-border-color);
+  border-radius: deprecated.$br-8;
   background-color: var(--context-notification-bg-color);
 }
 
@@ -60,13 +61,15 @@
 }
 
 .icon {
-  @extend .button-icon;
+  @extend %button-icon;
+
   align-self: self-start;
   stroke: var(--context-notification-icon-color);
 }
 
 .context-text {
-  @include bodySmallTypography;
+  @include deprecated.body-small-typography;
+
   align-self: center;
   color: var(--context-notification-fg-color);
   margin: auto 0;
@@ -78,11 +81,12 @@
 
 .link,
 .contain-html .context-text a {
-  @include bodySmallTypography;
+  @include deprecated.body-small-typography;
+
   align-self: center;
   display: inline;
   text-align: left;
-  height: $s-16;
+  height: deprecated.$s-16;
   margin: 0;
   color: var(--modal-link-foreground-color);
 }

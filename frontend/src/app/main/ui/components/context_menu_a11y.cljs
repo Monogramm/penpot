@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.components.context-menu-a11y
   (:require-macros [app.main.style :as stl])
@@ -12,11 +12,13 @@
    [app.common.schema :as sm]
    [app.main.refs :as refs]
    [app.main.ui.components.dropdown :refer [dropdown-content*]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
+   [app.util.globals :as ug]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [app.util.timers :as tm]
+   [beicon.v2.core :as rx]
    [rumext.v2 :as mf]))
 
 (def ^:private xf:options
@@ -42,6 +44,8 @@
                [:map
                 [:name :string]
                 [:id :string]
+                [:title {:optional true} [:maybe :string]]
+                [:disabled {:optional true} [:maybe :boolean]]
                 [:handler {:optional true} fn?]
                 [:options {:optional true}
                  [:sequential [:ref ::option]]]]
@@ -51,14 +55,13 @@
 (def ^:private valid-option?
   (sm/lazy-validator schema:option))
 
-(mf/defc context-menu*
-  [{:keys [show on-close options selectable selected
+(mf/defc context-menu-inner*
+  [{:keys [on-close options selectable selected
            top left fixed min-width origin width]
     :as props}]
 
   (assert (every? valid-option? options) "expected valid options")
   (assert (fn? on-close) "missing `on-close` prop")
-  (assert (boolean? show) "missing `show` prop")
   (assert (vector? options) "missing `options` prop")
 
   (let [width          (d/nilv width "initial")
@@ -78,14 +81,15 @@
         offset-x       (get state :offset-x)
         offset-y       (get state :offset-y)
         levels         (get state :levels)
+        internal-id    (mf/use-id)
 
         on-local-close
         (mf/use-fn
          (mf/deps on-close)
          (fn []
-           (swap! state* assoc :levels [{:parent nil
-                                         :options options}])
-           (on-close)))
+           (swap! state* assoc :levels [{:parent nil :options options}])
+           (when (fn? on-close)
+             (on-close))))
 
         props
         (mf/spread-props props {:on-close on-local-close})
@@ -214,11 +218,25 @@
       (swap! state* assoc :levels [{:parent nil
                                     :options options}]))
 
-    (mf/with-effect [ids]
-      (tm/schedule-on-idle
-       #(dom/focus! (dom/get-element (first ids)))))
+    (mf/with-effect [internal-id]
+      (ug/dispatch! (ug/event "penpot:context-menu:open" #js {:id internal-id})))
 
-    (when (and show (some? levels))
+    (mf/with-effect [internal-id on-local-close]
+      (letfn [(on-event [event]
+                (when-let [detail (unchecked-get event "detail")]
+                  (when (not= internal-id (unchecked-get detail "id"))
+                    (on-local-close event))))]
+        (ug/listen "penpot:context-menu:open" on-event)
+        (partial ug/unlisten "penpot:context-menu:open" on-event)))
+
+    (mf/with-effect [ids]
+      (let [handle (tm/schedule
+                    (fn []
+                      (some-> (dom/get-element (first ids))
+                              (dom/focus!))))]
+        #(rx/dispose! handle)))
+
+    (when (some? levels)
       [:> dropdown-content* props
        (let [level   (peek levels)
              options (:options level)
@@ -227,7 +245,7 @@
          [:div {:class (stl/css-case
                         :is-selectable selectable
                         :context-menu true
-                        :is-open show
+                        :is-open true
                         :fixed fixed)
                 :style {:top (+ top offset-y)
                         :left (+ left offset-x)}
@@ -239,7 +257,7 @@
                 :role "menu"
                 :ref check-menu-offscreen}
 
-           (when-let [parent (:parent level)]
+           (when parent
              [:*
               [:li {:id "go-back-sub-option"
                     :class (stl/css :context-menu-item)
@@ -249,16 +267,18 @@
                [:button {:class (stl/css :context-menu-action :submenu-back)
                          :data-no-close true
                          :on-click on-submenu-exit}
-                [:span {:class (stl/css :submenu-icon-back)} i/arrow]
+                [:span {:class (stl/css :submenu-icon-back)} deprecated-icon/arrow]
                 parent]]
 
               [:li {:class (stl/css :separator)}]])
 
-           (for [[index option] (d/enumerate (:options level))]
+           (for [[index option] (d/enumerate options)]
              (let [name        (:name option)
                    id          (:id option)
                    sub-options (:options option)
-                   handler     (:handler option)]
+                   handler     (:handler option)
+                   title       (:title option)
+                   disabled    (:disabled option)]
                (when name
                  (if (= name :separator)
                    [:li {:key (dm/str "context-item-" index)
@@ -273,21 +293,32 @@
                          :role "menuitem"
                          :on-key-down dom/prevent-default}
                     (if-not sub-options
-                      [:a {:class (stl/css :context-menu-action)
+                      [:a {:class (stl/css-case :context-menu-action true :context-menu-action-disabled disabled)
+                           :title title
                            :on-click #(do (dom/stop-propagation %)
-                                          (on-close %)
-                                          (handler %))
+                                          (when-not disabled
+                                            (on-close %)
+                                            (handler %)))
                            :data-testid id}
                        (if (and in-dashboard? (= name "Default"))
                          (tr "dashboard.default-team-name")
                          name)
 
                        (when (and selected (= id selected))
-                         [:span {:class (stl/css :selected-icon)} i/tick])]
+                         [:span {:class (stl/css :selected-icon)} deprecated-icon/tick])]
 
                       [:a {:class (stl/css :context-menu-action :submenu)
                            :data-no-close true
                            :on-click (enter-submenu name sub-options)
                            :data-testid id}
                        name
-                       [:span {:class (stl/css :submenu-icon)} i/arrow]])]))))]])])))
+                       [:span {:class (stl/css :submenu-icon)} deprecated-icon/arrow]])]))))]])])))
+
+(mf/defc context-menu*
+  {::mf/private true}
+  [{:keys [show] :as props}]
+
+  (assert (boolean? show) "expected `show` prop to be a boolean")
+
+  (when ^boolean show
+    [:> context-menu-inner* props]))

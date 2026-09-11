@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.websocket
   "A interface to webworkers exposed functionality."
@@ -104,7 +104,9 @@
 
 (defn send!
   [ws msg]
-  (-send ws (t/encode-str msg)))
+  (if *assert*
+    (-send ws (t/encode-str msg {:type :json-verbose}))
+    (-send ws (t/encode-str msg))))
 
 (defn close!
   [ws]

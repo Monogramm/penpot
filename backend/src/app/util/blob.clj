@@ -2,12 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.blob
   "A generic blob storage encoding. Mainly used for page data, page
   options and txlog payload storage."
   (:require
+   [app.common.exceptions :as ex]
    [app.common.fressian :as fres]
    [app.common.transit :as t]
    [app.config :as cf])
@@ -19,6 +20,7 @@
    java.io.DataOutputStream
    java.io.InputStream
    java.io.OutputStream
+   java.util.Base64
    net.jpountz.lz4.LZ4Compressor
    net.jpountz.lz4.LZ4Factory
    net.jpountz.lz4.LZ4FastDecompressor
@@ -49,19 +51,38 @@
        5 (encode-v5 data)
        (throw (ex-info "unsupported version" {:version version}))))))
 
+(defn encode-str
+  "Encode data to a blob and return it as a URL-safe base64 string
+  (no padding). Accepts the same options as `encode`."
+  (^String [data] (encode-str data nil))
+  (^String [data opts]
+   (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) ^bytes (encode data opts))))
+
 (defn decode
-  "A function used for decode persisted blobs in the database."
-  [^bytes data]
+  "A function used for decode persisted blobs in the database.
+   Accepts optional keyword arguments:
+     :max-size  — maximum allowed uncompressed size in bytes"
+  [^bytes data & {:keys [max-size]}]
   (with-open [bais (ByteArrayInputStream. data)
               dis  (DataInputStream. bais)]
     (let [version (.readShort dis)
           ulen    (.readInt dis)]
+      (when (and max-size (> ulen max-size))
+        (ex/raise :type :validation
+                  :code :blob-too-large
+                  :hint "blob uncompressed size exceeds limit"))
       (case version
         1 (decode-v1 data ulen)
         3 (decode-v3 data ulen)
         4 (decode-v4 data ulen)
         5 (decode-v5 data)
         (throw (ex-info "unsupported version" {:version version}))))))
+
+(defn decode-str
+  "Decode a URL-safe base64 string produced by `encode-str` back to data.
+   Accepts the same optional keyword arguments as `decode`."
+  [^String s & {:as opts}]
+  (decode (.decode (Base64/getUrlDecoder) s) opts))
 
 ;; --- IMPL
 

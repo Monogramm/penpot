@@ -2,13 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.attrs
   (:require
    [app.common.geom.shapes :as gsh]
    [app.common.math :as mth]
-   [app.common.text :as txt]))
+   [app.common.types.text :as txt]))
 
 (defn- get-attr
   [obj attr]

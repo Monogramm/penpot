@@ -2,90 +2,83 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
 import * as React from "react";
 import Components from "@target/components";
 
-import { userEvent, within, expect } from "@storybook/test";
+import { userEvent, within, expect } from "storybook/test";
 
 const { Combobox } = Components;
 
-let lastValue = null;
+const options = [
+  { id: "Monday", label: "Monday" },
+  { id: "Tuesday", label: "Tuesday" },
+  { id: "Wednesday", label: "Wednesday" },
+  { id: "Thursday", label: "Thursday" },
+  { id: "Friday", label: "Friday" },
+  { id: "", label: "(Empty)" },
+  { id: "Saturday", label: "Saturday" },
+  { id: "Sunday", label: "Sunday" },
+];
+
+const optionsWithIcons = [
+  { id: "Monday", label: "Monday", icon: "fill-content" },
+  { id: "Tuesday", label: "Tuesday", icon: "pentool" },
+  { id: "Wednesday", label: "Wednesday" },
+  { id: "Thursday", label: "Thursday" },
+  { id: "Friday", label: "Friday" },
+  { id: "", label: "(Empty)" },
+  { id: "Saturday", label: "Saturday" },
+  { id: "Sunday", label: "Sunday" },
+];
 
 export default {
   title: "Controls/Combobox",
   component: Combobox,
   argTypes: {
     disabled: { control: "boolean" },
+    maxLength: { control: "number" },
     hasError: { control: "boolean" },
+    emptyToEnd: { control: "boolean" },
   },
   args: {
     disabled: false,
+    maxLength: 10,
     hasError: false,
-    options: [
-      { id: "January", label: "January" },
-      { id: "February", label: "February" },
-      { id: "March", label: "March" },
-      { id: "April", label: "April" },
-      { id: "May", label: "May" },
-      { id: "June", label: "June" },
-      { id: "July", label: "July" },
-      { id: "August", label: "August" },
-      { id: "September", label: "September" },
-      { id: "October", label: "October" },
-      { id: "November", label: "November" },
-      { id: "December", label: "December" },
-    ],
-    defaultSelected: "February",
+    placeholder: "Select a weekday",
+    emptyToEnd: false,
+    options: options,
+    defaultSelected: "Tuesday",
   },
   parameters: {
     controls: {
       exclude: ["options", "defaultSelected"],
     },
-  },
-  render: ({ ...args }) => (
-    <div style={{ padding: "5px" }}>
-      <Combobox {...args} />
-    </div>
-  ),
-};
-
-export const Default = {
-  parameters: {
     docs: {
       story: {
-        height: "450px",
+        height: "320px",
       },
     },
   },
+  render: ({ ...args }) => <Combobox {...args} />,
 };
+
+export const Default = {};
 
 export const WithIcons = {
   args: {
-    options: [
-      { id: "January", label: "January", icon: "fill-content" },
-      { id: "February", label: "February", icon: "pentool" },
-      { id: "March", label: "March" },
-      { id: "April", label: "April" },
-      { id: "May", label: "May" },
-      { id: "June", label: "June" },
-      { id: "July", label: "July" },
-      { id: "August", label: "August" },
-      { id: "September", label: "September" },
-      { id: "October", label: "October" },
-      { id: "November", label: "November" },
-      { id: "December", label: "December" },
-    ],
-  },
-  parameters: {
-    docs: {
-      story: {
-        height: "450px",
-      },
-    },
+    options: optionsWithIcons,
   },
 };
+
+export const EmptyToEnd = {
+  args: {
+    emptyToEnd: true,
+  },
+};
+
+let lastValue = null;
 
 export const TestInteractions = {
   ...WithIcons,
@@ -111,9 +104,10 @@ export const TestInteractions = {
       return options;
     };
 
-    await userEvent.clear(input);
+    await step("Toggle dropdown when clicking on arrow", async () => {
+      await userEvent.clear(input);
+      await userEvent.keyboard("{Escape}");
 
-    await step("Toggle dropdown on click arrow button", async () => {
       await userEvent.click(button);
 
       await waitOptionsPresent();
@@ -124,7 +118,24 @@ export const TestInteractions = {
       expect(combobox).toHaveAttribute("aria-expanded", "false");
     });
 
-    await step("Aria controls is set correctly", async () => {
+    await step("Open dropdown when clicking on input", async () => {
+      await userEvent.clear(input);
+      await userEvent.keyboard("{Escape}");
+
+      await userEvent.click(input);
+
+      await waitOptionsPresent();
+      expect(combobox).toHaveAttribute("aria-expanded", "true");
+
+      await userEvent.keyboard("{Escape}");
+      await waitOptionNotPresent();
+      expect(combobox).toHaveAttribute("aria-expanded", "false");
+    });
+
+    await step("Aria controls set", async () => {
+      await userEvent.clear(input);
+      await userEvent.keyboard("{Escape}");
+
       await userEvent.click(button);
 
       const ariaControls = combobox.getAttribute("aria-controls");
@@ -135,6 +146,9 @@ export const TestInteractions = {
     });
 
     await step("Navigation keys", async () => {
+      await userEvent.clear(input);
+      await userEvent.keyboard("{Escape}");
+
       // Arrow down
       await userEvent.click(input);
       await waitOptionsPresent();
@@ -143,8 +157,8 @@ export const TestInteractions = {
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{Enter}");
 
-      expect(input).toHaveValue("February");
-      expect(lastValue).toBe("February");
+      expect(input).toHaveValue("Tuesday");
+      expect(lastValue).toBe("Tuesday");
       await userEvent.clear(input);
 
       // Arrow up
@@ -153,11 +167,11 @@ export const TestInteractions = {
 
       await userEvent.keyboard("{ArrowUp}");
       await userEvent.keyboard("{ArrowUp}");
-      expect(combobox).toHaveAttribute("aria-activedescendant", "November");
+      expect(combobox).toHaveAttribute("aria-activedescendant", "Saturday");
       await userEvent.keyboard("{Enter}");
 
-      expect(input).toHaveValue("November");
-      expect(lastValue).toBe("November");
+      expect(input).toHaveValue("Saturday");
+      expect(lastValue).toBe("Saturday");
       await userEvent.clear(input);
 
       // Home
@@ -167,48 +181,41 @@ export const TestInteractions = {
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{Home}");
-      expect(combobox).toHaveAttribute("aria-activedescendant", "January");
+      expect(combobox).toHaveAttribute("aria-activedescendant", "Monday");
       await userEvent.keyboard("{Enter}");
 
-      expect(input).toHaveValue("January");
-      expect(lastValue).toBe("January");
+      expect(input).toHaveValue("Monday");
+      expect(lastValue).toBe("Monday");
       await userEvent.clear(input);
     });
 
-    await step("Toggle dropdown with arrow down and ESC", async () => {
-      userEvent.click(input);
+    await step(
+      "Filter with 'es' (Tuesday, Wednesday) and select Wednesday",
+      async () => {
+        await userEvent.clear(input);
+        await userEvent.keyboard("{Escape}");
 
-      await waitOptionsPresent();
+        await userEvent.click(input);
 
+        await userEvent.type(input, "es");
+
+        const options = await canvas.findAllByTestId("dropdown-option");
+        expect(options).toHaveLength(2);
+
+        await userEvent.keyboard("[ArrowDown]");
+        await userEvent.keyboard("[ArrowDown]");
+
+        await userEvent.keyboard("{Enter}");
+
+        expect(input).toHaveValue("Wednesday");
+        expect(lastValue).toBe("Wednesday");
+      },
+    );
+
+    await step("Close dropdown when focusing out", async () => {
+      await userEvent.clear(input);
       await userEvent.keyboard("{Escape}");
-      expect(combobox).toHaveAttribute("aria-expanded", "false");
-      await waitOptionNotPresent();
 
-      await userEvent.keyboard("{ArrowDown}");
-      await waitOptionsPresent();
-      expect(combobox).toHaveAttribute("aria-expanded", "true");
-
-      await userEvent.keyboard("{Escape}");
-      await waitOptionNotPresent();
-      expect(combobox).toHaveAttribute("aria-expanded", "false");
-    });
-
-    await step("Filter with 'Ju' and select July", async () => {
-      await userEvent.type(input, "Ju");
-
-      const options = await canvas.findAllByTestId("dropdown-option");
-      expect(options).toHaveLength(2);
-
-      await userEvent.keyboard("{ArrowDown}");
-      await userEvent.keyboard("{ArrowDown}");
-
-      await userEvent.keyboard("{Enter}");
-
-      expect(input).toHaveValue("July");
-      expect(lastValue).toBe("July");
-    });
-
-    await step("Close dropdown when focus out", async () => {
       await userEvent.click(button);
 
       await waitOptionsPresent();

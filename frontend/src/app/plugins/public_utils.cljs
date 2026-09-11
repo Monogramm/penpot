@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.plugins.public-utils
   "Utilities that will be exposed to plugins developers"
@@ -17,7 +17,12 @@
   [shapes]
   (cond
     (not (every? shape/shape-proxy? shapes))
-    (u/display-not-valid :centerShapes shapes)
+    (u/not-valid nil :centerShapes shapes)
+
+    ;; The documented contract returns null for an empty array; without this
+    ;; guard `shapes->rect` yields a non-rect and `rect->center` asserts.
+    (empty? shapes)
+    nil
 
     :else
     (let [shapes (->> shapes (map u/proxy->shape))]

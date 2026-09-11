@@ -2,15 +2,19 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.projects
   (:require
+   [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
+   [app.common.uuid :as uuid]
    [app.db :as db]
    [app.db.sql :as-alias sql]
+   [app.features.logical-deletion :as ldel]
    [app.loggers.audit :as-alias audit]
    [app.loggers.webhooks :as webhooks]
    [app.rpc :as-alias rpc]
@@ -20,7 +24,6 @@
    [app.rpc.permissions :as perms]
    [app.rpc.quotes :as quotes]
    [app.util.services :as sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]))
 
 ;; --- Check Project Permissions
@@ -55,11 +58,16 @@
        :can-edit (or is-owner is-admin can-edit)
        :can-read true})))
 
+(defn- get-read-permissions
+  [cfg profile-id project-id]
+  (or (get-permissions cfg profile-id project-id)
+      (perms/get-organization-owner-permissions cfg profile-id :project-id project-id)))
+
 (def has-edit-permissions?
   (perms/make-edition-predicate-fn get-permissions))
 
 (def has-read-permissions?
-  (perms/make-read-predicate-fn get-permissions))
+  (perms/make-read-predicate-fn get-read-permissions))
 
 (def check-edition-permissions!
   (perms/make-check-fn has-edit-permissions?))
@@ -69,7 +77,27 @@
 
 ;; --- QUERY: Get projects
 
-(declare get-projects)
+(def ^:private sql:projects
+  "SELECT p.*,
+          coalesce(tpp.is_pinned, false) as is_pinned,
+          (SELECT count(*) FROM file AS f
+            WHERE f.project_id = p.id
+              AND f.deleted_at is null) AS count,
+          (SELECT count(*) FROM file AS f
+            WHERE f.project_id = p.id) AS total_count
+     FROM project AS p
+    INNER JOIN team AS t ON (t.id = p.team_id)
+     LEFT JOIN team_project_profile_rel AS tpp
+            ON (tpp.project_id = p.id AND
+                tpp.team_id = p.team_id AND
+                tpp.profile_id = ?)
+    WHERE p.team_id = ?
+      AND t.deleted_at is null
+    ORDER BY p.modified_at DESC")
+
+(defn get-projects
+  [conn profile-id team-id]
+  (db/exec! conn [sql:projects profile-id team-id]))
 
 (def ^:private schema:get-projects
   [:map {:title "get-projects"}
@@ -77,32 +105,11 @@
 
 (sv/defmethod ::get-projects
   {::doc/added "1.18"
+   ::doc/changes [["2.12" "This endpoint now return deleted but recoverable projects"]]
    ::sm/params schema:get-projects}
-  [{:keys [::db/pool]} {:keys [::rpc/profile-id team-id]}]
-  (dm/with-open [conn (db/open pool)]
-    (teams/check-read-permissions! conn profile-id team-id)
-    (get-projects conn profile-id team-id)))
-
-(def sql:projects
-  "select p.*,
-          coalesce(tpp.is_pinned, false) as is_pinned,
-          (select count(*) from file as f
-            where f.project_id = p.id
-              and deleted_at is null) as count
-     from project as p
-    inner join team as t on (t.id = p.team_id)
-     left join team_project_profile_rel as tpp
-            on (tpp.project_id = p.id and
-                tpp.team_id = p.team_id and
-                tpp.profile_id = ?)
-    where p.team_id = ?
-      and p.deleted_at is null
-      and t.deleted_at is null
-    order by p.modified_at desc")
-
-(defn get-projects
-  [conn profile-id team-id]
-  (db/exec! conn [sql:projects profile-id team-id]))
+  [cfg {:keys [::rpc/profile-id team-id]}]
+  (teams/check-read-permissions! cfg profile-id team-id)
+  (get-projects cfg profile-id team-id))
 
 ;; --- QUERY: Get all projects
 
@@ -157,11 +164,12 @@
 
 (sv/defmethod ::get-project
   {::doc/added "1.18"
+   ::rpc/id-type :project
    ::sm/params schema:get-project}
-  [{:keys [::db/pool]} {:keys [::rpc/profile-id id]}]
+  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id]}]
   (dm/with-open [conn (db/open pool)]
     (let [project (db/get-by-id conn :project id)]
-      (check-read-permissions! conn profile-id id)
+      (check-read-permissions! cfg profile-id id)
       project)))
 
 
@@ -169,12 +177,20 @@
 ;; --- MUTATION: Create Project
 
 (defn- create-project
-  [{:keys [::db/conn] :as cfg} {:keys [profile-id team-id] :as params}]
-  (let [project (teams/create-project conn params)]
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/request-at profile-id team-id] :as params}]
+  (assert (ct/inst? request-at) "expect request-at assigned")
+  (let [params    (-> params
+                      (assoc :created-at request-at)
+                      (assoc :modified-at request-at))
+        project   (teams/create-project conn params)
+        timestamp (::rpc/request-at params)]
     (teams/create-project-role conn profile-id (:id project) :owner)
     (db/insert! conn :team-project-profile-rel
-                {:project-id (:id project)
+                {:id (uuid/next)
+                 :project-id (:id project)
                  :profile-id profile-id
+                 :created-at timestamp
+                 :modified-at timestamp
                  :team-id team-id
                  :is-pinned false})
     (assoc project :is-pinned false)))
@@ -216,15 +232,16 @@
 
 (sv/defmethod ::update-project-pin
   {::doc/added "1.18"
+   ::rpc/id-type :project
    ::sm/params schema:update-project-pin
-   ::webhooks/batch-timeout (dt/duration "5s")
+   ::webhooks/batch-timeout (ct/duration "5s")
    ::webhooks/batch-key (webhooks/key-fn ::rpc/profile-id :id)
-   ::webhooks/event? true}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id team-id is-pinned] :as params}]
-  (db/with-atomic [conn pool]
-    (check-read-permissions! conn profile-id id)
-    (db/exec-one! conn [sql:update-project-pin team-id id profile-id is-pinned is-pinned])
-    nil))
+   ::webhooks/event? true
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id team-id is-pinned] :as params}]
+  (check-read-permissions! cfg profile-id id)
+  (db/exec-one! conn [sql:update-project-pin team-id id profile-id is-pinned is-pinned])
+  nil)
 
 ;; --- MUTATION: Rename Project
 
@@ -237,25 +254,28 @@
 
 (sv/defmethod ::rename-project
   {::doc/added "1.18"
+   ::rpc/id-type :project
    ::sm/params schema:rename-project
-   ::webhooks/event? true}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id name] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id id)
-    (let [project (db/get-by-id conn :project id ::sql/for-update true)]
-      (db/update! conn :project
-                  {:name name}
-                  {:id id})
-      (rph/with-meta (rph/wrap)
-        {::audit/props {:team-id (:team-id project)
-                        :prev-name (:name project)}}))))
+   ::webhooks/event? true
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id id name] :as params}]
+  (check-edition-permissions! conn profile-id id)
+  (let [project (db/get-by-id conn :project id ::sql/for-update true)
+        name    (d/normalize-string name)]
+    (db/update! conn :project
+                {:name name}
+                {:id id})
+    (rph/with-meta (rph/wrap)
+      {::audit/props {:team-id (:team-id project)
+                      :prev-name (:name project)}})))
 
 ;; --- MUTATION: Delete Project
 
 (defn- delete-project
-  [conn project-id]
-  (let [project (db/update! conn :project
-                            {:deleted-at (dt/now)}
+  [conn team project-id]
+  (let [delay   (ldel/get-deletion-delay team)
+        project (db/update! conn :project
+                            {:deleted-at (ct/in-future delay)}
                             {:id project-id}
                             {::db/return-keys true})]
 
@@ -272,21 +292,24 @@
 
     project))
 
-
 (def ^:private schema:delete-project
   [:map {:title "delete-project"}
    [:id ::sm/uuid]])
 
 (sv/defmethod ::delete-project
   {::doc/added "1.18"
+   ::rpc/id-type :project
    ::sm/params schema:delete-project
-   ::webhooks/event? true}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id id)
-    (let [project (delete-project conn id)]
-      (rph/with-meta (rph/wrap)
-        {::audit/props {:team-id (:team-id project)
-                        :name (:name project)
-                        :created-at (:created-at project)
-                        :modified-at (:modified-at project)}}))))
+   ::webhooks/event? true
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id id] :as params}]
+  (check-edition-permissions! conn profile-id id)
+  (let [team    (teams/get-team conn
+                                :profile-id profile-id
+                                :project-id id)
+        project (delete-project conn team id)]
+    (rph/with-meta (rph/wrap)
+      {::audit/props {:team-id (:team-id project)
+                      :name (:name project)
+                      :created-at (:created-at project)
+                      :modified-at (:modified-at project)}})))

@@ -2,12 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns common-tests.logic.comp-sync-test
   (:require
    [app.common.data :as d]
    [app.common.files.changes-builder :as pcb]
+   [app.common.geom.point :as gpt]
+   [app.common.geom.shapes :as gsh]
    [app.common.logic.libraries :as cll]
    [app.common.logic.shapes :as cls]
    [app.common.test-helpers.components :as thc]
@@ -195,10 +197,10 @@
         page      (thf/current-page file)
 
         ;; ==== Action
-        changes1 (cls/generate-relocate (pcb/empty-changes)
-                                        (:objects page)
+        changes1 (cls/generate-relocate (-> (pcb/empty-changes nil)
+                                            (pcb/with-page-id (:id page))
+                                            (pcb/with-objects (:objects page)))
                                         (thi/id :main-root)       ; parent-id
-                                        (:id page)                ; page-id
                                         0                         ; to-index
                                         #{(thi/id :free-shape)})   ; ids
 
@@ -227,7 +229,7 @@
     (t/is (= (:touched copy-root') nil))
     (t/is (= (:touched copy-new-child') nil))
     (t/is (ctst/parent-of? copy-root' copy-new-child'))
-    (t/is (ctk/is-main-of? main-free-shape' copy-new-child' true))))
+    (t/is (ctk/is-main-of? main-free-shape' copy-new-child'))))
 
 (t/deftest test-sync-when-deleting-shape
   (let [;; ==== Setup
@@ -292,10 +294,10 @@
         main-child1 (ths/get-shape file :main-child1)
 
         ;; ==== Action
-        changes1     (cls/generate-relocate (pcb/empty-changes)
-                                            (:objects page)
+        changes1     (cls/generate-relocate (-> (pcb/empty-changes nil)
+                                                (pcb/with-page-id (:id page))
+                                                (pcb/with-objects (:objects page)))
                                             (thi/id :main-root)         ; parent-id
-                                            (:id page)                  ; page-id
                                             2                           ; to-index
                                             #{(:id main-child1)})       ; ids
 
@@ -488,3 +490,52 @@
     (t/is (= (:fill-opacity fill') 1))
     (t/is (= (:touched copy2-root') nil))
     (t/is (= (:touched copy2-child') nil))))
+
+(t/deftest test-no-sync-changes-when-only-position-changes
+  ;; Regression: the library sync dialog was shown even when a library component
+  ;; was only moved (x/y changed). Position changes are normalised by
+  ;; reposition-shape during sync and never propagate to copies, so
+  ;; generate-sync-file-changes must return empty :redo-changes in this case.
+  (let [;; ==== Setup
+        ;; Use integer width/height so that floating-point arithmetic of
+        ;; move(+delta) followed by reposition(-delta) cancels out exactly.
+        file       (-> (thf/sample-file :file1)
+                       (tho/add-simple-component-with-copy :component1
+                                                           :main-root
+                                                           :main-child
+                                                           :copy-root
+                                                           :main-root-params {:width 100 :height 100}
+                                                           :main-child-params {:width 50 :height 50}))
+        page       (thf/current-page file)
+        main-root  (ths/get-shape file :main-root)
+        main-child (ths/get-shape file :main-child)
+
+        ;; ==== Action
+        ;; Move the entire main component (root + child) by a non-zero integer delta.
+        ;; This is a position-only change: no fills, strokes or other
+        ;; attributes are modified.
+        delta      (gpt/point 100 150)
+        changes1   (cls/generate-update-shapes (pcb/empty-changes nil (:id page))
+                                               #{(:id main-root) (:id main-child)}
+                                               (fn [shape] (gsh/move shape delta))
+                                               (:objects page)
+                                               {})
+
+        updated-file (thf/apply-changes file changes1)
+
+        ;; Run the full sync to check whether any real redo-changes are produced.
+        ;; The fixed frontend code filters out libraries whose sync produces no
+        ;; :redo-changes before showing the "library updated" notification.
+        sync-changes (cll/generate-sync-file-changes (pcb/empty-changes)
+                                                     nil
+                                                     :components
+                                                     (:id updated-file)
+                                                     (thi/id :component1)
+                                                     (:id updated-file)
+                                                     {(:id updated-file) updated-file}
+                                                     (:id updated-file))]
+
+    ;; ==== Check
+    ;; A position-only change in the main component must not propagate to copies
+    ;; and therefore must produce no redo-changes.
+    (t/is (empty? (:redo-changes sync-changes)))))

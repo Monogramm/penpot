@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.storage.tmp
   "Temporal files service all created files will be tried to clean after
@@ -12,8 +12,8 @@
   (:require
    [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [datoteka.fs :as fs]
    [datoteka.io :as io]
@@ -38,13 +38,13 @@
 
 (defmethod ig/expand-key ::cleaner
   [k v]
-  {k (assoc v ::min-age (dt/duration "60m"))})
+  {k (assoc v ::min-age (ct/duration "60m"))})
 
 (defmethod ig/init-key ::cleaner
   [_ cfg]
   (fs/create-dir default-tmp-dir)
   (px/fn->thread (partial io-loop cfg)
-                 {:name "penpot/storage/tmp-cleaner" :virtual true}))
+                 {:name "penpot/storage/tmp-cleaner"}))
 
 (defmethod ig/halt-key! ::cleaner
   [_ thread]
@@ -52,13 +52,13 @@
 
 (defn- io-loop
   [{:keys [::min-age] :as cfg}]
-  (l/inf :hint "started tmp cleaner" :default-min-age (dt/format-duration min-age))
+  (l/inf :hint "started tmp cleaner" :default-min-age (ct/format-duration min-age))
   (try
     (loop []
       (when-let [[path min-age'] (sp/take! queue)]
         (let [min-age (or min-age' min-age)]
           (l/dbg :hint "schedule tempfile deletion" :path path
-                 :expires-at (dt/plus (dt/now) min-age))
+                 :expires-at (ct/plus (ct/now) min-age))
           (px/schedule! (inst-ms min-age) (partial remove-temp-file cfg path))
           (recur))))
     (catch InterruptedException _
@@ -79,15 +79,19 @@
 ;; API
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn tempfile
-  [& {:keys [suffix prefix min-age]
+(defn tempfile*
+  [& {:keys [suffix prefix dir]
       :or {prefix "penpot."
-           suffix ".tmp"}}]
+           suffix ".tmp"
+           dir default-tmp-dir}}]
   (let [attrs (fs/make-permissions "rw-r--r--")
-        path  (fs/join default-tmp-dir (str prefix (uuid/next) suffix))
-        path  (Files/createFile path attrs)]
-    (fs/delete-on-exit! path)
-    (sp/offer! queue [path (some-> min-age dt/duration)])
+        path  (fs/join dir (str prefix (uuid/next) suffix))]
+    (Files/createFile path attrs)))
+
+(defn tempfile
+  [& {:keys [min-age] :as opts}]
+  (let [path (tempfile* opts)]
+    (sp/offer! queue [path (some-> min-age ct/duration)])
     path))
 
 (defn tempfile-from

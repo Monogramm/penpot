@@ -1,4 +1,10 @@
-import { Canvas, Meta } from '@storybook/blocks';
+{ /* This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+  Copyright (c) KALEIDOS SUBSIDIARY SL */ }
+
+import { Canvas, Meta } from '@storybook/addon-docs/blocks';
 import * as ButtonStories from "./button.stories";
 import * as IconButtonStories from "./icon_button.stories";
 
@@ -44,6 +50,29 @@ These are available in the `app.main.ds.foundations.assets.icon` namespace.
 ```
 
 <Canvas of={ButtonStories.WithIcon} />
+
+```clj
+[:> icon-button* {:variant "primary"
+                  :icon i/effects}]
+```
+
+<Canvas of={IconButtonStories.Primary} />
+
+### Action Buttons
+
+Action buttons are a variant of `icon-button*` (`"action"`) but smaller.
+
+```clj
+[:> icon-button* {:variant "action"
+                  :icon i/effects}]
+```
+
+<Canvas of={IconButtonStories.Action} />
+
+### Semantics
+
+In some cases, a button needs to be semantically an 'a' tag, but visually maintain the button style.
+In that case, the button accepts a 'to' property with the expected 'href'. It will then be rendered as an anchor element.
 
 ### Accessibility
 

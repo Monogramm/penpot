@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.math
   "A collection of math utils."
@@ -34,12 +34,14 @@
   #?(:cljs (js/isNaN v)
      :clj (Double/isNaN v)))
 
-;; NOTE: on cljs we don't need to check for `number?` so we explicitly
-;; ommit it for performance reasons.
+;; NOTE: we need `number?` guard on cljs because `js/isFinite` coerces
+;; strings to numbers, accepting "16" as finite when it shouldn't.
+;; This caused a bug where string values from format-number were
+;; propagated through the system until Malli rejected them (issue #10638).
 
 (defn finite?
   [v]
-  #?(:cljs (and (not (nil? v)) (js/isFinite v))
+  #?(:cljs (and (not (nil? v)) (number? v) (js/isFinite v))
      :clj (and (not (nil? v)) (number? v) (Double/isFinite v))))
 
 (defn finite
@@ -183,7 +185,7 @@
      :clj (Math/log10 x)))
 
 (defn clamp [num from to]
-  (if (< num from)
+  (if (or (nan? num) (< num from))
     from
     (if (> num to) to num)))
 

@@ -2,14 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.shapes.text.styles
   (:require
-   [app.common.colors :as cc]
    [app.common.data :as d]
-   [app.common.text :as txt]
    [app.common.transit :as transit]
+   [app.common.types.color :as cc]
+   [app.common.types.text :as txt]
    [app.main.fonts :as fonts]
    [app.main.ui.formats :as fmt]
    [app.util.color :as uc]
@@ -53,11 +53,11 @@
         line-height
         (if (and (some? line-height) (not= "" line-height))
           line-height
-          (:line-height txt/default-text-attrs))
+          (:line-height txt/default-typography))
 
         text-align  (:text-align data "start")
         base        #js {;; Fix a problem when exporting HTML
-                         :fontSize 0 ;;(str (:font-size data (:font-size txt/default-text-attrs)) "px")
+                         :fontSize 0
                          :lineHeight line-height
                          :margin 0}]
 
@@ -75,7 +75,7 @@
          text-transform  (:text-transform data)
 
          font-id         (or (:font-id data)
-                             (:font-id txt/default-text-attrs))
+                             (:font-id txt/default-typography))
 
          font-variant-id (:font-variant-id data)
 
@@ -107,6 +107,10 @@
                               :lineBreak "auto"
                               :whiteSpace "break-spaces"
                               :textRendering "geometricPrecision"}
+         base            (cond-> base
+                           (= (:line-height data) "0")
+                           (-> (obj/set! "display" "inline-block")
+                               (obj/set! "verticalAlign" "top")))
          fills
          (cond
            ;; DEPRECATED: still here for backward compatibility with

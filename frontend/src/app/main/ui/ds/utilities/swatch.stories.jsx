@@ -2,12 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
 import * as React from "react";
 import Components from "@target/components";
 import { helpers } from "@target/components";
-import { action } from "@storybook/addon-actions";
+import { action } from "storybook/actions";
 
 const { Swatch } = Components;
 
@@ -93,7 +93,8 @@ export const RadialGradient = {
 export const Rounded = {
   args: {
     background: {
-      id: helpers.generateUuid(),
+      refId: helpers.generateUuid(),
+      refFile: helpers.generateUuid(),
       color: "#2f226c",
       opacity: 0.5,
     },

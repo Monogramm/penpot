@@ -2,22 +2,25 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.colorpicker.gradients
   (:require-macros [app.main.style :as stl])
   (:require
-   [app.common.colors :as cc]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.math :as mth]
-   [app.main.ui.components.numeric-input :refer [numeric-input*]]
-   [app.main.ui.components.reorder-handler :refer [reorder-handler]]
+   [app.common.types.color :as cc]
+   [app.common.types.fills :as types.fills]
+   [app.main.features :as features]
+   [app.main.ui.components.numeric-input :as deprecated-input]
+   [app.main.ui.components.reorder-handler :refer [reorder-handler*]]
    [app.main.ui.components.select :refer [select]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.foundations.assets.icon :as i]
    [app.main.ui.formats :as fmt]
    [app.main.ui.hooks :as h]
-   [app.main.ui.workspace.sidebar.options.rows.color-row :refer [color-row]]
+   [app.main.ui.workspace.sidebar.options.rows.color-row :refer [color-row*]]
    [app.util.dom :as dom]
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
@@ -34,10 +37,6 @@
   (/ (.. event -nativeEvent -offsetX)
      (-> event dom/get-current-target dom/get-bounding-rect :width)))
 
-;; (defn- format-rgba
-;;   [{:keys [r g b alpha offset]}]
-;;   (str/ffmt "rgba(%1, %2, %3, %4) %5%%" r g b alpha (* offset 100)))
-
 (defn- format-rgb
   [{:keys [r g b offset]}]
   (str/ffmt "rgb(%1, %2, %3) %4%%" r g b (* offset 100)))
@@ -52,11 +51,15 @@
        (str/join ", ")
        (str/ffmt "linear-gradient(90deg, %1)")))
 
-(mf/defc stop-input-row
+(defn- stop->hex-color
+  [stop]
+  (select-keys stop [:color :opacity]))
+
+(mf/defc stop-input-row*
+  {::mf/private true}
   [{:keys [stop
            index
            is-selected
-
            on-select-stop
            on-change-stop
            on-remove-stop
@@ -65,7 +68,7 @@
            on-blur-stop-offset
            on-focus-stop-color
            on-blur-stop-color]}]
-  (let [{:keys [color opacity offset]} stop
+  (let [offset (get stop :offset)
 
         handle-change-stop-color
         (mf/use-callback
@@ -81,10 +84,10 @@
 
         handle-remove-stop
         (mf/use-callback
-         (mf/deps on-remove-stop stop)
+         (mf/deps on-remove-stop index)
          (fn []
            (when on-remove-stop
-             (on-remove-stop stop))))
+             (on-remove-stop index))))
 
         handle-focus-stop-offset
         (mf/use-fn
@@ -140,11 +143,11 @@
                                 :dnd-over-top (= (:over dprops) :top)
                                 :dnd-over-bot (= (:over dprops) :bot))}
 
-     [:& reorder-handler {:ref dref}]
+     [:> reorder-handler* {:ref dref}]
 
      [:div {:class (stl/css :offset-input-wrapper)}
       [:span {:class (stl/css :icon-text)} "%"]
-      [:> numeric-input*
+      [:> deprecated-input/numeric-input*
        {:value (-> offset offset->string)
         :on-change handle-change-offset
         :default 100
@@ -153,18 +156,18 @@
         :on-focus handle-focus-stop-offset
         :on-blur handle-blur-stop-offset}]]
 
-     [:& color-row
+     [:> color-row*
       {:disable-gradient true
        :disable-picker true
-       :color {:color color
-               :opacity opacity}
+       :color (stop->hex-color stop)
        :index index
+       :origin :gradient
        :on-change handle-change-stop-color
        :on-remove handle-remove-stop
        :on-focus handle-focus-stop-color
        :on-blur handle-blur-stop-color}]]))
 
-(mf/defc gradients
+(mf/defc gradients*
   [{:keys [type
            stops
            editing-stop
@@ -180,7 +183,7 @@
            on-rotate-stops
            on-reorder-stops]}]
 
-  (let [preview-state  (mf/use-state {:hover? false :offset 0.5})
+  (let [preview-state  (mf/use-state #(do {:hover? false :offset 0.5}))
         dragging-ref   (mf/use-ref false)
         start-ref      (mf/use-ref nil)
         start-offset   (mf/use-ref nil)
@@ -230,6 +233,7 @@
          (mf/deps on-add-stop-preview)
          (fn [^js e]
            (let [offset (-> (event->offset e)
+                            (mth/clamp 0 1)
                             (mth/precision 2))]
              (when on-add-stop-preview
                (on-add-stop-preview offset)))))
@@ -288,7 +292,13 @@
          (mf/deps on-reverse-stops)
          (fn []
            (when on-reverse-stops
-             (on-reverse-stops))))]
+             (on-reverse-stops))))
+
+        cap-stops?
+        (features/use-feature "render-wasm/v1")
+
+        add-stop-disabled?
+        (when cap-stops? (>= (count stops) types.fills/MAX-GRADIENT-STOPS))]
 
     [:div {:class (stl/css :gradient-panel)}
      [:div {:class (stl/css :gradient-preview)}
@@ -299,9 +309,10 @@
              :on-pointer-leave handle-preview-leave
              :on-pointer-move handle-preview-move
              :on-pointer-down handle-preview-down}
-       [:div {:class (stl/css :gradient-preview-stop-preview)
-              :style {:display (if (:hover? @preview-state) "block" "none")
-                      "--preview-position" (dm/str (* 100 (:offset @preview-state)) "%")}}]]
+       (when (not add-stop-disabled?)
+         [:div {:class (stl/css :gradient-preview-stop-preview)
+                :style {:display (if (:hover? @preview-state) "block" "none")
+                        "--preview-position" (dm/str (* 100 (:offset @preview-state)) "%")}}])]
 
       [:div {:class (stl/css :gradient-preview-stop-wrapper)}
        (for [[index {:keys [color offset r g b alpha]}] (d/enumerate stops)]
@@ -337,20 +348,21 @@
                          :aria-label "Rotate gradient"
                          :on-click handle-rotate-gradient
                          :icon-class (stl/css :rotate-icon)
-                         :icon "reload"}]
+                         :icon i/reload}]
        [:> icon-button* {:variant "ghost"
                          :aria-label "Reverse gradient"
                          :on-click handle-reverse-gradient
-                         :icon "switch"}]
+                         :icon i/switch}]
        [:> icon-button* {:variant "ghost"
                          :aria-label "Add stop"
+                         :disabled add-stop-disabled?
                          :on-click handle-add-stop
-                         :icon "add"}]]]
+                         :icon i/add}]]]
 
      [:div {:class (stl/css :gradient-stops-list)}
-      [:& h/sortable-container {}
+      [:> h/sortable-container* {}
        (for [[index stop] (d/enumerate stops)]
-         [:& stop-input-row
+         [:> stop-input-row*
           {:key index
            :stop stop
            :index index

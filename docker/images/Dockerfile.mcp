@@ -1,0 +1,26 @@
+FROM dhi.io/node:24.20.0-debian13-dev AS build
+LABEL maintainer="Penpot <docker@penpot.app>"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG BUNDLE_PATH="./bundle-mcp/"
+COPY $BUNDLE_PATH /opt/penpot/mcp/
+
+WORKDIR /opt/penpot/mcp
+
+RUN ./setup
+
+
+FROM dhi.io/node:24.18.1-debian13 AS image
+LABEL maintainer="Penpot <docker@penpot.app>"
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    PENPOT_MCP_SERVER_HOST=0.0.0.0
+
+COPY --from=build --chown=node:node /opt/penpot/mcp /opt/penpot/mcp
+
+WORKDIR /opt/penpot/mcp
+USER node
+
+CMD ["node", "index.js", "--multi-user"]

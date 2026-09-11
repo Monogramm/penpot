@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.menus.frame-grid
   (:require-macros [app.main.style :as stl])
@@ -12,15 +12,18 @@
    [app.main.data.workspace.grid :as dw]
    [app.main.refs :as refs]
    [app.main.store :as st]
+   [app.main.ui.components.dropdown :refer [dropdown]]
    [app.main.ui.components.editable-select :refer [editable-select]]
-   [app.main.ui.components.numeric-input :refer [numeric-input*]]
    [app.main.ui.components.select :refer [select]]
-   [app.main.ui.components.title-bar :refer [title-bar]]
+   [app.main.ui.components.title-bar :refer [title-bar*]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
-   [app.main.ui.icons :as i]
-   [app.main.ui.workspace.sidebar.options.common :refer [advanced-options]]
-   [app.main.ui.workspace.sidebar.options.rows.color-row :refer [color-row]]
+   [app.main.ui.ds.controls.numeric-input :refer [numeric-input*]]
+   [app.main.ui.ds.foundations.assets.icon :refer [icon*] :as i]
+   [app.main.ui.workspace.sidebar.options.common :refer [advanced-options*]]
+   [app.main.ui.workspace.sidebar.options.rows.color-row :refer [color-row*]]
+   [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
+   [app.util.keyboard :as kbd]
    [okulary.core :as l]
    [rumext.v2 :as mf]))
 
@@ -32,7 +35,50 @@
    :separator
    18 12 10 8 6 4 3 2])
 
-(mf/defc grid-options
+(mf/defc default-options-toggle*
+  "Toggle button that opens the reset/save-as-default menu for a grid's
+   params. Shared by the square, column and row grid-type layouts, each of
+   which places it at a different point in their own layout."
+  [{:keys [show disabled on-toggle]}]
+  [:button {:class (stl/css-case :show-more-options true
+                                 :selected show)
+            :on-click on-toggle
+            :disabled disabled}
+   [:> icon* {:icon-id i/menu
+              :size "m"
+              :aria-hidden true
+              :class (stl/css :show-options-icon)}]])
+
+(mf/defc default-options-dropdown*
+  "Dropdown menu with the reset/save-as-default options for a grid's params.
+   Shared by the square, column and row grid-type layouts, each of which
+   places it at a different point in their own layout (its `:class` controls
+   the panel's positioning, which differs per layout)."
+  [{:keys [class show on-close on-use-default on-set-as-default]}]
+  (let [handle-key-down
+        (fn [action]
+          (fn [event]
+            (when (or (kbd/enter? event) (kbd/space? event))
+              (dom/prevent-default event)
+              (action))))]
+    [:& dropdown {:show show
+                  :on-close on-close}
+     [:ul {:class class
+           :role "menu"}
+      [:li {:class (stl/css :option-btn)
+            :role "menuitem"
+            :tab-index 0
+            :on-click on-use-default
+            :on-key-down (handle-key-down on-use-default)}
+       (tr "workspace.options.grid.params.use-default")]
+      [:li {:class (stl/css :option-btn)
+            :role "menuitem"
+            :tab-index 0
+            :on-click on-set-as-default
+            :on-key-down (handle-key-down on-set-as-default)}
+       (tr "workspace.options.grid.params.set-default")]]]))
+
+(mf/defc grid-options*
   {::mf/wrap [mf/memo]}
   [{:keys [shape-id index grid frame-width frame-height default-grid-params]}]
   (let [on-change           (mf/use-fn (mf/deps shape-id index) #(st/emit! (dw/set-frame-grid shape-id index %)))
@@ -150,7 +196,10 @@
        [:button {:class (stl/css-case :show-options true
                                       :selected open?)
                  :on-click toggle-advanced-options}
-        i/menu]
+        [:> icon* {:icon-id i/menu
+                   :size "m"
+                   :aria-hidden true
+                   :class (stl/css :show-options-icon)}]]
        [:div {:class (stl/css :type-select-wrapper)}
         [:& select
          {:class (stl/css :grid-type-select)
@@ -164,8 +213,7 @@
                 :title (tr "workspace.options.size")}
           [:> numeric-input* {:min 0.01
                               :value (or (:size params) "")
-                              :no-validate true
-                              :className (stl/css :numeric-input)
+                              :inner-class (stl/css :numeric-input)
                               :on-change (handle-change :params :size)}]]
 
          [:div {:class (stl/css :editable-select-wrapper)}
@@ -186,38 +234,31 @@
        [:> icon-button* {:variant "ghost"
                          :aria-label (tr "workspace.options.guides.remove-guide")
                          :on-click on-remove
-                         :icon "remove"}]]]
+                         :icon i/remove}]]]
 
      (when (:display grid)
-       [:& advanced-options {:class (stl/css :grid-advanced-options)
-                             :visible? open?
-                             :on-close toggle-advanced-options}
+       [:> advanced-options* {:class (stl/css :grid-advanced-options)
+                              :is-visible open?
+                              :on-close toggle-advanced-options}
         ;; square
         (when (= :square type)
           [:div {:class (stl/css :square-row)}
            [:div {:class (stl/css :advanced-row)}
-            [:& color-row {:color (:color params)
-                           :title (tr "workspace.options.grid.params.color")
-                           :disable-gradient true
-                           :disable-image true
-                           :on-change handle-change-color
-                           :on-detach handle-detach-color}]
-            [:button {:class (stl/css-case :show-more-options true
-                                           :selected show-more-options?)
-                      :on-click toggle-more-options}
-             i/menu]]
-           (when show-more-options?
-             [:div {:class (stl/css :second-row)}
-              [:button {:class (stl/css-case :btn-options true
-                                             :disabled is-default)
-                        :disabled is-default
-                        :on-click handle-use-default}
-               [:span (tr "workspace.options.grid.params.use-default")]]
-              [:button {:class (stl/css-case :btn-options true
-                                             :disabled is-default)
-                        :disabled is-default
-                        :on-click handle-set-as-default}
-               [:span (tr "workspace.options.grid.params.set-default")]]])])
+            [:> color-row* {:color (:color params)
+                            :title (tr "workspace.options.grid.params.color")
+                            :disable-gradient true
+                            :disable-image true
+                            :origin :guides
+                            :on-change handle-change-color
+                            :on-detach handle-detach-color}]
+            [:> default-options-toggle* {:show show-more-options?
+                                         :disabled is-default
+                                         :on-toggle toggle-more-options}]]
+           [:> default-options-dropdown* {:class (stl/css :second-row)
+                                          :show show-more-options?
+                                          :on-close close-more-options
+                                          :on-use-default handle-use-default
+                                          :on-set-as-default handle-set-as-default}]])
 
         (when (or (= :column type) (= :row type))
           [:div {:class (stl/css :column-row)}
@@ -237,72 +278,73 @@
                          :on-change (handle-change :params :type)}]]
 
             [:div {:class (stl/css :color-wrapper)}
-             [:& color-row {:color (:color params)
-                            :title (tr "workspace.options.grid.params.color")
-                            :disable-gradient true
-                            :disable-image true
-                            :on-change handle-change-color
-                            :on-detach handle-detach-color}]]]
+             [:> color-row* {:color (:color params)
+                             :title (tr "workspace.options.grid.params.color")
+                             :disable-gradient true
+                             :disable-image true
+                             :origin :guides
+                             :on-change handle-change-color
+                             :on-detach handle-detach-color}]]]
 
            [:div {:class (stl/css :advanced-row)}
             [:div {:class (stl/css :height)
                    :title (if (= :row type)
                             (tr "workspace.options.grid.params.height")
                             (tr "workspace.options.grid.params.width"))}
-             [:span {:class (stl/css :icon-text)}
-              (if (= :row type)
-                "H"
-                "W")]
              [:> numeric-input* {:placeholder "Auto"
                                  :on-change handle-change-item-length
                                  :nillable true
-                                 :className (stl/css :numeric-input)
+                                 :icon (if (= :row type) i/character-h i/character-w)
+                                 :inner-class (stl/css :numeric-input)
                                  :value (or (:item-length params) "")}]]
 
             [:div {:class (stl/css :gutter)
                    :title (tr "workspace.options.grid.params.gutter")}
-             [:span {:class (stl/css-case :icon true
-                                          :rotated (= type :row))}
-              i/gap-horizontal]
              [:> numeric-input* {:placeholder "0"
                                  :on-change (handle-change :params :gutter)
                                  :nillable true
-                                 :className (stl/css :numeric-input)
+                                 :icon (if (= type :row) i/gap-vertical i/gap-horizontal)
+                                 :inner-class (stl/css :numeric-input)
                                  :value (or (:gutter params) 0)}]]
 
             [:div {:class (stl/css :margin)
                    :title (tr "workspace.options.grid.params.margin")}
-             [:span {:class (stl/css-case :icon true
-                                          :rotated (= type :column))}
-              i/grid-margin]
              [:> numeric-input* {:placeholder "0"
                                  :on-change (handle-change :params :margin)
                                  :nillable true
-                                 :className (stl/css :numeric-input)
+                                 :icon (if (= type :column) i/margin-left-right i/margin-top-bottom)
+                                 :inner-class (stl/css :numeric-input)
                                  :value (or (:margin params) 0)}]]
 
-            [:button {:class (stl/css-case :show-more-options true
-                                           :selected show-more-options?)
-                      :on-click toggle-more-options
-                      :disabled is-default}
-             i/menu]
-            (when show-more-options?
-              [:div {:class (stl/css :more-options)}
-               [:button {:class (stl/css :option-btn)
-                         :on-click handle-use-default} (tr "workspace.options.grid.params.use-default")]
-               [:button {:class (stl/css :option-btn)
-                         :on-click handle-set-as-default} (tr "workspace.options.grid.params.set-default")]])]])])]))
+            [:> default-options-toggle* {:show show-more-options?
+                                         :disabled is-default
+                                         :on-toggle toggle-more-options}]
+            [:> default-options-dropdown* {:class (stl/css :more-options)
+                                           :show show-more-options?
+                                           :on-close close-more-options
+                                           :on-use-default handle-use-default
+                                           :on-set-as-default handle-set-as-default}]]])])]))
 
-(mf/defc frame-grid
-  [{:keys [shape]}]
+(defn- check-frame-grid-props
+  [old-props new-props]
+  (and (identical? (unchecked-get old-props "grids")
+                   (unchecked-get new-props "grids"))
+       (identical? (unchecked-get old-props "id")
+                   (unchecked-get new-props "id"))
+       (identical? (unchecked-get old-props "frameWidth")
+                   (unchecked-get new-props "frameWidth"))
+       (identical? (unchecked-get old-props "frameHeight")
+                   (unchecked-get new-props "frameHeight"))))
+
+(mf/defc frame-grid*
+  {::mf/wrap [#(mf/memo' % check-frame-grid-props)]}
+  [{:keys [grids id frame-width frame-height]}]
   (let [state*              (mf/use-state true)
         open?               (deref state*)
-        frame-grids         (:grids shape)
-        has-frame-grids?    (or (= :multiple frame-grids) (some? (seq frame-grids)))
+        has-frame-grids?    (or (= :multiple grids) (some? (seq grids)))
 
         toggle-content      (mf/use-fn #(swap! state* not))
 
-        id                  (:id shape)
         default-grids       (mf/deref lens:default-grids)
         default-grid-params (mf/with-memo [default-grids]
                               (merge ctg/default-grid-params default-grids))
@@ -313,26 +355,27 @@
          #(st/emit! (dw/add-frame-grid id)))]
 
     [:div {:class (stl/css :element-set)}
-     [:& title-bar {:collapsable  has-frame-grids?
-                    :collapsed    (not open?)
-                    :on-collapsed toggle-content
-                    :class        (stl/css-case :title-spacing-board-grid (not has-frame-grids?))
-                    :title        (tr "workspace.options.guides.title")}
+     [:div {:class (stl/css :element-title)}
+      [:> title-bar* {:collapsable  has-frame-grids?
+                      :collapsed    (not open?)
+                      :on-collapsed toggle-content
+                      :class        (stl/css-case :title-spacing-board-grid (not has-frame-grids?))
+                      :title        (tr "workspace.options.guides.title")}
 
-      [:> icon-button* {:variant "ghost"
-                        :aria-label (tr "workspace.options.guides.add-guide")
-                        :on-click handle-create-grid
-                        :icon "add"}]]
+       [:> icon-button* {:variant "ghost"
+                         :aria-label (tr "workspace.options.guides.add-guide")
+                         :on-click handle-create-grid
+                         :icon i/add}]]]
 
-     (when (and open? (seq frame-grids))
+     (when (and open? (seq grids))
        [:div  {:class (stl/css :element-set-content)}
-        (for [[index grid] (map-indexed vector frame-grids)]
-          [:& grid-options {:key (str id "-" index)
-                            :shape-id id
-                            :grid grid
-                            :index index
-                            :frame-width (:width shape)
-                            :frame-height (:height shape)
-                            :default-grid-params default-grid-params}])])]))
+        (for [[index grid] (map-indexed vector grids)]
+          [:> grid-options* {:key (str id "-" index)
+                             :shape-id id
+                             :grid grid
+                             :index index
+                             :frame-width frame-width
+                             :frame-height frame-height
+                             :default-grid-params default-grid-params}])])]))
 
 

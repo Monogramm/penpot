@@ -2,25 +2,25 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.storage
   (:require
    [app.common.exceptions :as ex]
+   [app.common.time :as ct]
    [app.common.transit :as t]
    [app.util.functions :as fns]
    [app.util.globals :as g]
-   [app.util.time :as dt]
    [cuerdas.core :as str]
    [okulary.util :as ou]))
 
 ;; Using ex/ignoring because can receive a DOMException like this when
 ;; importing the code as a library: Failed to read the 'localStorage'
 ;; property from 'Window': Storage is disabled inside 'data:' URLs.
-(defonce ^:private local-storage-backend
+(defonce local-storage
   (ex/ignoring (unchecked-get g/global "localStorage")))
 
-(defonce ^:private session-storage-backend
+(defonce session-storage
   (ex/ignoring (unchecked-get g/global "sessionStorage")))
 
 (def ^:dynamic *sync*
@@ -69,6 +69,17 @@
           (persistent! result))))
     {}))
 
+(defn set-item
+  [storage key val]
+  (when (and (some? storage)
+             (string? key))
+    (.setItem ^js storage key val)))
+
+(defn get-item
+  [storage key]
+  (when (some? storage)
+    (.getItem storage key)))
+
 (defn create-storage
   [backend prefix]
   (let [initial   (load-data backend prefix)
@@ -80,7 +91,7 @@
         (fn [key val]
           (when (some? backend)
             (if (some? val)
-              (.setItem ^js backend (encode-key prefix key) (t/encode-str val))
+              (.setItem ^js backend (encode-key prefix key) (t/encode-str val {:with-meta true}))
               (.removeItem ^js backend (encode-key prefix key)))))
 
         on-change*
@@ -154,15 +165,15 @@
       (-remove-watch [_ key]
         (.delete watches key)))))
 
-(defonce global  (create-storage local-storage-backend "penpot-global"))
-(defonce user    (create-storage local-storage-backend "penpot-user"))
-(defonce storage (create-storage local-storage-backend "penpot"))
-(defonce session (create-storage session-storage-backend "penpot"))
+(defonce global  (create-storage local-storage "penpot-global"))
+(defonce user    (create-storage local-storage "penpot-user"))
+(defonce storage (create-storage local-storage "penpot"))
+(defonce session (create-storage session-storage "penpot"))
 
 (defonce before-unload
   (letfn [(on-before-unload [_]
             (binding [*sync* true]
-              (swap! global assoc ::last-refresh (dt/now))
-              (swap! user assoc ::last-refresh (dt/now))))]
+              (swap! global assoc ::last-refresh (ct/now))
+              (swap! user assoc ::last-refresh (ct/now))))]
     (.addEventListener g/window "beforeunload" on-before-unload)
     on-before-unload))

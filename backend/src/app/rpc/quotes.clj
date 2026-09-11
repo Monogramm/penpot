@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.quotes
   "Penpot resource usage quotes."
@@ -10,9 +10,9 @@
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.config :as cf]
    [app.db :as db]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [cuerdas.core :as str]))
 
@@ -95,15 +95,14 @@
                             "- Total: ~(::total params) (INCR ~(::incr params 1))\n")]
       (wrk/submit! {::db/conn conn
                     ::wrk/task :sendmail
-                    ::wrk/delay (dt/duration "30s")
+                    ::wrk/delay (ct/duration "30s")
                     ::wrk/max-retries 4
                     ::wrk/priority 200
                     ::wrk/dedupe true
                     ::wrk/label "quotes-notification"
                     ::wrk/params {:to (vec admins)
                                   :subject subject
-                                  :body [{:type "text/plain"
-                                          :content content}]}}))))
+                                  :body content}}))))
 
 (defn- generic-check!
   [{:keys [::db/conn ::incr ::quote-sql ::count-sql ::default ::target] :or {incr 1} :as params}]
@@ -521,6 +520,100 @@
       (assoc ::default (cf/get :quotes-team-access-requests-per-requester Integer/MAX_VALUE))
       (assoc ::quote-sql [sql:get-quotes-1 target profile-id])
       (assoc ::count-sql [sql:get-team-access-requests-per-requester profile-id])
+      (generic-check!)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; QUOTE: UPLOAD-SESSIONS-PER-PROFILE
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def ^:private schema:upload-sessions-per-profile
+  [:map [::profile-id ::sm/uuid]])
+
+(def ^:private valid-upload-sessions-per-profile-quote?
+  (sm/lazy-validator schema:upload-sessions-per-profile))
+
+(def ^:private sql:get-upload-sessions-per-profile
+  "SELECT count(*) AS total
+     FROM upload_session
+    WHERE profile_id = ?")
+
+(defmethod check-quote ::upload-sessions-per-profile
+  [{:keys [::profile-id ::target] :as quote}]
+  (assert (valid-upload-sessions-per-profile-quote? quote) "invalid quote parameters")
+  (-> quote
+      (assoc ::default (cf/get :quotes-upload-sessions-per-profile Integer/MAX_VALUE))
+      (assoc ::quote-sql [sql:get-quotes-1 target profile-id])
+      (assoc ::count-sql [sql:get-upload-sessions-per-profile profile-id])
+      (generic-check!)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; QUOTE: MEDIA-STORAGE-BYTES-PER-TEAM
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def ^:private schema:media-storage-bytes-per-team
+  [:map
+   [::profile-id ::sm/uuid]
+   [::team-id ::sm/uuid]])
+
+(def ^:private valid-media-storage-bytes-per-team-quote?
+  (sm/lazy-validator schema:media-storage-bytes-per-team))
+
+(def ^:private sql:get-media-storage-bytes-per-team
+  "SELECT COALESCE(SUM(so.size), 0) AS total
+     FROM (
+       SELECT fmo.media_id AS so_id
+         FROM file_media_object AS fmo
+         JOIN file AS f ON (f.id = fmo.file_id)
+         JOIN project AS p ON (p.id = f.project_id)
+        WHERE p.team_id = ?
+          AND fmo.deleted_at IS NULL
+          AND f.deleted_at IS NULL
+        UNION
+        SELECT fmo.thumbnail_id AS so_id
+         FROM file_media_object AS fmo
+         JOIN file AS f ON (f.id = fmo.file_id)
+         JOIN project AS p ON (p.id = f.project_id)
+        WHERE p.team_id = ?
+          AND fmo.thumbnail_id IS NOT NULL
+          AND fmo.deleted_at IS NULL
+          AND f.deleted_at IS NULL
+        UNION
+        SELECT v.otf_file_id AS so_id
+         FROM team_font_variant AS v
+        WHERE v.team_id = ?
+          AND v.otf_file_id IS NOT NULL
+          AND v.deleted_at IS NULL
+        UNION
+        SELECT v.ttf_file_id AS so_id
+         FROM team_font_variant AS v
+        WHERE v.team_id = ?
+          AND v.ttf_file_id IS NOT NULL
+          AND v.deleted_at IS NULL
+        UNION
+        SELECT v.woff1_file_id AS so_id
+         FROM team_font_variant AS v
+        WHERE v.team_id = ?
+          AND v.woff1_file_id IS NOT NULL
+          AND v.deleted_at IS NULL
+        UNION
+        SELECT v.woff2_file_id AS so_id
+         FROM team_font_variant AS v
+        WHERE v.team_id = ?
+          AND v.woff2_file_id IS NOT NULL
+          AND v.deleted_at IS NULL
+     ) AS refs
+     JOIN storage_object AS so ON (so.id = refs.so_id)
+    WHERE so.deleted_at IS NULL")
+
+(defmethod check-quote ::media-storage-bytes-per-team
+  [{:keys [::profile-id ::team-id ::target] :as quote}]
+  (assert (valid-media-storage-bytes-per-team-quote? quote) "invalid quote parameters")
+  (-> quote
+      (assoc ::default (cf/get :quotes-media-storage-bytes-per-team
+                               (* 20 1024 1024 1024)))
+      (assoc ::quote-sql [sql:get-quotes-2 target team-id profile-id profile-id])
+      (assoc ::count-sql [sql:get-media-storage-bytes-per-team
+                          team-id team-id team-id team-id team-id team-id])
       (generic-check!)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

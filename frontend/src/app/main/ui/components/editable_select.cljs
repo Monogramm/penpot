@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.components.editable-select
   (:require-macros [app.main.style :as stl])
@@ -12,15 +12,15 @@
    [app.common.math :as mth]
    [app.common.uuid :as uuid]
    [app.main.ui.components.dropdown :refer [dropdown]]
-   [app.main.ui.components.numeric-input :refer [numeric-input*]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.components.numeric-input :as deprecated-input]
+   [app.main.ui.ds.foundations.assets.icon :refer [icon*] :as i]
    [app.util.dom :as dom]
    [app.util.keyboard :as kbd]
    [app.util.timers :as timers]
    [rumext.v2 :as mf]))
 
 (mf/defc editable-select
-  [{:keys [value type options class on-change placeholder on-blur input-class] :as params}]
+  [{:keys [value type options class on-change placeholder on-blur input-class aria-label] :as params}]
   (let [state* (mf/use-state {:id (uuid/next)
                               :is-open? false
                               :current-value value
@@ -163,24 +163,29 @@
     [:div {:class (dm/str class " " (stl/css :editable-select))
            :ref on-node-load}
      (if (= type "number")
-       [:> numeric-input* {:value (or (some-> current-value value->label) "")
-                           :className input-class
-                           :on-change set-value
-                           :on-focus handle-focus
-                           :on-blur handle-blur
-                           :placeholder placeholder}]
-       [:input {:value (or (some-> current-value value->label) "")
+       [:> deprecated-input/numeric-input* {:value (or (some-> current-value value->label) "")
+                                            :class input-class
+                                            :on-change set-value
+                                            :on-focus handle-focus
+                                            :on-blur handle-blur
+                                            :aria-label aria-label
+                                            :placeholder placeholder}]
+       [:input {:value (if (= value :multiple) nil (or (some-> current-value value->label) ""))
                 :class input-class
                 :on-change handle-change-input
                 :on-key-down handle-key-down
                 :on-focus handle-focus
                 :on-blur handle-blur
                 :placeholder placeholder
+                :aria-label aria-label
                 :type type}])
 
      [:span {:class (stl/css :dropdown-button)
              :on-click toggle-dropdown}
-      i/arrow]
+      [:> icon* {:icon-id i/arrow-down
+                 :size "m"
+                 :aria-hidden true
+                 :class (stl/css :dropdown-icon)}]]
 
      [:& dropdown {:show (or is-open? false)
                    :on-close close-dropdown}
@@ -194,9 +199,12 @@
              [:li
               {:key (str element-id "-" index)
                :class (stl/css-case :dropdown-element true
-                                    :is-selected (= (dm/str value) current-value))
+                                    :is-selected (= (dm/str value) (dm/str current-value)))
                :data-value value
                :on-click select-item}
               [:span {:class (stl/css :label)} label]
               [:span {:class (stl/css :check-icon)}
-               i/tick]])))]]]))
+               [:> icon* {:icon-id i/tick
+                          :aria-hidden true
+                          :size "s"
+                          :class (stl/css :check-tick)}]]])))]]]))

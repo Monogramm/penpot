@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard
   (:require-macros [app.main.style :as stl])
@@ -13,16 +13,21 @@
    [app.main.data.dashboard.shortcuts :as sc]
    [app.main.data.event :as ev]
    [app.main.data.modal :as modal]
+   [app.main.data.nitrate :as dnt]
    [app.main.data.notifications :as notif]
    [app.main.data.plugins :as dp]
+   [app.main.data.profile :as dprof]
    [app.main.data.project :as dpj]
    [app.main.refs :as refs]
    [app.main.router :as rt]
    [app.main.store :as st]
+   [app.main.ui.components.progress :refer [progress-notification-widget*]]
    [app.main.ui.context :as ctx]
+   [app.main.ui.dashboard.deleted :refer [deleted-section*]]
    [app.main.ui.dashboard.files :refer [files-section*]]
    [app.main.ui.dashboard.fonts :refer [fonts-page* font-providers-page*]]
    [app.main.ui.dashboard.import]
+   [app.main.ui.dashboard.layout-toggle :as lt]
    [app.main.ui.dashboard.libraries :refer [libraries-page*]]
    [app.main.ui.dashboard.projects :refer [projects-section*]]
    [app.main.ui.dashboard.search :refer [search-page*]]
@@ -34,23 +39,20 @@
    [app.main.ui.workspace.plugins]
    [app.plugins.register :as preg]
    [app.util.dom :as dom]
-   [app.util.http :as http]
    [app.util.i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [app.util.object :as obj]
+   [app.util.session-state :as ss]
    [app.util.storage :as storage]
-   [app.util.webapi :as wapi]
    [beicon.v2.core :as rx]
    [cuerdas.core :as str]
    [goog.events :as events]
    [okulary.core :as l]
-   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
 (mf/defc dashboard-content*
-  {::mf/props :obj
-   ::mf/private true}
-  [{:keys [team projects project section search-term profile default-project]}]
+  {::mf/private true}
+  [{:keys [team projects project section search-term profile default-project layout on-layout-change]}]
   (let [container       (mf/use-ref)
         content-width   (mf/use-state 0)
 
@@ -58,9 +60,6 @@
         team-id         (:id team)
 
         permissions     (:permissions team)
-
-        dashboard-local (mf/deref refs/dashboard-local)
-        file-menu-open? (:menu-open dashboard-local)
 
         default-project-id
         (get default-project :id)
@@ -78,7 +77,13 @@
 
         show-templates?
         (and (contains? cf/flags :dashboard-templates-section)
-             (:can-edit permissions))]
+             (:can-edit permissions))
+
+        show-deleted? (:can-edit permissions)
+
+        section (if (and (not show-deleted?) (= section :dashboard-deleted))
+                  :dashboard-recent
+                  section)]
 
     (mf/with-effect []
       (let [key1 (events/listen js/window "resize" on-resize)]
@@ -87,25 +92,27 @@
     (mf/use-effect on-resize)
 
     [:div {:class (stl/css :dashboard-content)
-           :style {:pointer-events (when file-menu-open? "none")}
            :on-click clear-selected-fn
            :ref container}
+
+     [:> progress-notification-widget*]
+
      (case section
        :dashboard-recent
        (when (seq projects)
          [:*
-          [:> projects-section*
-           {:team team
-            :projects projects
-            :profile profile}]
+          [:> projects-section* {:team team
+                                 :projects projects
+                                 :profile profile
+                                 :layout layout
+                                 :on-layout-change on-layout-change}]
 
           (when ^boolean show-templates?
-            [:> templates-section*
-             {:profile profile
-              :project-id project-id
-              :team-id team-id
-              :default-project-id default-project-id
-              :content-width @content-width}])])
+            [:> templates-section* {:profile profile
+                                    :project-id project-id
+                                    :team-id team-id
+                                    :default-project-id default-project-id
+                                    :content-width @content-width}])])
 
        :dashboard-fonts
        [:> fonts-page* {:team team}]
@@ -117,14 +124,15 @@
        (when project
          [:*
           [:> files-section* {:team team
-                              :project project}]
+                              :project project
+                              :layout layout
+                              :on-layout-change on-layout-change}]
           (when ^boolean show-templates?
-            [:> templates-section*
-             {:profile profile
-              :team-id team-id
-              :project-id project-id
-              :default-project-id default-project-id
-              :content-width @content-width}])])
+            [:> templates-section* {:profile profile
+                                    :team-id team-id
+                                    :project-id project-id
+                                    :default-project-id default-project-id
+                                    :content-width @content-width}])])
 
        :dashboard-search
        [:> search-page* {:team team
@@ -138,13 +146,20 @@
        [:> team-members-page* {:team team :profile profile}]
 
        :dashboard-invitations
-       [:> team-invitations-page* {:team team}]
+       [:> team-invitations-page* {:team team :profile profile}]
 
        :dashboard-webhooks
        [:> webhooks-page* {:team team}]
 
        :dashboard-settings
        [:> team-settings-page* {:team team :profile profile}]
+
+       :dashboard-deleted
+       [:> deleted-section* {:team team
+                             :projects projects
+                             :profile profile
+                             :layout layout
+                             :on-layout-change on-layout-change}]
 
        nil)]))
 
@@ -161,7 +176,8 @@
            (rt/nav :workspace
                    {:page-id (dm/get-in data [:pages 0])
                     :project-id project-id
-                    :file-id id})))
+                    :file-id id
+                    :team-id team-id})))
 
         create-file!
         (fn [plugin]
@@ -181,7 +197,7 @@
            :plugin-try-out
            {:plugin plugin
             :on-accept #(create-file! plugin)
-            :on-close #(modal/hide!)}))
+            :on-close modal/hide!}))
 
         open-permissions-dialog
         (fn [plugin]
@@ -199,13 +215,13 @@
 
     (mf/with-layout-effect
       [plugin-url team-id project-id]
-      (when plugin-url
+      (when (and plugin-url project-id)
         (->> (dp/fetch-manifest plugin-url)
              (rx/subs!
               (fn [plugin]
                 (if plugin
                   (do
-                    (st/emit! (ptk/event ::ev/event {::ev/name "install-plugin" :name (:name plugin) :url plugin-url}))
+                    (st/emit! (ev/event {::ev/name "install-plugin" :name (:name plugin) :url plugin-url}))
                     (open-permissions-dialog plugin))
                   (st/emit! (notif/error (tr "dashboard.plugins.parse-error")))))
               (fn [_]
@@ -214,48 +230,79 @@
           (swap! storage/session dissoc :plugin-url))))))
 
 (defn use-templates-import
-  [can-edit? template-url default-project-id]
-  (mf/with-layout-effect
-    [can-edit? template-url default-project-id]
-    (when (and (some? template-url) (some? default-project-id))
-      (if can-edit?
-        (let [valid-url?    (and (str/ends-with? template-url ".penpot")
-                                 (str/starts-with? template-url cf/templates-uri))
-              template-name (when valid-url? (subs template-url (count cf/templates-uri)))
-              on-import     #(st/emit! (dpj/fetch-files default-project-id)
-                                       (dd/fetch-recent-files)
-                                       (dd/fetch-projects)
-                                       (dd/clear-selected-files)
-                                       (ptk/event ::ev/event {::ev/name "install-template-from-link-finished"
-                                                              :name template-name
-                                                              :url template-url}))]
-          (if valid-url?
-            (do
-              (st/emit! (ptk/event ::ev/event {::ev/name "install-template-from-link" :name template-name :url template-url}))
-              (->> (http/send! {:method :get
-                                :uri template-url
-                                :response-type :blob
-                                :omit-default-headers true})
-                   (rx/subs!
-                    (fn [result]
-                      (if (or (< (:status result) 200) (>= (:status result) 300))
-                        (st/emit! (notif/error (tr "dashboard.import.error")))
-                        (st/emit! (modal/show
-                                   {:type :import
-                                    :project-id default-project-id
-                                    :entries [{:name template-name :uri (wapi/create-uri (:body result))}]
-                                    :on-finish-import on-import})))))))
-            (st/emit! (notif/error (tr "dashboard.import.bad-url")))))
-        (st/emit! (notif/error (tr "dashboard.import.no-perms"))))
+  [can-edit? template project]
+  (let [project-id (get project :id)
+        team-id    (get project :team-id)]
+    (mf/with-layout-effect [can-edit? template project-id team-id]
+      (when (and (some? template)
+                 (some? project-id)
+                 (some? team-id))
+        (if can-edit?
+          (let [valid-url?    (str/ends-with? template ".penpot")
 
-      (binding [storage/*sync* true]
-        (swap! storage/session dissoc :template-url)))))
+                ;; Backwards compatibility, ideally the template should be only the .penpot file name, not the full url
+                template-name (if (str/starts-with? template "http")
+                                (subs template (count cf/templates-uri))
+                                template)
+
+                template-url  (str "/github/penpot-files/" template-name)
+                on-import     #(st/emit! (dpj/fetch-files project-id)
+                                         (dd/fetch-recent-files team-id)
+                                         (dd/fetch-projects team-id)
+                                         (dd/clear-selected-files)
+                                         (ev/event {::ev/name "install-template-from-link-finished"
+                                                    :name template-name
+                                                    :url template-url}))]
+            (if valid-url?
+              (st/emit!
+               (ev/event {::ev/name "install-template-from-link" :name template-name :url template-url})
+               (modal/show
+                {:type :import
+                 :project-id project-id
+                 :entries [{:name template-name :uri template-url}]
+                 :on-finish-import on-import}))
+              (st/emit! (notif/error (tr "dashboard.import.bad-url")))))
+          (st/emit! (notif/error (tr "dashboard.import.no-perms"))))
+
+        (binding [storage/*sync* true]
+          (swap! storage/session dissoc :template))))))
+
+(defn- use-nitrate-entry-popup
+  [onboarding-viewed? nitrate-onboarding-viewed?]
+  (let [nitrate-popup-pending? (dnt/nitrate-entry-popup-pending?)]
+    (mf/with-effect [nitrate-popup-pending? onboarding-viewed? nitrate-onboarding-viewed?]
+      (when nitrate-popup-pending?
+        (dnt/consume-nitrate-entry-popup!)
+        (st/emit! (dprof/update-profile-props
+                   (cond-> {}
+                     (not (or nitrate-onboarding-viewed? onboarding-viewed?))
+                     (assoc :nitrate-onboarding-viewed false)
+
+                     (not onboarding-viewed?)
+                     (assoc :onboarding-viewed true
+                            :release-notes-viewed (:main cf/version))))
+                  (dnt/show-nitrate-popup :nitrate-form))))))
+
+(defn- use-pending-action
+  "Consumes a pending dashboard action from session storage and resumes it"
+  [pending-action-id]
+  (mf/with-effect [pending-action-id]
+    (when (some? pending-action-id)
+      (dom/replace-history-state!
+       (dom/remove-query-param (rt/get-current-href) :pending-action-id))
+      (when-let [action (ss/consume-pending-action! (str pending-action-id))]
+        (case (:type action)
+          :add-team-to-organization
+          (st/emit! (dnt/add-team-to-organization {:team-id         (:team-id action)
+                                                   :organization-id (:organization-id action)
+                                                   :skip-audit?     true}))
+          nil)))))
 
 (mf/defc dashboard*
-  {::mf/props :obj}
-  [{:keys [profile project-id team-id search-term plugin-url template-url section]}]
+  [{:keys [profile project-id team-id search-term plugin-url template section pending-action-id]}]
   (let [team            (mf/deref refs/team)
         projects        (mf/deref refs/projects)
+        props           (get profile :props)
 
         project         (get projects project-id)
         projects        (mf/with-memo [projects team-id]
@@ -263,21 +310,29 @@
                                (filterv #(= team-id (:team-id %)))))
 
         can-edit?       (dm/get-in team [:permissions :can-edit])
-        template-url    (or template-url (:template-url storage/session))
+        template        (or template (:template storage/session))
         plugin-url      (or plugin-url (:plugin-url storage/session))
 
         default-project
         (mf/with-memo [projects]
           (->> projects
                (filter :is-default)
-               (first)))]
+               (first)))
 
-    (hooks/use-shortcuts ::dashboard sc/shortcuts)
+        layout*         (hooks/use-persisted-state lt/layout-key lt/default-layout)
+        layout          (deref layout*)
 
-    (mf/with-effect []
-      (st/emit! (dd/initialize))
+        on-layout-change
+        (mf/use-fn
+         (fn [value]
+           (reset! layout* (keyword value))))]
+
+    (hooks/use-shortcuts ::dashboard sc/shortcuts-dashboard :dashboard)
+
+    (mf/with-effect [team-id]
+      (st/emit! (dd/initialize team-id))
       (fn []
-        (st/emit! (dd/finalize))))
+        (st/emit! (dd/finalize team-id))))
 
     (mf/with-effect []
       (let [key (events/listen goog/global "keydown"
@@ -289,7 +344,9 @@
           (events/unlistenByKey key))))
 
     (use-plugin-register plugin-url team-id (:id default-project))
-    (use-templates-import can-edit? template-url (:id default-project))
+    (use-templates-import can-edit? template default-project)
+    (use-nitrate-entry-popup (:onboarding-viewed props) (:nitrate-onboarding-viewed props))
+    (use-pending-action pending-action-id)
 
     [:& (mf/provider ctx/current-project-id) {:value project-id}
      [:> modal-container*]
@@ -302,19 +359,24 @@
      ;; team is already set so don't put the team into mf/deps.
      [:main {:class (stl/css :dashboard)
              :key (dm/str (:id team))}
-      [:> sidebar*
-       {:team team
-        :projects projects
-        :project project
-        :default-project default-project
-        :profile profile
-        :section section
-        :search-term search-term}]
-      [:> dashboard-content*
-       {:projects projects
-        :profile profile
-        :project project
-        :default-project default-project
-        :section section
-        :search-term search-term
-        :team team}]]]))
+      [:> sidebar* {:team team
+                    :projects projects
+                    :project project
+                    :default-project default-project
+                    :profile profile
+                    :section section
+                    :search-term search-term}]
+      [:> dashboard-content* {:projects projects
+                              :profile profile
+                              :project project
+                              :default-project default-project
+                              :section section
+                              :search-term search-term
+                              :team team
+                              :layout layout
+                              :on-layout-change on-layout-change}]]]))
+
+(mf/defc dashboard-page*
+  {::mf/lazy-load true}
+  [props]
+  [:> dashboard* props])

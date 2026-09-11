@@ -2,16 +2,17 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.svg-upload
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.common.exceptions :as ex]
    [app.common.files.changes-builder :as pcb]
    [app.common.files.helpers :as cfh]
+   [app.common.files.shapes-builder :as sb]
    [app.common.svg :as csvg]
-   [app.common.svg.shapes-builder :as csvg.shapes-builder]
    [app.common.types.shape-tree :as ctst]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
@@ -46,10 +47,12 @@
                      (-> item
                          (assoc :name (extract-name href))
                          (assoc :url href))))))
+       (rx/filter (fn [item]
+                    (or (contains? item :content)
+                        (let [url (:url item)]
+                          (or (str/starts-with? url "http://")
+                              (str/starts-with? url "https://"))))))
        (rx/mapcat (fn [item]
-                    ;; TODO: :create-file-media-object-from-url is
-                    ;; deprecated and this should be resolved in
-                    ;; frontend
                     (->> (rp/cmd! (if (contains? item :content)
                                     :upload-file-media-object
                                     :create-file-media-object-from-url)
@@ -92,7 +95,7 @@
                                  base-id)
 
                [new-shape new-children]
-               (csvg.shapes-builder/create-svg-shapes id svg-data position objects frame-id parent-id selected true)
+               (sb/create-svg-shapes id svg-data position objects frame-id parent-id selected true)
 
                changes         (-> (pcb/empty-changes it page-id)
                                    (pcb/with-objects objects)
@@ -119,6 +122,7 @@
                   (dwu/commit-undo-transaction undo-id)))
 
          (catch :default cause
-           (rx/throw {:type :svg-parser
-                      :data cause})))))))
+           (js/console.error cause)
+           (rx/throw (ex/error :type :svg-parser
+                               :hint (ex-message cause)))))))))
 

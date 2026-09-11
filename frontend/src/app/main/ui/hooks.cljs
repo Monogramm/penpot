@@ -42,11 +42,11 @@
     state))
 
 (defn use-shortcuts
-  [key shortcuts]
+  [key shortcuts group-key]
   (mf/use-effect
    #js [(str key) shortcuts]
    (fn []
-     (st/emit! (dsc/push-shortcuts key shortcuts))
+     (st/emit! (dsc/push-shortcuts key shortcuts group-key))
      (fn []
        (st/emit! (dsc/pop-shortcuts key))))))
 
@@ -65,10 +65,10 @@
 
 (def sortable-ctx (mf/create-context nil))
 
-(mf/defc sortable-container
-  [{:keys [children] :as props}]
+(mf/defc sortable-container*
+  [{:keys [children]}]
   (let [global-drag-end (mf/use-memo #(rx/subject))]
-    [:& (mf/provider sortable-ctx) {:value global-drag-end}
+    [:> (mf/provider sortable-ctx) {:value global-drag-end}
      children]))
 
 
@@ -214,12 +214,14 @@
    (mf/use-effect
     deps
     (fn []
-      (let [sub (->> stream (rx/subs! on-subscribe))]
-        #(do
-           (rx/dispose! sub)
-           (when on-dispose (on-dispose))))))))
+      (when stream
+        (let [sub (->> stream (rx/subs! on-subscribe))]
+          #(do
+             (rx/dispose! sub)
+             (when on-dispose (on-dispose)))))))))
 
 ;; https://reactjs.org/docs/hooks-faq.html#how-to-get-the-previous-props-or-state
+;; FIXME: replace with rumext
 (defn use-previous
   "Returns the value from previous render cycle."
   [value]
@@ -238,6 +240,7 @@
       (reset! ptr value))
     ptr))
 
+;; FIXME: replace with rumext
 (defn use-update-ref
   [value]
   (let [ref (mf/use-ref value)]
@@ -245,6 +248,7 @@
       (mf/set-ref-val! ref value))
     ref))
 
+;; FIXME: replace with rumext
 (defn use-ref-callback
   "Returns a stable callback pointer what calls the interned
   callback. The interned callback will be automatically updated on
@@ -260,6 +264,7 @@
          (when ^boolean obj
            (apply (.-f obj) args)))))))
 
+;; FIXME: replace with rumext
 (defn use-ref-value
   "Returns a ref that will be automatically updated when the value is changed"
   [v]
@@ -268,12 +273,23 @@
       (mf/set-ref-val! ref v))
     ref))
 
+;; FIXME: replace with rumext
 (defn use-equal-memo
   [val]
   (let [ref (mf/use-ref nil)]
     (when-not (= (mf/ref-val ref) val)
       (mf/set-ref-val! ref val))
     (mf/ref-val ref)))
+
+;; FIXME: replace with rumext
+(defn use-focus-timer-ref
+  "Returns a ref for scheduling focus timers and disposes any pending
+   timer on component unmount."
+  []
+  (let [ref (mf/use-ref nil)]
+    (mf/with-effect []
+      #(some-> (mf/ref-val ref) ts/dispose!))
+    ref))
 
 ;; FIXME: rename to use-focus-objects
 (defn with-focus-objects
@@ -285,6 +301,7 @@
    (mf/with-memo [focus objects]
      (cpf/focus-objects objects focus))))
 
+;; FIXME: replace with rumext
 (defn use-debounce
   [ms value]
   (let [[state update-state-fn] (mf/useState value)
@@ -315,6 +332,22 @@
       (swap! storage/user assoc key state))
 
     (use-stream stream (partial reset! state*))
+
+    state*))
+
+(defn use-persisted-state
+  "A specialized hook that adds persistence to the default mf/use-state hook.
+
+  The state is automatically persisted under the provided key on
+  localStorage. And it will keep watching events with type equals to
+  `key` for new values."
+  [key default]
+  (let [id     (mf/use-id)
+        state* (mf/use-state #(get storage/user key default))
+        state  (deref state*)]
+
+    (mf/with-effect [state key id]
+      (swap! storage/user assoc key state))
 
     state*))
 
@@ -357,6 +390,36 @@
 
     state))
 
+(defn- get-or-create-portal-container
+  "Returns the singleton container div for the given category, creating
+  and appending it to document.body on first access."
+  [category]
+  (let [body (dom/get-body)
+        id   (str "portal-container-" category)]
+    (or (dom/query body (str "#" id))
+        (let [container (dom/create-element "div")]
+          (dom/set-attribute! container "id" id)
+          (dom/append-child! body container)
+          container))))
+
+(defn use-portal-container
+  "Returns a shared singleton container div for React portals, identified
+  by a logical category. Available categories:
+
+    :modal    — modal dialogs
+    :popup    — popups, dropdowns, context menus
+    :tooltip  — tooltips
+    :default  — general portal use (default)
+
+  All portals in the same category share one <div> on document.body,
+  keeping the DOM clean and avoiding removeChild race conditions."
+  ([]
+   (use-portal-container :default))
+  ([category]
+   (let [category (name category)]
+     (mf/with-memo [category]
+       (get-or-create-portal-container category)))))
+
 (defn use-dynamic-grid-item-width
   ([] (use-dynamic-grid-item-width nil))
   ([itemsize]
@@ -385,8 +448,8 @@
        [th-size]
        (when th-size
          (let [node (mf/ref-val rowref)]
-           (.setProperty (.-style node) "--th-width" (str th-size "px"))
-           (.setProperty (.-style node) "--th-height" (str (mth/ceil (* th-size (/ 2 3))) "px")))))
+           (.setProperty (.-style node) "--thumbnail-width" (str th-size "px"))
+           (.setProperty (.-style node) "--thumbnail-height" (str (mth/ceil (* th-size (/ 2 3))) "px")))))
 
      (mf/with-effect []
        (let [node (mf/ref-val rowref)

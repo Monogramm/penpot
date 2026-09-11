@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.plugins.events
   (:require
@@ -14,6 +14,7 @@
    [app.plugins.parser :as parser]
    [app.plugins.shape :as shape]
    [app.util.object :as obj]
+   [app.util.theme :as theme]
    [goog.functions :as gf]))
 
 (defmulti handle-state-change (fn [type _] type))
@@ -50,15 +51,18 @@
       ::not-changed
       (apply array (map str new-selection)))))
 
+(defn- get-theme
+  [state]
+  (theme/resolve-theme (get-in state [:profile :theme])
+                       (theme/get-system-theme)))
+
 (defmethod handle-state-change "themechange"
   [_ _ old-val new-val _]
-  (let [old-theme (get-in old-val [:profile :theme])
-        new-theme (get-in new-val [:profile :theme])]
+  (let [old-theme (get-theme old-val)
+        new-theme (get-theme new-val)]
     (if (identical? old-theme new-theme)
       ::not-changed
-      (if (= new-theme "default")
-        "dark"
-        new-theme))))
+      new-theme)))
 
 (defmethod handle-state-change "shapechange"
   [_ plugin-id old-val new-val props]

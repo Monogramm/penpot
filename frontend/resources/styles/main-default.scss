@@ -2,31 +2,31 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-//#################################################
+// #################################################
 // MAIN STYLES
-//#################################################
+// #################################################
 
-@import "common/dependencies/reset";
-@import "common/refactor/color-defs.scss";
-@import "common/dependencies/fonts";
-@import "common/dependencies/animations";
-@import "common/dependencies/highlight.scss";
+@forward "common/dependencies/reset";
+@forward "common/refactor/color-defs";
+@forward "common/dependencies/fonts";
+@forward "common/dependencies/animations";
+@forward "common/dependencies/highlight";
+@forward "common/dependencies/storybook";
+@forward "common/refactor/themes";
+@forward "common/refactor/design-tokens";
 
-@import "common/refactor/themes.scss";
-@import "common/refactor/design-tokens.scss";
-
-//#################################################
+// #################################################
 // Layouts
-//#################################################
+// #################################################
 
-@import "common/base";
+@forward "common/base";
 
-//#################################################
+// #################################################
 // Commons
-//#################################################
+// #################################################
 
 // TODO: remove this stylesheet once the new text editor is in place
 //       https: //tree.taiga.io/project/penpot/us/8165
-@import "main/partials/texts";
+@forward "main/partials/texts";

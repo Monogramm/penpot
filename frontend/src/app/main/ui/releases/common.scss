@@ -2,31 +2,31 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "ds/_borders.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/_utils.scss" as *;
 
 .step-dots {
   display: grid;
   grid-template-columns: none;
   grid-auto-flow: column;
-  gap: $s-8;
-  height: fit-content;
-  width: fit-content;
+  gap: var(--sp-s);
+  block-size: fit-content;
+  inline-size: fit-content;
   margin: 0;
   padding: 0;
-  align-self: center;
-  justify-self: flex-start;
+  place-self: center flex-start;
 }
 
 .dot {
-  height: $s-12;
-  width: $s-12;
+  block-size: $sz-12;
+  inline-size: $sz-12;
   border-radius: $br-circle;
-  background-color: var(--modal-navigator-foreground-color-rest);
-  cursor: pointer;
+  background-color: var(--color-background-quaternary);
 }
 
 .current {
-  background-color: var(--modal-navigator-foreground-color-active);
+  background-color: var(--color-accent-primary);
 }

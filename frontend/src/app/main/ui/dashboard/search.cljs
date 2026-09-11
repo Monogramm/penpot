@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard.search
   (:require-macros [app.main.style :as stl])
@@ -11,9 +11,9 @@
    [app.main.data.dashboard :as dd]
    [app.main.refs :as refs]
    [app.main.store :as st]
-   [app.main.ui.dashboard.grid :refer [grid]]
+   [app.main.ui.dashboard.grid :refer [grid*]]
    [app.main.ui.hooks :as hooks]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [okulary.core :as l]
@@ -32,7 +32,6 @@
              st/state))
 
 (mf/defc search-page*
-  {::mf/props :obj}
   [{:keys [team search-term]}]
   (let [search-term (d/nilv search-term "")
 
@@ -45,7 +44,7 @@
     (mf/with-effect [team]
       (when team
         (let [tname (if (:is-default team)
-                      (tr "dashboard.your-penpot")
+                      (tr "dashboard.personal-projects")
                       (:name team))]
           (dom/set-html-title (tr "title.dashboard.search" tname)))))
 
@@ -63,21 +62,21 @@
       (cond
         (empty? search-term)
         [:div {:class (stl/css :grid-empty-placeholder :search)}
-         [:div {:class (stl/css :icon)} i/search]
+         [:div {:class (stl/css :icon)} deprecated-icon/search]
          [:div {:class (stl/css :text)} (tr "dashboard.type-something")]]
 
         (nil? result)
         [:div {:class (stl/css :grid-empty-placeholder :search)}
-         [:div {:class (stl/css :icon)} i/search]
+         [:div {:class (stl/css :icon)} deprecated-icon/search]
          [:div {:class (stl/css :text)} (tr "dashboard.searching-for" search-term)]]
 
         (empty? result)
         [:div {:class (stl/css :grid-empty-placeholder :search)}
-         [:div {:class (stl/css :icon)} i/search]
+         [:div {:class (stl/css :icon)} deprecated-icon/search]
          [:div {:class (stl/css :text)} (tr "dashboard.no-matches-for" search-term)]]
 
         :else
-        [:& grid {:files result
-                  :selected-files selected
-                  :origin :search
-                  :limit limit}])]]))
+        [:> grid* {:files result
+                   :selected-files selected
+                   :origin :search
+                   :limit limit}])]]))

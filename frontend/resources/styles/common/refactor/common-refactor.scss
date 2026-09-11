@@ -2,19 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-//#################################################
+// #################################################
 // MAIN STYLES
-//#################################################
+// #################################################
 
-@import "common/refactor/fonts.scss";
-@import "common/refactor/spacing.scss";
-@import "common/refactor/borders.scss";
-@import "common/refactor/opacity.scss";
-@import "common/refactor/shadows.scss";
-@import "common/refactor/z-index.scss";
-@import "common/refactor/mixins.scss";
-@import "common/refactor/focus.scss";
-@import "common/refactor/animations.scss";
-@import "common/refactor/basic-rules.scss";
+@forward "./fonts";
+@forward "./spacing";
+@forward "./borders";
+@forward "./opacity";
+@forward "./shadows";
+@forward "./z-index";
+@forward "./mixins";
+@forward "./focus";
+@forward "./animations";
+@forward "./basic-rules";

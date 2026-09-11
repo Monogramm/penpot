@@ -122,7 +122,7 @@
                         <tbody>
                           <tr>
                             <td style="width:97px;">
-                              <img height="32" src="{{ public-uri }}/images/email/uxbox-title.png"
+                              <img height="32" src="{{ public-uri }}/images/email/logo-penpot.svg"
                                 style="border:0;display:block;outline:none;text-decoration:none;height:32px;width:100%;font-size:13px;"
                                 width="97" />
                             </td>
@@ -186,21 +186,43 @@
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
                         style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
-                        {{invited-by|abbreviate:25}} has invited you to join the team “{{ team|abbreviate:25 }}”.</div>
+                        {{invited-by|abbreviate:25}} has invited you to join the team “{{ team|abbreviate:50 }}”{% if
+                        organization %}
+                        part of the organization “{{ organization.name|abbreviate:50 }}”{% endif %}.</div>
                     </td>
                   </tr>
+                  {% if organization.sso-active %}
+                  <tr>
+                    <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
+                      <div
+                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        "{{ organization.name|abbreviate:50 }}" has set up single sign-on (SSO) in Penpot. Access to
+                        its teams and files now goes through your organization's identity provider.
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
+                      <div
+                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        If you can't get in, your account probably isn't in the directory yet.
+                        To get access, contact the organization owner.
+                      </div>
+                    </td>
+                  </tr>
+                  {% endif %}
                   <tr>
                     <td align="center" vertical-align="middle"
                       style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <table border="0" cellpadding="0" cellspacing="0" role="presentation"
                         style="border-collapse:separate;line-height:100%;">
                         <tr>
-                          <td align="center" bgcolor="#31EFB8" role="presentation"
-                            style="border:none;border-radius:3px;cursor:auto;mso-padding-alt:10px 25px;background:#31EFB8;"
+                          <td align="center" bgcolor="#6911d4" role="presentation"
+                            style="border:none;border-radius:8px;cursor:auto;mso-padding-alt:10px 25px;background:#6911d4;"
                             valign="middle">
                             <a href="{{ public-uri }}/#/auth/verify-token?token={{token}}"
-                              style="display:inline-block;background:#31EFB8;color:#1F1F1F;font-family:Source Sans Pro, sans-serif;font-size:16px;font-weight:normal;line-height:120%;margin:0;text-decoration:none;text-transform:none;padding:10px 25px;mso-padding-alt:0px;border-radius:3px;"
-                              target="_blank"> Accept invite </a>
+                              style="display:inline-block;background:#6911d4;color:#FFFFFF;font-family:Source Sans Pro, sans-serif;font-size:16px;font-weight:normal;line-height:120%;margin:0;text-decoration:none;text-transform:none;padding:10px 25px;mso-padding-alt:0px;border-radius:8px;"
+                              target="_blank"> ACCEPT INVITE </a>
                           </td>
                         </tr>
                       </table>

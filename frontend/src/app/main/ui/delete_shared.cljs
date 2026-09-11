@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.delete-shared
   (:require-macros [app.main.style :as stl])
@@ -11,7 +11,8 @@
    [app.main.data.modal :as modal]
    [app.main.repo :as rp]
    [app.main.store :as st]
-   [app.main.ui.icons :as i]
+   [app.main.ui.ds.notifications.context-notification :refer [context-notification*]]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as k]
@@ -97,7 +98,7 @@
       [:div {:class (stl/css :modal-header)}
        [:h2 {:class (stl/css :modal-title)} title]
        [:button {:class (stl/css :modal-close-btn)
-                 :on-click cancel-fn} i/close]]
+                 :on-click cancel-fn} deprecated-icon/close]]
 
       [:div {:class (stl/css :modal-content)}
        (when (and (string? subtitle) (not= subtitle ""))
@@ -105,16 +106,18 @@
        (when (not= 0 count-libraries)
          (if (pos? (count references))
            [:*
-            [:div
-             (when (and (string? scd-msg) (not= scd-msg ""))
-               [:h3 {:class (stl/css :modal-scd-msg)} scd-msg])
-             [:ul {:class (stl/css :element-list)}
-              (for [[file-id file-name] references]
-                [:li {:class (stl/css :list-item)
-                      :key (dm/str file-id)}
-                 [:span "- " file-name]])]]
+            (when (and (string? scd-msg) (not= scd-msg ""))
+              [:p {:class (stl/css :modal-scd-msg)} scd-msg])
+
+            [:ul {:class (stl/css :element-list)}
+             (for [[file-id file-name] references]
+               [:li {:class (stl/css :list-item)
+                     :key (dm/str file-id)}
+                [:span "- " file-name]])]
             (when (and (string? hint) (not= hint ""))
-              [:h3 {:class (stl/css :modal-hint)} hint])]
+              [:> context-notification* {:level :info
+                                         :appearance :ghost}
+               hint])]
            [:*
             [:h3 {:class (stl/css :modal-msg)} no-files-msg]]))]
 

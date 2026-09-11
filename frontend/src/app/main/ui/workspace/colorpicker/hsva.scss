@@ -2,15 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
 
 .hsva-selector {
-  @include flexColumn;
-  padding: $s-4;
-  grid-row-gap: $s-8;
-  margin-bottom: $s-8;
+  @include deprecated.flex-column;
+
+  padding: deprecated.$s-4;
+  row-gap: deprecated.$s-8;
+  margin-bottom: deprecated.$s-8;
 }
 
 .hsva-row {
@@ -19,13 +20,14 @@
 }
 
 .hsva-selector-label {
-  @include uppercaseTitleTipography;
+  @include deprecated.uppercase-title-typography;
+
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  width: $s-32;
+  width: deprecated.$s-32;
 }
 
 .hsva-bar {
-  width: $s-228;
+  width: deprecated.$s-228;
 }

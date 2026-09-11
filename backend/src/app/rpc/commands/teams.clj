@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.teams
   (:require
@@ -11,16 +11,20 @@
    [app.common.exceptions :as ex]
    [app.common.features :as cfeat]
    [app.common.schema :as sm]
-   [app.common.types.team :as tt]
+   [app.common.time :as ct]
+   [app.common.types.organization :as cto]
+   [app.common.types.team :as types.team]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
    [app.db.sql :as sql]
    [app.email :as eml]
+   [app.features.logical-deletion :as ldel]
    [app.loggers.audit :as audit]
    [app.main :as-alias main]
-   [app.media :as media]
+   [app.media.validation :as media.v]
    [app.msgbus :as mbus]
+   [app.nitrate :as nitrate]
    [app.rpc :as-alias rpc]
    [app.rpc.commands.profile :as profile]
    [app.rpc.doc :as-alias doc]
@@ -29,21 +33,20 @@
    [app.setup :as-alias setup]
    [app.storage :as sto]
    [app.util.services :as sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [clojure.set :as set]))
 
 ;; --- Helpers & Specs
 
 (def ^:private sql:team-permissions
-  "select tpr.is_owner,
+  "SELECT tpr.is_owner,
           tpr.is_admin,
           tpr.can_edit
-     from team_profile_rel as tpr
-     join team as t on (t.id = tpr.team_id)
-    where tpr.profile_id = ?
-      and tpr.team_id = ?
-      and t.deleted_at is null")
+     FROM team_profile_rel AS tpr
+     JOIN team AS t ON (t.id = tpr.team_id)
+    WHERE tpr.profile_id = ?
+      AND tpr.team_id = ?
+      AND t.deleted_at IS NULL")
 
 (defn get-permissions
   [conn profile-id team-id]
@@ -57,6 +60,11 @@
        :can-edit (or is-owner is-admin can-edit)
        :can-read true})))
 
+(defn get-read-permissions
+  [cfg profile-id team-id]
+  (or (get-permissions cfg profile-id team-id)
+      (perms/get-organization-owner-permissions cfg profile-id :team-id team-id)))
+
 (def has-admin-permissions?
   (perms/make-admin-predicate-fn get-permissions))
 
@@ -64,7 +72,7 @@
   (perms/make-edition-predicate-fn get-permissions))
 
 (def has-read-permissions?
-  (perms/make-read-predicate-fn get-permissions))
+  (perms/make-read-predicate-fn get-read-permissions))
 
 (def check-admin-permissions!
   (perms/make-check-fn has-admin-permissions?))
@@ -76,9 +84,11 @@
   (perms/make-check-fn has-read-permissions?))
 
 (defn decode-row
-  [{:keys [features] :as row}]
-  (cond-> row
-    (some? features) (assoc :features (db/decode-pgarray features #{}))))
+  [{:keys [features subscription] :as row}]
+  (when row
+    (cond-> row
+      (some? features) (assoc :features (db/decode-pgarray features #{}))
+      (some? subscription) (assoc :subscription (db/decode-transit-pgobject subscription)))))
 
 ;; FIXME: move
 
@@ -113,29 +123,42 @@
 
 ;; --- Query: Teams
 
-(declare get-teams)
-
-(def ^:private schema:get-teams
-  [:map {:title "get-teams"}])
-
-(sv/defmethod ::get-teams
-  {::doc/added "1.17"
-   ::sm/params schema:get-teams}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id] :as params}]
-  (dm/with-open [conn (db/open pool)]
-    (get-teams conn profile-id)))
-
 (def sql:get-teams-with-permissions
-  "select t.*,
+  "SELECT t.*,
           tp.is_owner,
           tp.is_admin,
           tp.can_edit,
-          (t.id = ?) as is_default
-     from team_profile_rel as tp
-     join team as t on (t.id = tp.team_id)
-    where t.deleted_at is null
-      and tp.profile_id = ?
-    order by tp.created_at asc")
+          (t.id = ?) AS is_default
+     FROM team_profile_rel AS tp
+     JOIN team AS t ON (t.id = tp.team_id)
+    WHERE t.deleted_at IS null
+      AND tp.profile_id = ?
+    ORDER BY tp.created_at ASC")
+
+(def sql:get-teams-with-permissions-and-subscription
+  "SELECT t.*,
+          tp.is_owner,
+          tp.is_admin,
+          tp.can_edit,
+          (t.id = ?) AS is_default,
+
+          jsonb_build_object(
+            '~:type', COALESCE(p.props->'~:subscription'->>'~:type', 'professional'),
+            '~:status', CASE COALESCE(p.props->'~:subscription'->>'~:type', 'professional')
+                          WHEN 'professional' THEN 'active'
+                          ELSE COALESCE(p.props->'~:subscription'->>'~:status', 'incomplete')
+                       END,
+            '~:seats', p.props->'~:subscription'->'~:quantity'
+          ) AS subscription
+     FROM team_profile_rel AS tp
+     JOIN team AS t ON (t.id = tp.team_id)
+     JOIN team_profile_rel AS tpr
+       ON (tpr.team_id = t.id AND tpr.is_owner IS true)
+     JOIN profile AS p
+       ON (tpr.profile_id = p.id)
+    WHERE t.deleted_at IS null
+      AND tp.profile_id = ?
+    ORDER BY tp.created_at ASC")
 
 (defn process-permissions
   [team]
@@ -150,13 +173,56 @@
         (dissoc :is-owner :is-admin :can-edit)
         (assoc :permissions permissions))))
 
+(def ^:private
+  xform:process-teams
+  (comp
+   (map decode-row)
+   (map process-permissions)))
+
 (defn get-teams
   [conn profile-id]
-  (let [profile (profile/get-profile conn profile-id)]
-    (->> (db/exec! conn [sql:get-teams-with-permissions (:default-team-id profile) profile-id])
-         (map decode-row)
-         (map process-permissions)
-         (vec))))
+  (let [profile (profile/get-profile conn profile-id)
+        sql     (if (contains? cf/flags :subscriptions)
+                  sql:get-teams-with-permissions-and-subscription
+                  sql:get-teams-with-permissions)]
+    (->> (db/exec! conn [sql (:default-team-id profile) profile-id])
+         (into [] xform:process-teams))))
+
+(def ^:private schema:get-teams
+  [:map {:title "get-teams"}])
+
+(sv/defmethod ::get-teams
+  {::doc/added "1.17"
+   ::sm/params schema:get-teams}
+  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id] :as params}]
+  (dm/with-open [conn (db/open pool)]
+    (let [teams (get-teams conn profile-id)]
+      (if (contains? cf/flags :admin-console)
+        (->> (nitrate/add-organization-info-to-teams cfg teams params)
+             (remove #(get-in % [:organization :expired-license])))
+        teams))))
+
+(def ^:private sql:get-owned-teams
+  "SELECT t.id, t.name,
+          (SELECT count(*) FROM team_profile_rel WHERE team_id=t.id) AS total_members,
+          (SELECT count(*) FROM team_profile_rel WHERE team_id=t.id AND can_edit=true) AS total_editors
+     FROM team AS t
+     JOIN team_profile_rel AS tpr ON (tpr.team_id = t.id)
+    WHERE t.is_default IS false
+      AND tpr.is_owner IS true
+      AND tpr.profile_id = ?
+      AND t.deleted_at IS NULL")
+
+(defn- get-owned-teams
+  [cfg profile-id]
+  (->> (db/exec! cfg [sql:get-owned-teams profile-id])
+       (into [] (map decode-row))))
+
+(sv/defmethod ::get-owned-teams
+  {::doc/added "2.8.0"
+   ::sm/params schema:get-teams}
+  [cfg {:keys [::rpc/profile-id]}]
+  (get-owned-teams cfg profile-id))
 
 ;; --- Query: Team (by ID)
 
@@ -174,53 +240,74 @@
 
 (sv/defmethod ::get-team
   {::doc/added "1.17"
+   ::rpc/id-type :team
    ::sm/params schema:get-team}
-  [{:keys [::db/pool]} {:keys [::rpc/profile-id id file-id]}]
-  (get-team pool :profile-id profile-id :team-id id :file-id file-id))
+  [cfg {:keys [::rpc/profile-id id file-id] :as params}]
+  (let [team (get-team cfg :profile-id profile-id :team-id id :file-id file-id)]
+    (if (contains? cf/flags :admin-console)
+      (nitrate/add-organization-info-to-team cfg team params)
+      team)))
+
+(defn- get-organization-owner-viewer-team
+  "When `profile-id` is a non-member owner of the organization that owns
+  the requested team, returns the team shaped with viewer permissions;
+  otherwise nil. `cfg` must carry the nitrate client."
+  [cfg profile-id default-team-id params]
+  (when-let [team-id (perms/resolve-team-id cfg params)]
+    (when (nitrate/organization-owner-of-team? cfg profile-id team-id)
+      (when-let [team (db/get* cfg :team {:id team-id})]
+        (when-not (db/is-row-deleted? team)
+          (-> team
+              (decode-row)
+              (merge perms/viewer-role-flags)
+              (assoc :is-default (= team-id default-team-id))
+              (process-permissions)))))))
 
 (defn get-team
-  [conn & {:keys [profile-id team-id project-id file-id] :as params}]
+  [cfg & {:keys [profile-id team-id project-id file-id] :as params}]
 
-  (dm/assert!
-   "connection or pool is mandatory"
-   (or (db/connection? conn)
-       (db/pool? conn)))
+  (assert (uuid? profile-id) "profile-id is mandatory")
 
-  (dm/assert!
-   "profile-id is mandatory"
-   (uuid? profile-id))
+  (let [{:keys [default-team-id] :as profile}
+        (profile/get-profile cfg profile-id)
 
-  (let [{:keys [default-team-id] :as profile} (profile/get-profile conn profile-id)
-        result (cond
-                 (some? team-id)
-                 (let [sql (str "WITH teams AS (" sql:get-teams-with-permissions
-                                ") SELECT * FROM teams WHERE id=?")]
-                   (db/exec-one! conn [sql default-team-id profile-id team-id]))
+        sql
+        (if (contains? cf/flags :subscriptions)
+          sql:get-teams-with-permissions-and-subscription
+          sql:get-teams-with-permissions)
 
-                 (some? project-id)
-                 (let [sql (str "WITH teams AS (" sql:get-teams-with-permissions ") "
-                                "SELECT t.* FROM teams AS t "
-                                "  JOIN project AS p ON (p.team_id = t.id) "
-                                " WHERE p.id=?")]
-                   (db/exec-one! conn [sql default-team-id profile-id project-id]))
+        result
+        (cond
+          (some? team-id)
+          (let [sql (str "WITH teams AS (" sql ") "
+                         "SELECT * FROM teams WHERE id=?")]
+            (db/exec-one! cfg [sql default-team-id profile-id team-id]))
 
-                 (some? file-id)
-                 (let [sql (str "WITH teams AS (" sql:get-teams-with-permissions ") "
-                                "SELECT t.* FROM teams AS t "
-                                "  JOIN project AS p ON (p.team_id = t.id) "
-                                "  JOIN file AS f ON (f.project_id = p.id) "
-                                " WHERE f.id=?")]
-                   (db/exec-one! conn [sql default-team-id profile-id file-id]))
+          (some? project-id)
+          (let [sql (str "WITH teams AS (" sql ") "
+                         "SELECT t.* FROM teams AS t "
+                         "  JOIN project AS p ON (p.team_id = t.id) "
+                         " WHERE p.id=?")]
+            (db/exec-one! cfg [sql default-team-id profile-id project-id]))
 
-                 :else
-                 (throw (IllegalArgumentException. "invalid arguments")))]
+          (some? file-id)
+          (let [sql (str "WITH teams AS (" sql ") "
+                         "SELECT t.* FROM teams AS t "
+                         "  JOIN project AS p ON (p.team_id = t.id) "
+                         "  JOIN file AS f ON (f.project_id = p.id) "
+                         " WHERE f.id=?")]
+            (db/exec-one! cfg [sql default-team-id profile-id file-id]))
 
-    (when-not result
-      (ex/raise :type :not-found
-                :code :team-does-not-exist))
-    (-> result
-        (decode-row)
-        (process-permissions))))
+          :else
+          (throw (IllegalArgumentException. "invalid arguments")))]
+
+    (if result
+      (-> result
+          (decode-row)
+          (process-permissions))
+      (or (get-organization-owner-viewer-team cfg profile-id default-team-id params)
+          (ex/raise :type :not-found
+                    :code :team-does-not-exist)))))
 
 ;; --- Query: Team Members
 
@@ -249,7 +336,7 @@
    ::sm/params schema:get-team-memebrs}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id]}]
   (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! conn profile-id team-id)
+    (check-read-permissions! cfg profile-id team-id)
     (get-team-members conn team-id)))
 
 ;; --- Query: Team Users
@@ -275,10 +362,10 @@
   (dm/with-open [conn (db/open pool)]
     (if team-id
       (do
-        (check-read-permissions! conn profile-id team-id)
+        (check-read-permissions! cfg profile-id team-id)
         (get-users conn team-id))
       (let [{team-id :id} (get-team-for-file conn file-id)]
-        (check-read-permissions! conn profile-id team-id)
+        (check-read-permissions! cfg profile-id team-id)
         (get-users conn team-id)))))
 
 ;; This is a similar query to team members but can contain more data
@@ -365,7 +452,7 @@
    ::sm/params schema:get-team-stats}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id]}]
   (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! conn profile-id team-id)
+    (check-read-permissions! cfg profile-id team-id)
     (get-team-stats conn team-id)))
 
 (def sql:team-stats
@@ -383,30 +470,36 @@
    [:team-id ::sm/uuid]])
 
 (def sql:team-invitations
-  "select email_to as email, role, (valid_until < now()) as expired
-   from team_invitation where team_id = ? order by valid_until desc, created_at desc")
+  "SELECT email_to AS email,
+          role,
+          (valid_until < ?::timestamptz) AS expired
+     FROM team_invitation
+    WHERE team_id = ?
+    ORDER BY valid_until DESC, created_at DESC")
 
 (defn get-team-invitations
   [conn team-id]
-  (->> (db/exec! conn [sql:team-invitations team-id])
-       (mapv #(update % :role keyword))))
+  (let [now (ct/now)]
+    (->> (db/exec! conn [sql:team-invitations now team-id])
+         (mapv #(update % :role keyword)))))
 
 (sv/defmethod ::get-team-invitations
   {::doc/added "1.17"
    ::sm/params schema:get-team-invitations}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id]}]
   (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! conn profile-id team-id)
+    (check-read-permissions! cfg profile-id team-id)
     (get-team-invitations conn team-id)))
 
 
 ;; --- COMMAND QUERY: get-team-info
 
-(defn- get-team-info
-  [{:keys [::db/conn] :as cfg} {:keys [id] :as params}]
-  (db/get* conn :team
-           {:id id}
-           {::sql/columns [:id :is-default]}))
+(defn get-team-info
+  [cfg {:keys [id] :as params}]
+  (-> (db/get* cfg :team
+               {:id id}
+               {::sql/columns [:id :is-default :features]})
+      (decode-row)))
 
 (sv/defmethod ::get-team-info
   "Retrieve minimal team info by its ID."
@@ -428,21 +521,42 @@
 
 (def ^:private schema:create-team
   [:map {:title "create-team"}
-   [:name [:string {:max 250}]]
+   [:name types.team/schema:team-name]
    [:features {:optional true} ::cfeat/features]
-   [:id {:optional true} ::sm/uuid]])
+   [:id {:optional true} ::sm/uuid]
+   [:organization-id {:optional true} ::sm/uuid]
+   [:is-default {:optional true} :boolean]])
 
 (sv/defmethod ::create-team
   {::doc/added "1.17"
    ::sm/params schema:create-team}
-  [cfg {:keys [::rpc/profile-id] :as params}]
+  [cfg {:keys [::rpc/profile-id organization-id] :as params}]
 
   (quotes/check! cfg {::quotes/id ::quotes/teams-per-profile
                       ::quotes/profile-id profile-id})
 
+  ;; When creating inside an organization, verify the user has permission to do so.
+  ;; Fail closed: if organization permissions cannot be fetched, deny the operation.
+  (when (and organization-id (contains? cf/flags :admin-console))
+    ;; Verify caller is a member of the organization
+    (nitrate/assert-membership cfg profile-id organization-id)
+
+    (let [organization-perms (nitrate/call cfg :get-organization-permissions
+                                           {:organization-id organization-id})]
+      (if (nil? organization-perms)
+        (ex/raise :type :validation
+                  :code :not-allowed
+                  :hint "Unable to verify organization permissions")
+        (when-not (cto/allowed? :create-team
+                                {:organization-perms organization-perms
+                                 :profile-id profile-id})
+          (ex/raise :type :validation
+                    :code :not-allowed
+                    :hint "You are not allowed to create teams in this organization")))))
+
   (let [features (-> (cfeat/get-enabled-features cf/flags)
                      (set/difference cfeat/frontend-only-features)
-                     (cfeat/check-client-features! (:features params)))
+                     (set/difference cfeat/no-team-inheritable-features))
         params   (-> params
                      (assoc :profile-id profile-id)
                      (assoc :features features))
@@ -451,17 +565,89 @@
     (with-meta team
       {::audit/props {:id (:id team)}})))
 
+
+(defn create-default-organization-team
+  [cfg profile-id organization-id]
+  (quotes/check! cfg {::quotes/id ::quotes/teams-per-profile
+                      ::quotes/profile-id profile-id})
+
+  (let [features (-> (cfeat/get-enabled-features cf/flags)
+                     (set/difference cfeat/frontend-only-features)
+                     (set/difference cfeat/no-team-inheritable-features))
+        params   {:profile-id profile-id
+                  :name "Personal Projects"
+                  :features features
+                  :organization-id organization-id
+                  :is-default true}
+        team     (create-team cfg params)]
+    (select-keys team [:id])))
+
+(defn initialize-user-in-organization
+  "If needed, create a default team for the user on the organization,
+   and initialize the user in the organization."
+  ([cfg profile-id organization-id]
+   (initialize-user-in-organization cfg profile-id organization-id nil))
+  ([cfg profile-id organization-id email]
+   (assert (db/connection-map? cfg)
+           "expected cfg with valid connection")
+   (when (contains? cf/flags :admin-console)
+     (db/tx-run!
+      cfg
+      (fn [{:keys [::db/conn] :as tx-cfg}]
+
+        (let [membership (nitrate/call cfg :get-organization-membership {:profile-id profile-id
+                                                                         :organization-id organization-id})]
+          ;; Only when the user doesn't belong to the organization yet
+          (when (and
+                 (some? (:organization-id membership)) ;; the organization exists
+                 (not (:is-member membership)))        ;; the user is not a member of the organization yet
+
+
+            (let [organization-id           organization-id
+                  default-team     (create-default-organization-team (assoc tx-cfg ::db/conn conn) profile-id organization-id)
+                  default-team-id  (:id default-team)
+                  result           (nitrate/call tx-cfg :add-profile-to-organization (cond-> {:profile-id profile-id
+                                                                                              :team-id default-team-id
+                                                                                              :organization-id organization-id}
+                                                                                       (some? email) (assoc :email email)))]
+              (when (not (:is-member result))
+                (ex/raise :type :internal
+                          :code :failed-add-profile-organization-nitrate
+                          :context {:profile-id profile-id
+                                    :organization-id organization-id
+                                    :default-team-id default-team-id}))
+              default-team-id))))))))
+
+(defn add-profile-to-team!
+  ([cfg params]
+   (add-profile-to-team! cfg params nil))
+  ([{:keys [::db/conn] :as cfg} {:keys [:profile-id :team-id] :as params} options]
+   (assert (db/connection-map? cfg)
+           "expected cfg with valid connection")
+   (when (contains? cf/flags :admin-console)
+     (let [membership (nitrate/call cfg :get-organization-membership-by-team {:profile-id profile-id :team-id team-id})]
+       ;; Only when the team belong to an organization and the user is not a member
+       (when (and
+              (some? (:organization-id membership)) ;; the team do belong to an organization
+              (not (:is-member membership)))        ;; the user is not a member of the organization yet
+         (initialize-user-in-organization cfg profile-id (:organization-id membership)))))
+   (db/insert! conn :team-profile-rel (assoc params :id (uuid/next)) options)))
+
 (defn create-team
   "This is a complete team creation process, it creates the team
   object and all related objects (default role and default project)."
-  [cfg-or-conn params]
-  (let [conn    (db/get-connection cfg-or-conn)
-        team    (create-team* conn params)
+  [{:keys [::db/conn] :as cfg} params]
+  (assert (db/connection-map? cfg)
+          "expected cfg with valid connection")
+  (let [team    (create-team* conn params)
         params  (assoc params
                        :team-id (:id team)
                        :role :owner)
         project (create-team-default-project conn params)]
-    (create-team-role conn params)
+    (create-team-role cfg params)
+    ;; Set team organization in Nitrate if organization-id is provided
+    (when (and (contains? cf/flags :admin-console) (:organization-id params))
+      (nitrate/set-team-organization cfg team params))
     (assoc team :default-project-id (:id project))))
 
 (defn- create-team*
@@ -469,6 +655,7 @@
   (let [id         (or id (uuid/next))
         is-default (if (boolean? is-default) is-default false)
         features   (db/create-array conn "text" features)
+        name       (d/normalize-string name)
         team       (db/insert! conn :team
                                {:id id
                                 :name name
@@ -477,11 +664,13 @@
     (decode-row team)))
 
 (defn- create-team-role
-  [conn {:keys [profile-id team-id role] :as params}]
+  [cfg {:keys [profile-id team-id role] :as params}]
+  (assert (db/connection-map? cfg)
+          "expected cfg with valid connection")
   (let [params {:team-id team-id
                 :profile-id profile-id}]
     (->> (perms/assign-role-flags params role)
-         (db/insert! conn :team-profile-rel))))
+         (add-profile-to-team! cfg))))
 
 (defn- create-team-default-project
   [conn {:keys [profile-id team-id] :as params}]
@@ -503,6 +692,7 @@
   [conn {:keys [id team-id name is-default created-at modified-at]}]
   (let [id         (or id (uuid/next))
         is-default (if (boolean? is-default) is-default false)
+        name       (d/normalize-string name)
         params     {:id id
                     :name name
                     :team-id team-id
@@ -514,7 +704,8 @@
 (defn create-project-role
   [conn profile-id project-id role]
   (let [params {:project-id project-id
-                :profile-id profile-id}]
+                :profile-id profile-id
+                :id (uuid/next)}]
     (->> (perms/assign-role-flags params role)
          (db/insert! conn :project-profile-rel))))
 
@@ -522,25 +713,27 @@
 
 (def ^:private schema:update-team
   [:map {:title "update-team"}
-   [:name [:string {:max 250}]]
+   [:name types.team/schema:team-name]
    [:id ::sm/uuid]])
 
 (sv/defmethod ::update-team
   {::doc/added "1.17"
-   ::sm/params schema:update-team}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id name] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id id)
+   ::rpc/id-type :team
+   ::sm/params schema:update-team
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id name]}]
+  (check-edition-permissions! conn profile-id id)
+  (let [name (d/normalize-string name)]
     (db/update! conn :team
                 {:name name}
-                {:id id})
-    nil))
+                {:id id}))
+  nil)
 
 
 ;; --- Mutation: Leave Team
 
 (defn leave-team
-  [conn {:keys [profile-id id reassign-to]}]
+  [{:keys [::db/conn ::mbus/msgbus]} {:keys [profile-id id reassign-to]}]
   (let [perms   (get-permissions conn profile-id id)
         members (get-team-members conn id)]
 
@@ -555,7 +748,9 @@
       ;; if the `reassign-to` is filled and has a different value
       ;; than the current profile-id, we proceed to reassing the
       ;; owner role to profile identified by the `reassign-to`.
-      (and reassign-to (not= reassign-to profile-id))
+      ;; Ignore the reasignation if the current profile is not
+      ;; the owner
+      (and reassign-to (not= reassign-to profile-id) (:is-owner perms))
       (let [member (d/seek #(= reassign-to (:id %)) members)]
         (when-not member
           (ex/raise :type :not-found :code :member-does-not-exist))
@@ -568,8 +763,16 @@
 
         ;; assign owner role to new profile
         (db/update! conn :team-profile-rel
-                    (get tt/permissions-for-role :owner)
-                    {:team-id id :profile-id reassign-to}))
+                    (get types.team/permissions-for-role :owner)
+                    {:team-id id :profile-id reassign-to})
+
+        ;; notify new owner
+        (mbus/pub! msgbus
+                   :topic reassign-to
+                   :message {:type :team-role-change
+                             :topic reassign-to
+                             :team-id id
+                             :role :owner}))
 
       ;; and finally, if all other conditions does not match and the
       ;; current profile is owner, we dont allow it because there
@@ -592,34 +795,62 @@
 
 (sv/defmethod ::leave-team
   {::doc/added "1.17"
-   ::sm/params schema:leave-team}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id] :as params}]
-  (db/with-atomic [conn pool]
-    (leave-team conn (assoc params :profile-id profile-id))))
+   ::rpc/id-type :team
+   ::sm/params schema:leave-team
+   ::db/transaction true}
+  [cfg {:keys [::rpc/profile-id] :as params}]
+  (leave-team cfg (assoc params :profile-id profile-id)))
+
 
 ;; --- Mutation: Delete Team
 
-(defn- delete-team
+(defn delete-team
   "Mark a team for deletion"
-  [conn team-id]
+  [{:keys [::db/conn] :as cfg} {:keys [profile-id team-id] :as params}]
 
-  (let [deleted-at (dt/now)
-        team       (db/update! conn :team
-                               {:deleted-at deleted-at}
-                               {:id team-id}
-                               {::db/return-keys true})]
+  (let [team  (get-team conn :profile-id profile-id :team-id team-id)
+        team  (if (contains? cf/flags :admin-console)
+                (nitrate/add-organization-info-to-team cfg team params)
+                team)
+        perms (get team :permissions)
+        organization   (:organization team)
+        in-organization? (and (contains? cf/flags :admin-console) organization)
+        can-delete?
+        (if in-organization?
+          (cto/allowed? :delete-team
+                        {:organization-perms {:owner-id    (dm/get-in team [:organization :owner-id])
+                                              :permissions (dm/get-in team [:organization :permissions])}
+                         :profile-id profile-id
+                         :team-perms perms})
+          (boolean (:is-owner perms)))]
 
-    (when (:is-default team)
+    (when-not can-delete?
+      (ex/raise :type :validation
+                :code :only-owner-can-delete-team))
+
+    ;; Protect the user's personal default team from deletion.
+    ;; Organization-scoped default teams ("Personal Projects") are allowed to be deleted when they have no files.
+    (when (and (:is-default team) (not in-organization?))
       (ex/raise :type :validation
                 :code :non-deletable-team
                 :hint "impossible to delete default team"))
 
-    (wrk/submit! {::db/conn conn
-                  ::wrk/task :delete-object
-                  ::wrk/params {:object :team
-                                :deleted-at deleted-at
-                                :id team-id}})
-    team))
+    (let [delay (ldel/get-deletion-delay team)
+          team  (db/update! conn :team
+                            {:deleted-at (ct/in-future delay)}
+                            {:id team-id}
+                            {::db/return-keys true})]
+
+      ;; Api call to nitrate
+      (when (contains? cf/flags :admin-console)
+        (nitrate/call cfg :delete-team {:profile-id profile-id :team-id team-id}))
+
+      (wrk/submit! {::db/conn conn
+                    ::wrk/task :delete-object
+                    ::wrk/params {:object :team
+                                  :deleted-at (:deleted-at team)
+                                  :id team-id}})
+      team)))
 
 (def ^:private schema:delete-team
   [:map {:title "delete-team"}
@@ -627,16 +858,12 @@
 
 (sv/defmethod ::delete-team
   {::doc/added "1.17"
-   ::sm/params schema:delete-team}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id] :as params}]
-  (db/with-atomic [conn pool]
-    (let [perms (get-permissions conn profile-id id)]
-      (when-not (:is-owner perms)
-        (ex/raise :type :validation
-                  :code :only-owner-can-delete-team))
-
-      (delete-team conn id)
-      nil)))
+   ::rpc/id-type :team
+   ::sm/params schema:delete-team
+   ::db/transaction true}
+  [cfg {:keys [::rpc/profile-id id] :as params}]
+  (delete-team cfg {:team-id id :profile-id profile-id})
+  nil)
 
 ;; --- Mutation: Team Update Role
 
@@ -679,7 +906,7 @@
                          :team-id team-id
                          :role role})
 
-    (let [params (get tt/permissions-for-role role)]
+    (let [params (get types.team/permissions-for-role role)]
       ;; Only allow single owner on team
       (when (= role :owner)
         (db/update! conn :team-profile-rel
@@ -697,7 +924,7 @@
   [:map {:title "update-team-member-role"}
    [:team-id ::sm/uuid]
    [:member-id ::sm/uuid]
-   [:role ::tt/role]])
+   [:role types.team/schema:role]])
 
 (sv/defmethod ::update-team-member-role
   {::doc/added "1.17"
@@ -714,31 +941,52 @@
 
 (sv/defmethod ::delete-team-member
   {::doc/added "1.17"
-   ::sm/params schema:delete-team-member}
-  [{:keys [::db/pool ::mbus/msgbus] :as cfg} {:keys [::rpc/profile-id team-id member-id] :as params}]
-  (db/with-atomic [conn pool]
-    (let [team  (get-team pool :profile-id profile-id :team-id team-id)
-          perms (get-permissions conn profile-id team-id)]
-      (when-not (or (:is-owner perms)
-                    (:is-admin perms))
-        (ex/raise :type :validation
-                  :code :insufficient-permissions))
+   ::sm/params schema:delete-team-member
+   ::db/transaction true}
+  [{:keys [::db/conn ::mbus/msgbus] :as cfg} {:keys [::rpc/profile-id team-id member-id] :as params}]
+  (let [team    (get-team conn :profile-id profile-id :team-id team-id)
+        perms   (get-permissions conn profile-id team-id)
+        members (get-team-members conn team-id)
+        member  (d/seek #(= member-id (:id %)) members)]
+    (when-not (or (:is-owner perms)
+                  (:is-admin perms))
+      (ex/raise :type :validation
+                :code :insufficient-permissions))
 
-      (when (= member-id profile-id)
-        (ex/raise :type :validation
-                  :code :cant-remove-yourself))
+    (when (= member-id profile-id)
+      (ex/raise :type :validation
+                :code :cant-remove-yourself))
 
-      (db/delete! conn :team-profile-rel {:profile-id member-id
-                                          :team-id team-id})
+    (when-not member
+      (ex/raise :type :not-found
+                :code :member-does-not-exist))
 
+    (when (and (:is-owner member)
+               (not (:is-owner perms)))
+      (ex/raise :type :validation
+                :code :cant-remove-owner))
+
+    (db/delete! conn :team-profile-rel {:profile-id member-id
+                                        :team-id team-id})
+
+    ;; A removed member that owns the organization of this team keeps
+    ;; read-only access to it, so instead of kicking them out we degrade
+    ;; their session to viewer, same as any other role change.
+    (if (nitrate/organization-owner-of-team? cfg member-id team-id)
+      (mbus/pub! msgbus
+                 :topic member-id
+                 :message {:type :team-role-change
+                           :topic member-id
+                           :team-id team-id
+                           :role :viewer})
       (mbus/pub! msgbus
                  :topic member-id
                  :message {:type :team-membership-change
                            :change :removed
                            :team-id team-id
-                           :team-name (:name team)})
+                           :team-name (:name team)}))
 
-      nil)))
+    nil))
 
 ;; --- Mutation: Update Team Photo
 
@@ -748,7 +996,7 @@
 (def ^:private schema:update-team-photo
   [:map {:title "update-team-photo"}
    [:team-id ::sm/uuid]
-   [:file ::media/upload]])
+   [:file media.v/schema:upload]])
 
 (sv/defmethod ::update-team-photo
   {::doc/added "1.17"
@@ -756,7 +1004,8 @@
   [cfg {:keys [::rpc/profile-id file] :as params}]
   ;; Validate incoming mime type
 
-  (media/validate-media-type! file #{"image/jpeg" "image/png" "image/webp"})
+  (media.v/validate-media-type! file #{"image/jpeg" "image/png" "image/webp"})
+  (media.v/validate-media-size! file)
   (update-team-photo cfg (assoc params :profile-id profile-id)))
 
 (defn update-team-photo
@@ -764,16 +1013,16 @@
   (let [team  (get-team pool :profile-id profile-id :team-id team-id)
         photo (profile/upload-photo cfg params)]
 
-    (db/with-atomic [conn pool]
-      (check-admin-permissions! conn profile-id team-id)
-      ;; Mark object as touched for make it ellegible for tentative
-      ;; garbage collection.
-      (when-let [id (:photo-id team)]
-        (sto/touch-object! storage id))
+    (check-admin-permissions! pool profile-id team-id)
 
-      ;; Save new photo
-      (db/update! pool :team
-                  {:photo-id (:id photo)}
-                  {:id team-id})
+    ;; Mark object as touched for make it ellegible for tentative
+    ;; garbage collection.
+    (when-let [id (:photo-id team)]
+      (sto/touch-object! storage id))
 
-      (assoc team :photo-id (:id photo)))))
+    ;; Save new photo
+    (db/update! pool :team
+                {:photo-id (:id photo)}
+                {:id team-id})
+
+    (assoc team :photo-id (:id photo))))

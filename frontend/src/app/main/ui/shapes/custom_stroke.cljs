@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.shapes.custom-stroke
   (:require
@@ -13,6 +13,7 @@
    [app.common.geom.shapes :as gsh]
    [app.common.geom.shapes.bounds :as gsb]
    [app.common.geom.shapes.text :as gst]
+   [app.common.types.path :as path]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.main.ui.context :as muc]
@@ -170,8 +171,8 @@
                  :fillOpacity opacity}
         [:path {:d "M 3 0 L 6 3 L 3 6 L 0 3 z"}]])
 
-      ;; If the user wants line caps but different in each end,
-      ;; simulate it with markers.
+     ;; If the user wants line caps but different in each end,
+     ;; simulate it with markers.
      (when (and (or (= cap-start :round)
                     (= cap-end :round))
                 (not= cap-start cap-end))
@@ -204,7 +205,7 @@
   {::mf/wrap-props false}
   [{:keys [shape stroke render-id index]}]
   (let [open-path?    (and ^boolean (cfh/path-shape? shape)
-                           ^boolean (gsh/open-path? shape))
+                           ^boolean (path/shape-with-open-path? shape))
         gradient      (:stroke-color-gradient stroke)
         alignment     (:stroke-alignment stroke :center)
         width         (:stroke-width stroke 0)
@@ -397,7 +398,7 @@
         has-stroke?     (and (> stroke-width 0)
                              (not= stroke-style :none))
         closed?         (or (not ^boolean (cfh/path-shape? shape))
-                            (not ^boolean (gsh/open-path? shape)))
+                            (not ^boolean (path/shape-with-open-path? shape)))
         inner?          (= :inner stroke-position)
         outer?          (= :outer stroke-position)]
 
@@ -479,7 +480,8 @@
 
         stroke-id     (dm/str (dm/fmt "strokes-%-%" prefix shape-id))
 
-        shape-blur    (get shape :blur)
+        shape-blur   (get shape :blur)
+
         shape-fills   (get shape :fills)
         shape-shadow  (get shape :shadow)
         shape-strokes (not-empty strokes)
@@ -496,7 +498,8 @@
                                        :style style})
 
         open-path?    (and ^boolean (cfh/path-shape? shape)
-                           ^boolean (gsh/open-path? shape))]
+                           ^boolean (path/shape-with-open-path? shape))]
+
     (when-not ^boolean (cfh/frame-shape? shape)
       (when (and (some? shape-blur)
                  (not ^boolean (:hidden shape-blur)))
@@ -508,7 +511,8 @@
 
     (when (some? shape-strokes)
       [:> :g props
-       (for [[index value] (reverse (d/enumerate shape-strokes))]
+       (for [[index value] (reverse (d/enumerate shape-strokes))
+             :when (not (:hidden value))]
          [:& shape-custom-stroke {:shape shape
                                   :stroke value
                                   :index index

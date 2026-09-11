@@ -2,14 +2,15 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.typography
   (:require
    [app.common.data :as d]
    [app.common.schema :as sm]
-   [app.common.text :as txt]
+   [app.common.time :as-alias ct]
    [app.common.types.plugins :as ctpg]
+   [app.common.types.text :as txt]
    [app.common.uuid :as uuid]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -29,14 +30,12 @@
    [:line-height :string]
    [:letter-spacing :string]
    [:text-transform :string]
-   [:modified-at {:optional true} ::sm/inst]
+   [:modified-at {:optional true} ::ct/inst]
    [:path {:optional true} [:maybe :string]]
-   [:plugin-data {:optional true} ::ctpg/plugin-data]])
+   [:plugin-data {:optional true} ctpg/schema:plugin-data]])
 
-(sm/register! ::typography schema:typography)
-
-(def check-typography!
-  (sm/check-fn ::typography))
+(def check-typography
+  (sm/check-fn schema:typography))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; HELPERS
@@ -59,6 +58,8 @@
        :text-transform (or text-transform "none")}
       (d/without-nils)))
 
+
+;; FIXME: this function should not be here it belongs to shape and not typography
 (defn uses-library-typographies?
   "Check if the shape uses any typography in the given library."
   [shape library-id]
@@ -70,6 +71,7 @@
              #(and (some? (:typography-ref-id %))
                    (= (:typography-ref-file %) library-id))))))
 
+;; FIXME: this function should not be here it belongs to shape and not typography
 (defn uses-library-typography?
   "Check if the shape uses the given library typography."
   [shape library-id typography-id]
@@ -93,13 +95,16 @@
                                    remap-typography
                                    content)))))
 
+(defn remove-typography-from-node
+  "Remove the typography reference from a node."
+  [node]
+  (dissoc node :typography-ref-file :typography-ref-id))
+
 (defn remove-external-typographies
   "Change the shape so that any use of an external typography now is removed"
   [shape file-id]
-  (let [remove-ref-file #(dissoc % :typography-ref-file :typography-ref-id)]
-
-    (update shape :content
-            (fn [content]
-              (txt/transform-nodes #(not= (:typography-ref-file %) file-id)
-                                   remove-ref-file
-                                   content)))))
+  (update shape :content
+          (fn [content]
+            (txt/transform-nodes #(not= (:typography-ref-file %) file-id)
+                                 remove-typography-from-node
+                                 content))))

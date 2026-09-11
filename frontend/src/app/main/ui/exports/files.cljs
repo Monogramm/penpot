@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.exports.files
   "The files export dialog/modal"
@@ -10,13 +10,17 @@
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
-   [app.config :as cf]
    [app.main.data.exports.files :as fexp]
    [app.main.data.modal :as modal]
    [app.main.store :as st]
+   [app.main.ui.ds.buttons.button :refer [button*]]
+   [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.foundations.assets.icon :as i]
+   [app.main.ui.ds.foundations.typography :as t]
+   [app.main.ui.ds.foundations.typography.heading :refer [heading*]]
+   [app.main.ui.ds.foundations.typography.text :refer [text*]]
    [app.main.ui.ds.product.loader :refer [loader*]]
-   [app.main.ui.icons :as i]
-   [app.main.worker :as uw]
+   [app.main.ui.notifications.context-notification :refer [context-notification]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer  [tr]]
    [beicon.v2.core :as rx]
@@ -43,35 +47,39 @@
   [files]
   (let [files (mapv (fn [file] (assoc file :loading true)) files)]
     {:status :prepare
-     :selected :all
+     :selected :include-libraries
      :files files}))
 
 (mf/defc export-entry*
-  {::mf/props :obj
-   ::mf/private true}
+  {::mf/private true}
   [{:keys [file]}]
-  [:div {:class (stl/css-case
-                 :file-entry true
-                 :loading  (:loading file)
-                 :success  (:export-success? file)
-                 :error    (:export-error? file))}
+  (let [level (cond
+                (:export-success? file) :success
+                (:export-error? file)   :error
+                :else                   :info)]
+    [:div {:class (stl/css-case
+                   :file-entry true
+                   :loading  (:loading file)
+                   :success  (:export-success? file)
+                   :error    (:export-error? file))}
 
-   [:div {:class (stl/css :file-name)}
-    (if (:loading file)
-      [:> loader*  {:width 16
-                    :title (tr "labels.loading")}]
-      [:span {:class (stl/css :file-icon)}
-       (cond (:export-success? file) i/tick
-             (:export-error? file)   i/close)])
+     (if (:loading file)
+       [:div {:class (stl/css :file-name)}
+        [:> loader*  {:width 26
+                      :title (tr "labels.loading")}]
+        [:> text* {:class (stl/css :file-name-label)
+                   :as "span"
+                   :typography t/body-large}
+         (:name file)]]
 
-    [:div {:class (stl/css :file-name-label)}
-     (:name file)]]])
+       [:> context-notification {:level level
+                                 :content (:name file)}])]))
 
-(mf/defc export-dialog*
+(mf/defc export-dialog
   {::mf/register modal/components
    ::mf/register-as ::fexp/export-files
    ::mf/props :obj}
-  [{:keys [team-id files features format]}]
+  [{:keys [team-id files]}]
   (let [state*       (mf/use-state (partial initialize-state files))
         has-libs?    (some :has-libraries files)
 
@@ -79,41 +87,19 @@
         selected     (:selected state)
         status       (:status state)
 
-        binary?      (not= format :legacy-zip)
-
-        ;; We've deprecated the merge option on non-binary files
-        ;; because it wasn't working and we're planning to remove this
-        ;; export in future releases.
-        export-types (if binary? fexp/valid-types [:all :detach])
-
         start-export
         (mf/use-fn
-         (mf/deps team-id selected files features)
+         (mf/deps team-id selected files)
          (fn []
            (swap! state* assoc :status :exporting)
-           (->> (uw/ask-many!
-                 {:cmd :export-files
-                  :format format
-                  :team-id team-id
-                  :features features
-                  :type selected
-                  :files files})
-                (rx/mapcat #(->> (rx/of %)
-                                 (rx/delay 1000)))
+           (->> (fexp/export-files :files files :type selected)
                 (rx/subs!
-                 (fn [msg]
-                   (cond
-                     (= :error (:type msg))
-                     (swap! state* update :files mark-file-error (:file-id msg))
-
-                     (= :finish (:type msg))
-                     (let [mtype (if (contains? cf/flags :export-file-v3)
-                                   "application/penpot"
-                                   (:mtype msg))
-                           fname (:filename msg)
-                           uri   (:uri msg)]
-                       (swap! state* update :files mark-file-success (:file-id msg))
-                       (dom/trigger-download-uri fname mtype uri))))))))
+                 (fn [{:keys [file-id error filename uri] :as result}]
+                   (if error
+                     (swap! state* update :files mark-file-error file-id)
+                     (do
+                       (swap! state* update :files mark-file-success file-id)
+                       (dom/trigger-download-uri filename "application/penpot" uri))))))))
 
         on-cancel
         (mf/use-fn
@@ -134,6 +120,7 @@
            (let [type (-> (dom/get-target event)
                           (dom/get-data "type")
                           (keyword))]
+             (prn "AAA" selected type)
              (swap! state* assoc :selected type))))]
 
     (mf/with-effect [has-libs?]
@@ -144,38 +131,59 @@
     [:div {:class (stl/css :modal-overlay)}
      [:div {:class (stl/css :modal-container)}
       [:div {:class (stl/css :modal-header)}
-       [:h2 {:class (stl/css :modal-title)}
-        (tr "dashboard.export.title")]
-       [:button {:class (stl/css :modal-close-btn)
-                 :on-click on-cancel} i/close]]
-
+       [:> heading* {:level 2
+                     :typography t/headline-large
+                     :class (stl/css :modal-title)}
+        (tr "files-download-modal.title")]
+       [:> icon-button* {:variant "ghost"
+                         :aria-label (tr "labels.close")
+                         :on-click on-cancel
+                         :class (stl/css :modal-close-btn)
+                         :icon i/close}]]
       (cond
         (= status :prepare)
         [:*
          [:div {:class (stl/css :modal-content)}
-          [:p {:class (stl/css :modal-msg)} (tr "dashboard.export.explain")]
-          [:p {:class (stl/css :modal-scd-msg)} (tr "dashboard.export.detail")]
+          ;; TODO: Add translation
+          [:> text* {:as "p" :typography t/body-large :class (stl/css :modal-msg)}
+           "What do you want to do with linked libraries?"]
 
-          (for [type export-types]
+          (for [type fexp/valid-types]
             [:div {:class (stl/css :export-option true)
                    :key (name type)}
              [:label {:for (str "export-" type)
-                      :class (stl/css-case :global/checked (= selected type))}
+                      :class (stl/css :export-option-label)}
               ;; Execution time translation strings:
-              ;;   (tr "dashboard.export.options.all.message")
-              ;;   (tr "dashboard.export.options.all.title")
-              ;;   (tr "dashboard.export.options.detach.message")
-              ;;   (tr "dashboard.export.options.detach.title")
-              ;;   (tr "dashboard.export.options.merge.message")
-              ;;   (tr "dashboard.export.options.merge.title")
-              [:span {:class (stl/css-case :global/checked (= selected type))}
+              ;;   (tr "files-export-modal.options.include-libraries.title")
+              ;;   (tr "files-export-modal.options.include-libraries.message")
+
+              ;;   (tr "files-export-modal.options.merge-libraries.title")
+              ;;   (tr "files-export-modal.options.merge-libraries.message")
+
+              ;;   (tr "files-export-modal.options.detach-libraries.title")
+              ;;   (tr "files-export-modal.options.detach-libraries.message")
+
+              ;;   (tr "files-export-modal.options.link-later.title")
+              ;;   (tr "files-export-modal.options.link-later.message")
+
+              [:span {:class (stl/css-case
+                              :option-icon-wrapper true
+                              :checked (= selected type))}
                (when (= selected type)
-                 i/status-tick)]
+                 [:svg {:class (stl/css :option-icon)
+                        :viewBox "0 0 8 8"
+                        :width 8
+                        :height 8
+                        :aria-hidden true}
+                  [:circle {:cx 4 :cy 4 :r 4}]])]
+
               [:div {:class (stl/css :option-content)}
-               [:h3 {:class (stl/css :modal-subtitle)}
-                (tr (dm/str "dashboard.export.options." (d/name type) ".title"))]
-               [:p  {:class (stl/css :modal-msg)}
-                (tr (dm/str "dashboard.export.options." (d/name type) ".message"))]]
+               [:> heading* {:level 3
+                             :typography t/body-large
+                             :class (stl/css :option-title)}
+                (tr (dm/str "files-export-modal.options." (d/name type) ".title"))]
+               [:> text* {:as "p" :typography t/body-large :class (stl/css :modal-msg)}
+                (tr (dm/str "files-export-modal.options." (d/name type) ".message"))]]
 
               [:input {:type "radio"
                        :class (stl/css :option-input)
@@ -187,26 +195,33 @@
 
          [:div {:class (stl/css :modal-footer)}
           [:div {:class (stl/css :action-buttons)}
-           [:input {:class (stl/css :cancel-button)
-                    :type "button"
-                    :value (tr "labels.cancel")
-                    :on-click on-cancel}]
+           [:> button* {:variant "secondary"
+                        :type "button"
+                        :on-click on-cancel}
+            (tr "labels.cancel")]
 
-           [:input {:class (stl/css :accept-btn)
-                    :type "button"
-                    :value (tr "labels.continue")
-                    :on-click on-accept}]]]]
+           [:> button* {:variant "primary"
+                        :type "button"
+                        :on-click on-accept}
+            (tr "labels.continue")]]]]
 
         (= status :exporting)
-        [:*
-         [:div {:class (stl/css :modal-content)}
-          (for [file (:files state)]
-            [:> export-entry* {:file file :key (dm/str (:id file))}])]
+        (let [in-progress? (->> state :files (some :loading))]
+          [:*
+           [:div {:class (stl/css :modal-content)}
+            (for [file (:files state)]
+              [:> export-entry* {:file file :key (dm/str (:id file))}])
 
-         [:div {:class (stl/css :modal-footer)}
-          [:div {:class (stl/css :action-buttons)}
-           [:input {:class (stl/css :accept-btn)
-                    :type "button"
-                    :value (tr "labels.close")
-                    :disabled (->> state :files (some :loading))
-                    :on-click on-cancel}]]]])]]))
+            (when in-progress?
+              [:> text* {:as "span" :typography t/body-large :class (stl/css :status-message)
+                         :role "status"
+                         :aria-live "polite"}
+               (tr "labels.downloading-file")])]
+
+           [:div {:class (stl/css :modal-footer)}
+            [:div {:class (stl/css :action-buttons)}
+             [:> button* {:variant "primary"
+                          :type "button"
+                          :disabled in-progress?
+                          :on-click on-cancel}
+              (tr "labels.close")]]]]))]]))

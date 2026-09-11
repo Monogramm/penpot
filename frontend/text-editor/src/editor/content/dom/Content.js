@@ -3,24 +3,30 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright (c) KALEIDOS INC
+ * Copyright (c) KALEIDOS SUBSIDIARY SL
  */
 
-import { createInline, isLikeInline } from "./Inline.js";
+import { createTextSpan, isLikeTextSpan } from "./TextSpan.js";
 import {
   createEmptyParagraph,
   createParagraph,
   isLikeParagraph,
 } from "./Paragraph.js";
 import { isDisplayBlock, normalizeStyles } from "./Style.js";
+import { sanitizeFontFamily } from "./Style.js";
+
+const DEFAULT_FONT_SIZE = "14px";
+const DEFAULT_FONT_WEIGHT = 400;
+const DEFAULT_FONT_FAMILY = "sourcesanspro";
+const DEFAULT_FILLS = '[["^ ","~:fill-color", "#000000","~:fill-opacity", 1]]';
 
 /**
  * Returns if the content fragment should be treated as
- * inline content and not a paragraphed one.
+ * text span content and not a paragraphed one.
  *
  * @returns {boolean}
  */
-function isContentFragmentFromDocumentInline(document) {
+function isContentFragmentFromDocumentTextSpan(document) {
   const nodeIterator = document.createNodeIterator(
     document.documentElement,
     NodeFilter.SHOW_ELEMENT,
@@ -32,7 +38,7 @@ function isContentFragmentFromDocumentInline(document) {
       continue;
     }
 
-    if (!isLikeInline(currentNode)) return false;
+    if (!isLikeTextSpan(currentNode)) return false;
 
     currentNode = nodeIterator.nextNode();
   }
@@ -48,10 +54,7 @@ function isContentFragmentFromDocumentInline(document) {
  * @returns {DocumentFragment}
  */
 export function mapContentFragmentFromDocument(document, root, styleDefaults) {
-  const nodeIterator = document.createNodeIterator(
-    root,
-    NodeFilter.SHOW_TEXT
-  );
+  const nodeIterator = document.createNodeIterator(root, NodeFilter.SHOW_TEXT);
   const fragment = document.createDocumentFragment();
 
   let currentParagraph = null;
@@ -73,20 +76,58 @@ export function mapContentFragmentFromDocument(document, root, styleDefaults) {
         currentParagraph = createParagraph(undefined, currentStyle);
       }
     }
+    const textSpan = createTextSpan(
+      new Text(currentNode.nodeValue),
+      currentStyle,
+    );
+    const fontSize = textSpan.style.getPropertyValue("font-size");
+    if (!fontSize) {
+      console.warn("font-size", fontSize);
+      textSpan.style.setProperty(
+        "font-size",
+        styleDefaults?.getPropertyValue("font-size") ?? DEFAULT_FONT_SIZE,
+      );
+    }
+    let fontFamily = textSpan.style.getPropertyValue("font-family");
+    if (!fontFamily) {
+      console.warn("font-family", fontFamily);
+      fontFamily =
+        styleDefaults?.getPropertyValue("font-family") ?? DEFAULT_FONT_FAMILY;
+    }
 
-    const inline = createInline(new Text(currentNode.nodeValue), currentStyle);
-    const fontSize = inline.style.getPropertyValue("font-size");
-    if (!fontSize) console.warn("font-size", fontSize);
-    currentParagraph.appendChild(inline);
+    fontFamily = sanitizeFontFamily(fontFamily);
+    textSpan.style.setProperty("font-family", fontFamily);
+
+    const fontWeight = textSpan.style.getPropertyValue("font-weight");
+    if (!fontWeight) {
+      console.warn("font-weight", fontWeight);
+      textSpan.style.setProperty(
+        "font-weight",
+        styleDefaults?.getPropertyValue("font-weight") ?? DEFAULT_FONT_WEIGHT,
+      );
+    }
+    const fills = textSpan.style.getPropertyValue("--fills");
+    if (!fills) {
+      console.warn("fills", fills);
+      textSpan.style.setProperty(
+        "--fills",
+        styleDefaults?.getPropertyValue("--fills") ?? DEFAULT_FILLS,
+      );
+    }
+
+    currentParagraph.appendChild(textSpan);
 
     currentNode = nodeIterator.nextNode();
   }
 
-  fragment.appendChild(currentParagraph);
+  if (currentParagraph) {
+    fragment.appendChild(currentParagraph);
+  }
+
   if (fragment.children.length === 1) {
-    const isContentInline = isContentFragmentFromDocumentInline(document);
-    if (isContentInline) {
-      currentParagraph.dataset.inline = "force";
+    const isContentTextSpan = isContentFragmentFromDocumentTextSpan(document);
+    if (isContentTextSpan) {
+      currentParagraph.dataset.textSpan = "force";
     }
   }
 
@@ -94,20 +135,87 @@ export function mapContentFragmentFromDocument(document, root, styleDefaults) {
 }
 
 /**
+ * Converts HTML to plain text, preserving line breaks from <br> tags and block elements.
+ *
+ * @param {string} html - The HTML string to convert
+ * @returns {string} Plain text with preserved line breaks
+ */
+export function htmlToText(html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+
+  const blockTags = [
+    "P",
+    "DIV",
+    "SECTION",
+    "ARTICLE",
+    "HEADER",
+    "FOOTER",
+    "UL",
+    "OL",
+    "LI",
+    "TABLE",
+    "TR",
+    "TD",
+    "TH",
+    "PRE",
+  ];
+
+  function walk(node) {
+    let text = "";
+
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        text += child.textContent;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.tagName === "BR") {
+          text += "\n";
+        }
+
+        if (blockTags.includes(child.tagName)) {
+          text += "\n" + walk(child) + "\n";
+          return;
+        }
+
+        text += walk(child);
+      }
+    });
+
+    return text;
+  }
+
+  let result = walk(tmp);
+  result = result.replace(/\n{3,}/g, "\n\n");
+
+  return result.trim();
+}
+
+/**
  * Maps any HTML into a valid content DOM element.
  *
  * @param {string} html
  * @param {CSSStyleDeclaration} [styleDefaults]
+ * @param {boolean} [allowHTMLPaste=false]
  * @returns {DocumentFragment}
  */
-export function mapContentFragmentFromHTML(html, styleDefaults) {
-  const parser = new DOMParser();
-  const htmlDocument = parser.parseFromString(html, "text/html");
-  return mapContentFragmentFromDocument(
-    htmlDocument,
-    htmlDocument.documentElement,
-    styleDefaults
-  );
+export function mapContentFragmentFromHTML(
+  html,
+  styleDefaults,
+  allowHTMLPaste,
+) {
+  if (allowHTMLPaste) {
+    try {
+      const parser = new DOMParser();
+      const document = parser.parseFromString(html, "text/html");
+      return mapContentFragmentFromDocument(document, styleDefaults);
+    } catch (error) {
+      console.error("Couldn't parse HTML", html, error);
+      const plainText = htmlToText(html);
+      return mapContentFragmentFromString(plainText, styleDefaults);
+    }
+  }
+  const plainText = htmlToText(html);
+  return mapContentFragmentFromString(plainText, styleDefaults);
 }
 
 /**
@@ -124,11 +232,12 @@ export function mapContentFragmentFromString(string, styleDefaults) {
     if (line === "") {
       fragment.appendChild(createEmptyParagraph(styleDefaults));
     } else {
-      fragment.appendChild(
-        createParagraph([
-          createInline(new Text(line), styleDefaults)
-        ], styleDefaults)
-      );
+      const textSpan = createTextSpan(new Text(line), styleDefaults);
+      const paragraph = createParagraph([textSpan], styleDefaults);
+      if (lines.length === 1) {
+        paragraph.dataset.textSpan = "force";
+      }
+      fragment.appendChild(paragraph);
     }
   }
   return fragment;

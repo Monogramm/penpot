@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.menus.constraints
   (:require-macros [app.main.style :as stl])
@@ -15,8 +15,8 @@
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.select :refer [select]]
-   [app.main.ui.components.title-bar :refer [title-bar]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.components.title-bar :refer [title-bar*]]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [cuerdas.core :as str]
@@ -28,7 +28,33 @@
                        :parent-id
                        :frame-id])
 
-(mf/defc constraints-menu
+(defn- check-constraints-menu-props
+  [old-props new-props]
+  (let [old-values (unchecked-get old-props "values")
+        new-values (unchecked-get new-props "values")]
+    (and (identical? (unchecked-get old-props "ids")
+                     (unchecked-get new-props "ids"))
+         (identical? (get old-values :constraints-h)
+                     (get new-values :constraints-h))
+         (identical? (get old-values :constraints-v)
+                     (get new-values :constraints-v))
+         (identical? (get old-values :fixed-scroll)
+                     (get new-values :fixed-scroll))
+         (identical? (get old-values :parent-id)
+                     (get new-values :parent-id))
+         (identical? (get old-values :frame-id)
+                     (get new-values :frame-id))
+         (identical? (get old-values :x)
+                     (get new-values :x))
+         (identical? (get old-values :y)
+                     (get new-values :y))
+         (identical? (get old-values :width)
+                     (get new-values :width))
+         (identical? (get old-values :height)
+                     (get new-values :height)))))
+
+(mf/defc constraints-menu*
+  {::mf/wrap [#(mf/memo' % check-constraints-menu-props)]}
   [{:keys [ids values] :as props}]
   (let [state*          (mf/use-state true)
         open?           (deref state*)
@@ -157,10 +183,10 @@
     (when in-frame?
       [:div {:class (stl/css :element-set)}
        [:div {:class (stl/css :element-title)}
-        [:& title-bar {:collapsable  true
-                       :collapsed    (not open?)
-                       :on-collapsed toggle-content
-                       :title        (tr "workspace.options.constraints")}]]
+        [:> title-bar* {:collapsable  true
+                        :collapsed    (not open?)
+                        :on-collapsed toggle-content
+                        :title        (tr "workspace.options.constraints")}]]
        (when open?
          [:div {:class (stl/css :element-set-content)}
           [:div {:class (stl/css :constraints-widget)}
@@ -206,7 +232,7 @@
                       :data-value "bottom"
                       :on-click on-constraint-button-clicked}
              [:span {:class (stl/css :resalted-area)}]]]]
-          [:div {:class (stl/css :contraints-selects)}
+          [:div {:class (stl/css :constraints-selects)}
            [:div {:class (stl/css :horizontal-select) :data-testid "constraint-h-select"}
             [:& select
              {:default-value (if (not= constraints-h :multiple) (d/nilv (d/name constraints-h) "scale") "")
@@ -225,7 +251,7 @@
                [:span {:class (stl/css-case :check-mark true
                                             :checked (:fixed-scroll values))}
                 (when (:fixed-scroll values)
-                  i/status-tick)]
+                  deprecated-icon/status-tick)]
                (tr "workspace.options.constraints.fix-when-scrolling")
                [:input {:type "checkbox"
                         :id "fixed-on-scroll"

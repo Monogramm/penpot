@@ -2,134 +2,48 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
-@import "../../../../ds/_sizes.scss";
+@use "ds/_sizes.scss" as *;
+@use "ds/_borders.scss" as *;
+@use "ds/typography.scss" as t;
+@use "../../../sidebar/common/sidebar.scss" as sidebar;
 
-.element-set {
-  margin: 0;
+.shadow-section {
+  @include sidebar.option-grid-structure;
 }
 
-.title-spacing-shadow {
-  margin: 0;
-  padding-left: $s-2;
+.shadow-title {
+  grid-column: span 8;
 }
 
-.element-set-content {
-  margin-top: $s-4;
-  @include flexColumn;
+.shadow-title-bar {
+  padding-inline-start: var(--sp-xxs);
 }
 
-.multiple-shadows {
-  @include flexRow;
+.shadow-content {
+  grid-column: span 8;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+  margin-block-start: var(--sp-xs);
 }
 
-.label {
-  @extend .mixed-bar;
-}
-
-.actions {
-  @include flexRow;
-}
-
-.shadow-element {
-  @include flexColumn;
-  position: relative;
-
-  --reorder-left-position: calc(-1 * var(--sp-m) - var(--sp-xxs));
-
-  &:hover {
-    --reorder-icon-visibility: visible;
-  }
-
-  &.dnd-over-top {
-    --reorder-top-display: block;
-  }
-
-  &.dnd-over-bot {
-    --reorder-bottom-display: block;
-  }
-}
-
-.basic-options {
-  @include flexRow;
-}
-
-.shadow-info {
+.shadow-multiple {
   display: flex;
   align-items: center;
-  gap: $s-1;
-  width: $s-188;
-  .more-options {
-    @extend .button-secondary;
-    height: $s-32;
-    width: $s-28;
-    border-radius: $br-8 0 0 $br-8;
-    svg {
-      @extend .button-icon;
-    }
-    &.selected {
-      background-color: var(--button-radio-background-color-active);
-      svg {
-        stroke: var(--button-radio-foreground-color-active);
-      }
-    }
-  }
-  .type-select {
-    padding: 0;
-    border-radius: 0 $br-8 $br-8 0;
-    flex-grow: 1;
-    .shadow-type-select {
-      flex-grow: 1;
-      border-radius: 0 $br-8 $br-8 0;
-    }
-  }
-
-  &.hidden {
-    .more-options {
-      @include hiddenElement;
-      border: $s-1 solid var(--input-border-color-disabled);
-    }
-    .type-select {
-      @include hiddenElement;
-      .shadow-type-select {
-        @include hiddenElement;
-        border: $s-1 solid var(--input-border-color-disabled);
-      }
-    }
-  }
+  gap: var(--sp-xs);
 }
 
-.shadow-advanced-options {
-  @include flexColumn;
-  width: $sz-252;
-}
+.shadow-multiple-label {
+  @include t.use-typography("body-small");
 
-.first-row,
-.second-row {
-  @include flexRow;
-  .offset-x-input,
-  .blur-input,
-  .spread-input,
-  .offset-y-input {
-    @extend .input-element;
-    @include bodySmallTypography;
-    width: $s-60;
-    min-width: $s-60;
-    align-items: baseline;
-    input {
-      width: $s-32;
-    }
-  }
-  .blur-input,
-  .spread-input {
-    width: $s-92;
-    .input-label {
-      width: $s-44;
-    }
-  }
-  .spread-input {
-    gap: $s-8;
-  }
+  display: flex;
+  align-items: center;
+  flex-grow: 1;
+  border-radius: $br-8;
+  block-size: $sz-32;
+  padding: var(--sp-s);
+  background-color: var(--color-background-tertiary);
+  color: var(--color-foreground-primary);
 }

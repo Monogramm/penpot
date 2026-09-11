@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.db
   (:refer-clojure :exclude [get run!])
@@ -10,36 +10,43 @@
    [app.common.data :as d]
    [app.common.exceptions :as ex]
    [app.common.geom.point :as gpt]
+   [app.common.json :as json]
    [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.transit :as t]
    [app.common.uuid :as uuid]
    [app.db.sql :as sql]
    [app.metrics :as mtx]
-   [app.util.json :as json]
-   [app.util.time :as dt]
    [clojure.java.io :as io]
    [clojure.set :as set]
    [integrant.core :as ig]
    [next.jdbc :as jdbc]
-   [next.jdbc.date-time :as jdbc-dt])
+   [next.jdbc.date-time :as jdbc-dt]
+   [next.jdbc.prepare :as jdbc.prepare]
+   [next.jdbc.transaction])
   (:import
    com.zaxxer.hikari.HikariConfig
+   com.zaxxer.hikari.HikariConfigMXBean
    com.zaxxer.hikari.HikariDataSource
+   com.zaxxer.hikari.HikariPoolMXBean
    com.zaxxer.hikari.metrics.prometheus.PrometheusMetricsTrackerFactory
-   io.whitfin.siphash.SipHasher
-   io.whitfin.siphash.SipHasherContainer
+   io.whitfin.siphash.SipHash
+   io.whitfin.siphash.SipHashContext
    java.io.InputStream
    java.io.OutputStream
    java.sql.Connection
+   java.sql.PreparedStatement
    java.sql.Savepoint
-   org.postgresql.PGConnection
    org.postgresql.geometric.PGpoint
    org.postgresql.jdbc.PgArray
    org.postgresql.largeobject.LargeObject
    org.postgresql.largeobject.LargeObjectManager
+   org.postgresql.PGConnection
    org.postgresql.util.PGInterval
    org.postgresql.util.PGobject))
+
+(def ^:dynamic *conn* nil)
 
 (declare open)
 (declare create-pool)
@@ -62,9 +69,8 @@
 
 (def defaults
   {::name :main
-   ::min-size 0
    ::max-size 60
-   ::connection-timeout 10000
+   ::connection-timeout 30000
    ::validation-timeout 10000
    ::idle-timeout 120000 ; 2min
    ::max-lifetime 1800000 ; 30m
@@ -77,7 +83,7 @@
 (defmethod ig/init-key ::pool
   [_ cfg]
   (let [{:keys [::uri ::read-only] :as cfg}
-        (merge defaults cfg)]
+        (merge defaults (d/without-nils cfg))]
     (when uri
       (l/info :hint "initialize connection pool"
               :name (d/name (::name cfg))
@@ -85,7 +91,8 @@
               :read-only read-only
               :credentials (and (contains? cfg ::username)
                                 (contains? cfg ::password))
-              :min-size (::min-size cfg)
+              :min-size (or (::min-size cfg)
+                            (::max-size cfg))
               :max-size (::max-size cfg))
       (create-pool cfg))))
 
@@ -106,7 +113,9 @@
   [{:keys [::uri] :as cfg}]
 
   ;; (app.common.pprint/pprint cfg)
-  (let [config (HikariConfig.)]
+  (let [config   (HikariConfig.)
+        max-size (::max-size cfg)
+        min-size (or (::min-size cfg) max-size)]
     (doto config
       (.setJdbcUrl           (str "jdbc:" uri))
       (.setPoolName          (d/name (::name cfg)))
@@ -116,8 +125,8 @@
       (.setValidationTimeout (::validation-timeout cfg))
       (.setIdleTimeout       (::idle-timeout cfg))
       (.setMaxLifetime       (::max-lifetime cfg))
-      (.setMinimumIdle       (::min-size cfg))
-      (.setMaximumPoolSize   (::max-size cfg))
+      (.setMinimumIdle       min-size)
+      (.setMaximumPoolSize   max-size)
       (.setConnectionInitSql initsql)
       (.setInitializationFailTimeout -1))
 
@@ -175,6 +184,20 @@
               :code :invalid-connection
               :hint "invalid connection provided")))
 
+(defn pool-stats
+  "Given a HikariDataSource instance, returns a map with current pool
+  statistics: active/idle connections, threads awaiting connection,
+  total connections, maximum pool size, and minimum idle connections."
+  [^HikariDataSource pool]
+  (let [^HikariPoolMXBean pool-mxbean (.getHikariPoolMXBean pool)
+        ^HikariConfigMXBean cfg-mxbean  (.getHikariConfigMXBean pool)]
+    {:active-connections        (.getActiveConnections pool-mxbean)
+     :idle-connections          (.getIdleConnections pool-mxbean)
+     :threads-awaiting-connection (.getThreadsAwaitingConnection pool-mxbean)
+     :total-connections         (.getTotalConnections pool-mxbean)
+     :maximum-pool-size         (.getMaximumPoolSize cfg-mxbean)
+     :minimum-idle              (.getMinimumIdle cfg-mxbean)}))
+
 (defn create-pool
   [cfg]
   (let [dsc (create-datasource-config cfg)]
@@ -222,16 +245,6 @@
   (make-output-stream [lobj opts]
     (let [^OutputStream os (.getOutputStream ^LargeObject lobj)]
       (io/make-output-stream os opts))))
-
-(defmacro with-atomic
-  [& args]
-  (if (symbol? (first args))
-    (let [cfgs (first args)
-          body (rest args)]
-      `(jdbc/with-transaction [conn# (::pool ~cfgs)]
-         (let [~cfgs (assoc ~cfgs ::conn conn#)]
-           ~@body)))
-    `(jdbc/with-transaction ~@args)))
 
 (defn open
   [system-or-pool]
@@ -303,7 +316,7 @@
 (defn insert!
   "A helper that builds an insert sql statement and executes it. By
   default returns the inserted row with all the field; you can delimit
-  the returned columns with the `::columns` option."
+  the returned columns with the `::sql/columns` option."
   [ds table params & {:as opts}]
   (let [conn (get-connectable ds)
         sql  (sql/insert table params opts)
@@ -318,7 +331,10 @@
 
   This expands to a single SQL statement with placeholders for every
   value being inserted. For large data sets, this may exceed the limit
-  of sql string size and/or number of parameters."
+  of sql string size and/or number of parameters.
+
+  See `insert-many-chunked!` for a safe alternative that automatically
+  partitions rows to stay within the parameter limit."
   [ds table cols rows & {:as opts}]
   (let [conn (get-connectable ds)
         sql  (sql/insert-many table cols rows opts)
@@ -327,6 +343,24 @@
                (into default-insert-opts (rename-opts opts)))
         opts (update opts :return-keys boolean)]
     (jdbc/execute! conn sql opts)))
+
+(def ^:private default-max-params
+  "PostgreSQL PreparedStatement parameter limit."
+  65535)
+
+(defn insert-many-chunked!
+  "Like `insert-many!` but partitions rows into chunks that stay within
+  PostgreSQL's 65,535 PreparedStatement parameter limit.
+
+  The chunk size is computed as `floor(max-params / num-columns)`,
+  so callers do not need to calculate it. All chunks execute within
+  the same transaction when called inside `tx-run!`."
+  [ds table cols rows & {:keys [max-params] :as opts
+                         :or   {max-params default-max-params}}]
+  (let [chunk-size (quot max-params (count cols))
+        opts       (dissoc opts :max-params)]
+    (doseq [chunk (partition-all chunk-size rows)]
+      (apply insert-many! ds table cols chunk (mapcat identity opts)))))
 
 (defn update!
   "A helper that build an UPDATE SQL statement and executes it.
@@ -384,9 +418,7 @@
 
 (defn is-row-deleted?
   [{:keys [deleted-at]}]
-  (and (dt/instant? deleted-at)
-       (< (inst-ms deleted-at)
-          (inst-ms (dt/now)))))
+  (some? deleted-at))
 
 (defn get*
   "Retrieve a single row from database that matches a simple filters. Do
@@ -411,9 +443,26 @@
                 :hint "database object not found"))
     row))
 
+(defn get-with-sql
+  [ds sql & {:as opts}]
+  (let [rows
+        (cond->> (exec! ds sql opts)
+          (::remove-deleted opts true)
+          (remove is-row-deleted?)
+
+          :always
+          (not-empty))]
+
+    (when (and (not rows) (::throw-if-not-exists opts true))
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "database object not found"))
+
+    (first rows)))
+
 (def ^:private default-plan-opts
   (-> default-opts
-      (assoc :fetch-size 1)
+      (assoc :fetch-size 1000)
       (assoc :concurrency :read-only)
       (assoc :cursors :close)
       (assoc :result-type :forward-only)))
@@ -535,52 +584,40 @@
      (l/trc :hint "explicit rollback requested (savepoint)")
      (.rollback conn sp))))
 
+(defn transact!
+  "A lower-level function for executing function in a transaction"
+  ([transactable f] (transact! transactable f {}))
+  ([transactable f opts]
+   (binding [next.jdbc.transaction/*nested-tx* :ignore]
+     (jdbc/transact transactable f opts))))
+
 (defn tx-run!
+  "Run a function in a transaction."
   [system f & params]
-  (cond
-    (connection? system)
+  (if (connection? system)
     (tx-run! {::conn system} f)
-
-    (pool? system)
-    (tx-run! {::pool system} f)
-
-    (::conn system)
-    (let [conn (::conn system)
-          sp   (savepoint conn)]
-      (try
-        (let [system' (-> system
-                          (assoc ::savepoint sp)
-                          (dissoc ::rollback))
-              result  (apply f system' params)]
-          (if (::rollback system)
-            (rollback! conn sp)
-            (release! conn sp))
-          result)
-        (catch Throwable cause
-          (.rollback ^Connection conn ^Savepoint sp)
-          (throw cause))))
-
-    (::pool system)
-    (with-atomic [conn (::pool system)]
-      (let [system' (-> system
-                        (assoc ::conn conn)
-                        (dissoc ::rollback))
-            result  (apply f system' params)]
-        (when (::rollback system)
-          (rollback! conn))
-        result))
-
-    :else
-    (throw (IllegalArgumentException. "invalid system/cfg provided"))))
+    (if (pool? system)
+      (tx-run! {::pool system} f)
+      (if-let [conn (or (::conn system)
+                        (::pool system))]
+        (transact! conn
+                   (fn [conn]
+                     (let [system' (-> system
+                                       (dissoc ::rollback)
+                                       (assoc ::conn conn))]
+                       (apply f system' params)))
+                   {:rollback-only (::rollback system)
+                    :read-only (::read-only system)})
+        (throw (IllegalArgumentException. "invalid system/cfg provided"))))))
 
 (defn run!
   [system f & params]
   (cond
     (connection? system)
-    (run! {::conn system} f)
+    (apply run! {::conn system} f params)
 
     (pool? system)
-    (run! {::pool system} f)
+    (apply run! {::pool system} f params)
 
     (::conn system)
     (apply f system params)
@@ -604,7 +641,7 @@
     (string? o)
     (pginterval o)
 
-    (dt/duration? o)
+    (ct/duration? o)
     (interval (inst-ms o))
 
     :else
@@ -618,7 +655,7 @@
           val (.getValue o)]
       (if (or (= typ "json")
               (= typ "jsonb"))
-        (json/decode val)
+        (json/decode val :key-fn keyword)
         val))))
 
 (defn decode-transit-pgobject
@@ -659,17 +696,17 @@
   (when data
     (doto (org.postgresql.util.PGobject.)
       (.setType "jsonb")
-      (.setValue (json/encode-str data)))))
+      (.setValue (json/encode data)))))
 
 ;; --- Locks
 
 (def ^:private siphash-state
-  (SipHasher/container
-   (uuid/get-bytes uuid/zero)))
+  (SipHash/context
+    (uuid/get-bytes uuid/zero)))
 
 (defn uuid->hash-code
   [o]
-  (.hash ^SipHasherContainer siphash-state
+  (.hash ^SipHashContext siphash-state
          ^bytes (uuid/get-bytes o)))
 
 (defn- xact-check-param
@@ -705,3 +742,14 @@
   [cause]
   (and (sql-exception? cause)
        (= "40001" (.getSQLState ^java.sql.SQLException cause))))
+
+(defn duplicate-key-error?
+  [cause]
+  (and (sql-exception? cause)
+       (= "23505" (.getSQLState ^java.sql.SQLException cause))))
+
+
+(extend-protocol jdbc.prepare/SettableParameter
+  clojure.lang.Keyword
+  (set-parameter [^clojure.lang.Keyword v ^PreparedStatement s ^long i]
+    (.setObject s i ^String (d/name v))))

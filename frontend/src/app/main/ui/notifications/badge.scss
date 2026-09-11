@@ -2,35 +2,39 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
 
 .badge-notification {
-  @include smallTitleTipography;
+  @include deprecated.small-title-typography;
+
   --badge-notification-bg-color: var(--alert-background-color-default);
   --badge-notification-fg-color: var(--alert-text-foreground-color-default);
   --badge-notification-border-color: var(--alert-border-color-default);
+
   box-sizing: border-box;
   display: grid;
   place-items: center;
   grid-template-columns: 1fr;
-  min-height: $s-32;
+  min-height: deprecated.$s-32;
   height: fit-content;
-  min-width: $s-80;
+  min-width: deprecated.$s-80;
   width: fit-content;
-  padding: 0;
+  padding-block: 0;
+  padding-inline: var(--sp-xs);
   margin: 0;
-  border: $s-1 solid var(--badge-notification-border-color);
-  border-radius: $br-8;
+  border: deprecated.$s-1 solid var(--badge-notification-border-color);
+  border-radius: deprecated.$br-8;
   background-color: var(--badge-notification-bg-color);
   color: var(--badge-notification-fg-color);
 }
 
 .small {
-  @include bodySmallTypography;
-  min-height: $s-20;
-  border-radius: $br-6;
+  @include deprecated.body-small-typography;
+
+  min-height: deprecated.$s-20;
+  border-radius: deprecated.$br-6;
 }
 
 .warning {

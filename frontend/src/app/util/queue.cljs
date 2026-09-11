@@ -2,15 +2,15 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.queue
   "Low-Level queuing mechanism, mainly used for process thumbnails"
   (:require
    [app.common.logging :as l]
    [app.common.math :as mth]
+   [app.common.time :as ct]
    [app.util.object :as obj]
-   [app.util.time :as t]
    [beicon.v2.core :as rx]))
 
 (l/set-level! :info)
@@ -65,7 +65,7 @@
         item           (.shift ^js items)]
 
     (when (some? item)
-      (let [tp  (t/tpoint-ms)
+      (let [tp  (ct/tpoint-ms)
             f   (unchecked-get item "f")
             res (unchecked-get item "result")]
         (rx/subscribe (f)

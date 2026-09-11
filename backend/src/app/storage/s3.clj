@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.storage.s3
   "S3 Storage backend implementation."
@@ -12,11 +12,11 @@
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uri :as u]
    [app.storage :as-alias sto]
    [app.storage.impl :as impl]
    [app.storage.tmp :as tmp]
-   [app.util.time :as dt]
    [app.worker :as-alias wrk]
    [clojure.java.io :as io]
    [datoteka.fs :as fs]
@@ -30,32 +30,34 @@
    java.nio.file.Path
    java.time.Duration
    java.util.Collection
+   java.util.concurrent.atomic.AtomicLong
    java.util.Optional
    org.reactivestreams.Subscriber
-   software.amazon.awssdk.core.ResponseBytes
+   software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider
    software.amazon.awssdk.core.async.AsyncRequestBody
    software.amazon.awssdk.core.async.AsyncResponseTransformer
    software.amazon.awssdk.core.async.BlockingInputStreamAsyncRequestBody
    software.amazon.awssdk.core.client.config.ClientAsyncConfiguration
-   software.amazon.awssdk.core.client.config.SdkAdvancedAsyncClientOption
+   software.amazon.awssdk.core.ResponseBytes
    software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
    software.amazon.awssdk.http.nio.netty.SdkEventLoopGroup
    software.amazon.awssdk.regions.Region
-   software.amazon.awssdk.services.s3.S3AsyncClient
-   software.amazon.awssdk.services.s3.S3AsyncClientBuilder
-   software.amazon.awssdk.services.s3.S3Configuration
    software.amazon.awssdk.services.s3.model.Delete
    software.amazon.awssdk.services.s3.model.DeleteObjectRequest
    software.amazon.awssdk.services.s3.model.DeleteObjectsRequest
    software.amazon.awssdk.services.s3.model.DeleteObjectsResponse
    software.amazon.awssdk.services.s3.model.GetObjectRequest
+   software.amazon.awssdk.services.s3.model.HeadObjectRequest
    software.amazon.awssdk.services.s3.model.NoSuchKeyException
    software.amazon.awssdk.services.s3.model.ObjectIdentifier
    software.amazon.awssdk.services.s3.model.PutObjectRequest
    software.amazon.awssdk.services.s3.model.S3Error
-   software.amazon.awssdk.services.s3.presigner.S3Presigner
    software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest
-   software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest))
+   software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest
+   software.amazon.awssdk.services.s3.presigner.S3Presigner
+   software.amazon.awssdk.services.s3.S3AsyncClient
+   software.amazon.awssdk.services.s3.S3AsyncClientBuilder
+   software.amazon.awssdk.services.s3.S3Configuration))
 
 (def ^:private max-retries
   "A maximum number of retries on internal operations"
@@ -69,7 +71,7 @@
   20000)
 
 (def default-timeout
-  (dt/duration {:seconds 30}))
+  (ct/duration {:seconds 30}))
 
 (declare put-object)
 (declare get-object-bytes)
@@ -77,6 +79,7 @@
 (declare get-object-url)
 (declare del-object)
 (declare del-object-in-bulk)
+(declare head-object)
 (declare build-s3-client)
 (declare build-s3-presigner)
 
@@ -87,12 +90,11 @@
 
 (def ^:private schema:config
   [:map {:title "s3-backend-config"}
-   ::wrk/executor
+   ::wrk/netty-io-executor
    [::region {:optional true} :keyword]
    [::bucket {:optional true} ::sm/text]
    [::prefix {:optional true} ::sm/text]
-   [::endpoint {:optional true} ::sm/uri]
-   [::io-threads {:optional true} ::sm/int]])
+   [::endpoint {:optional true} ::sm/uri]])
 
 (defmethod ig/expand-key ::backend
   [k v]
@@ -110,6 +112,7 @@
           presigner (build-s3-presigner params)]
       (assoc params
              ::sto/type :s3
+             ::counter (AtomicLong. 0)
              ::client @client
              ::presigner presigner
              ::close-fn #(.close ^java.lang.AutoCloseable client)))))
@@ -121,7 +124,7 @@
 (defmethod ig/halt-key! ::backend
   [_ {:keys [::close-fn]}]
   (when (fn? close-fn)
-    (px/run! close-fn)))
+    (close-fn)))
 
 (def ^:private schema:backend
   [:map {:title "s3-backend"}
@@ -185,10 +188,46 @@
   [backend object]
   (p/await! (del-object backend object)))
 
+(defmethod impl/exists-object? :s3
+  [backend object]
+  (assert (valid-backend? backend) "expected a valid backend instance")
+  (loop [result (p/await (head-object backend object))
+         retryn 0]
+    (if (ex/exception? result)
+      (cond
+        ;; A missing key is a definitive answer, no need to retry.
+        (ex/instance? NoSuchKeyException result)
+        false
+
+        ;; Any other error is considered transient and retried.
+        (< retryn max-retries)
+        (do
+          (Thread/sleep (* 100 (inc retryn)))
+          (recur (p/await (head-object backend object)) (inc retryn)))
+
+        :else
+        (throw result))
+      true)))
+
 (defmethod impl/del-objects-in-bulk :s3
   [backend ids]
   (assert (valid-backend? backend) "expected a valid backend instance")
-  (p/await! (del-object-in-bulk backend ids)))
+  (let [key->id (into {} (map (fn [id]
+                                [(str (::prefix backend) (impl/id->path id)) id]))
+                      ids)
+        result  (try
+                  (p/await! (del-object-in-bulk backend ids))
+                  (catch Throwable cause
+                    (l/err :hint "error on s3 bulk deletion"
+                           :ids ids
+                           :cause cause)
+                    ::network-error))]
+    (cond
+      (= ::network-error result) (set ids)
+      (map? result)              (into #{} (map (fn [{:keys [key]}]
+                                                  (get key->id key)))
+                                       (:errors result))
+      :else                      #{})))
 
 ;; --- HELPERS
 
@@ -198,19 +237,17 @@
   (Region/of (name region)))
 
 (defn- build-s3-client
-  [{:keys [::region ::endpoint ::io-threads ::wrk/executor]}]
-  (let [aconfig  (-> (ClientAsyncConfiguration/builder)
-                     (.advancedOption SdkAdvancedAsyncClientOption/FUTURE_COMPLETION_EXECUTOR executor)
+  [{:keys [::region ::endpoint ::wrk/netty-io-executor]}]
+  (let [creds-provider (DefaultCredentialsProvider/create)
+        aconfig  (-> (ClientAsyncConfiguration/builder)
                      (.build))
 
         sconfig  (-> (S3Configuration/builder)
                      (cond-> (some? endpoint) (.pathStyleAccessEnabled true))
                      (.build))
 
-        thr-num  (or io-threads (min 16 (px/get-available-processors)))
         hclient  (-> (NettyNioAsyncHttpClient/builder)
-                     (.eventLoopGroupBuilder (-> (SdkEventLoopGroup/builder)
-                                                 (.numberOfThreads (int thr-num))))
+                     (.eventLoopGroup (SdkEventLoopGroup/create netty-io-executor))
                      (.connectionAcquisitionTimeout default-timeout)
                      (.connectionTimeout default-timeout)
                      (.readTimeout default-timeout)
@@ -224,6 +261,7 @@
                        builder (.asyncConfiguration ^S3AsyncClientBuilder builder ^ClientAsyncConfiguration aconfig)
                        builder (.httpClient ^S3AsyncClientBuilder builder ^NettyNioAsyncHttpClient hclient)
                        builder (.region ^S3AsyncClientBuilder builder (lookup-region region))
+                       builder (.credentialsProvider ^S3AsyncClientBuilder builder creds-provider)
                        builder (cond-> ^S3AsyncClientBuilder builder
                                  (some? endpoint)
                                  (.endpointOverride (URI. (str endpoint))))]
@@ -240,7 +278,8 @@
 
 (defn- build-s3-presigner
   [{:keys [::region ::endpoint]}]
-  (let [config (-> (S3Configuration/builder)
+  (let [creds-provider (DefaultCredentialsProvider/create)
+        config (-> (S3Configuration/builder)
                    (cond-> (some? endpoint) (.pathStyleAccessEnabled true))
                    (.build))]
 
@@ -248,6 +287,7 @@
         (cond-> (some? endpoint) (.endpointOverride (URI. (str endpoint))))
         (.region (lookup-region region))
         (.serviceConfiguration ^S3Configuration config)
+        (.credentialsProvider creds-provider)
         (.build))))
 
 (defn- write-input-stream
@@ -262,7 +302,7 @@
       (.close ^InputStream input))))
 
 (defn- make-request-body
-  [executor content]
+  [counter content]
   (let [size (impl/get-size content)]
     (reify
       AsyncRequestBody
@@ -272,16 +312,19 @@
       (^void subscribe [_ ^Subscriber subscriber]
         (let [delegate (AsyncRequestBody/forBlockingInputStream (long size))
               input    (io/input-stream content)]
-          (px/run! executor (partial write-input-stream delegate input))
+
+          (px/thread-call (partial write-input-stream delegate input)
+                          {:name (str "penpot/storage/" (.getAndIncrement ^AtomicLong counter))})
+
           (.subscribe ^BlockingInputStreamAsyncRequestBody delegate
                       ^Subscriber subscriber))))))
 
 (defn- put-object
-  [{:keys [::client ::bucket ::prefix ::wrk/executor]} {:keys [id] :as object} content]
+  [{:keys [::client ::bucket ::prefix ::counter]} {:keys [id] :as object} content]
   (let [path    (dm/str prefix (impl/id->path id))
         mdata   (meta object)
         mtype   (:content-type mdata "application/octet-stream")
-        rbody   (make-request-body executor content)
+        rbody   (make-request-body counter content)
         request (.. (PutObjectRequest/builder)
                     (bucket bucket)
                     (contentType mtype)
@@ -325,6 +368,14 @@
                          ^AsyncResponseTransformer rxf)
              (p/fmap #(.asInputStream ^ResponseBytes %)))))))
 
+(defn- head-object
+  [{:keys [::client ::bucket ::prefix]} {:keys [id]}]
+  (let [hor (.. (HeadObjectRequest/builder)
+                (bucket bucket)
+                (key (str prefix (impl/id->path id)))
+                (build))]
+    (.headObject ^S3AsyncClient client ^HeadObjectRequest hor)))
+
 (defn- get-object-bytes
   [{:keys [::client ::bucket ::prefix]} {:keys [id]}]
   (let [gor (.. (GetObjectRequest/builder)
@@ -338,16 +389,24 @@
          (p/fmap #(.asByteArray ^ResponseBytes %)))))
 
 (def default-max-age
-  (dt/duration {:minutes 10}))
+  (ct/duration {:minutes 10}))
 
 (defn- get-object-url
-  [{:keys [::presigner ::bucket ::prefix]} {:keys [id]} {:keys [max-age] :or {max-age default-max-age}}]
-  (assert (dt/duration? max-age) "expected valid duration instance")
+  [{:keys [::presigner ::bucket ::prefix]} {:keys [id]}
+   {:keys [max-age content-disposition] :or {max-age default-max-age}}]
+  (assert (ct/duration? max-age) "expected valid duration instance")
 
-  (let [gor  (.. (GetObjectRequest/builder)
+  ;; The content-disposition option is signed into the presigned url, so the
+  ;; object store sets that header on the response the client fetches after
+  ;; following the redirect. It is only set when asked for, so urls for
+  ;; objects served inline stay byte identical to before.
+  (let [gorb (.. (GetObjectRequest/builder)
                  (bucket bucket)
-                 (key (dm/str prefix (impl/id->path id)))
-                 (build))
+                 (key (dm/str prefix (impl/id->path id))))
+        gorb (cond-> gorb
+               (some? content-disposition)
+               (.responseContentDisposition ^String content-disposition))
+        gor  (.build gorb)
         gopr (.. (GetObjectPresignRequest/builder)
                  (signatureDuration ^Duration max-age)
                  (getObjectRequest ^GetObjectRequest gor)
@@ -366,12 +425,11 @@
 
 (defn- del-object-in-bulk
   [{:keys [::bucket ::client ::prefix]} ids]
-
-  (let [oids (map (fn [id]
-                    (.. (ObjectIdentifier/builder)
-                        (key (str prefix (impl/id->path id)))
-                        (build)))
-                  ids)
+  (let [oids (mapv (fn [id]
+                     (.. (ObjectIdentifier/builder)
+                         (key (str prefix (impl/id->path id)))
+                         (build)))
+                   ids)
         delc (.. (Delete/builder)
                  (objects ^Collection oids)
                  (build))
@@ -379,14 +437,9 @@
                  (bucket bucket)
                  (delete ^Delete delc)
                  (build))]
-
     (->> (.deleteObjects ^S3AsyncClient client ^DeleteObjectsRequest dor)
-         (p/fmap (fn [dres]
-                   (when (.hasErrors ^DeleteObjectsResponse dres)
-                     (let [errors (seq (.errors ^DeleteObjectsResponse dres))]
-                       (ex/raise :type :internal
-                                 :code :error-on-s3-bulk-delete
-                                 :s3-errors (mapv (fn [^S3Error error]
-                                                    {:key (.key error)
-                                                     :msg (.message error)})
-                                                  errors)))))))))
+         (p/fmap (fn [^DeleteObjectsResponse dres]
+                   (when (.hasErrors dres)
+                     {:errors (mapv (fn [^S3Error e]
+                                      {:key (.key e) :msg (.message e)})
+                                    (.errors dres))}))))))

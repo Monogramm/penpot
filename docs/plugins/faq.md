@@ -1,6 +1,7 @@
 ---
 layout: layouts/plugins.njk
 title: 6. FAQ
+desc: Find answers to common questions about plugin development, from choosing the right Node version to creating components. See Penpot plugins!
 ---
 
 # FAQ
@@ -39,7 +40,7 @@ The plugin <a target="_blank" href="https://www.npmjs.com/package/@penpot/plugin
 
 ### Is the API ready to use the prototyping features?
 
-Absolutely! You can definitely create flows and interactions in the same elements as in the interface, like frames, shapes, and groups. Just check out the API documentation for the methods: createFlow, addInteraction, or removeInteraction. And if you need more help, you can always check out the <a target="_blank" href="https://penpot-plugins-api-doc.pages.dev/interfaces/PenpotFlow">PenpotFlow</a> or <a target="_blank" href="https://penpot-plugins-api-doc.pages.dev/interfaces/PenpotInteraction">PenpotInteraction</a> interfaces.
+Absolutely! You can definitely create flows and interactions in the same elements as in the interface, like frames, shapes, and groups. Just check out the API documentation for the methods: createFlow, addInteraction, or removeInteraction. And if you need more help, you can always check out the <a target="_blank" href="https://doc.plugins.penpot.app/interfaces/Flow">Flow</a> or <a target="_blank" href="https://doc.plugins.penpot.app/interfaces/Interaction">Interaction</a> interfaces.
 
 ### Are there any security or quality criteria I should be aware of?
 
@@ -47,7 +48,8 @@ There are no set requirements. However, we can recommend the use of <a target="_
 
 ### Is it necessary to create plugins with a UI?
 
-No, it’s completely optional, in fact, we have an example of a plugin without UI. Try the plugin using this url to install it: <code class="language-js">https:\/\/create-palette-penpot-plugin.pages.dev/assets/manifest.json</code> or check the code <a target="_blank" href="https://github.com/penpot/penpot-plugins/tree/main/apps/create-palette-plugin">here</a>
+No, it’s completely optional, in fact, we have an example of a plugin without UI. Try the plugin using this url to install it: <code class="language-js">https:\/\/create-palette.plugins.penpot.app/assets/manifest.json</code> or check the code <a target="_blank" href="https://github.com/penpot/penpot/tree/main/plugins/apps/create-palette-plugin">here</a>
+
 
 ### Can I create components?
 
@@ -57,11 +59,11 @@ Yes, it is possible to create components using:
 createComponent(shapes: Shape[]): LibraryComponent;
 ```
 
-Take a look at the Penpot Library methods in the <a target="_blank" href="https://penpot-plugins-api-doc.pages.dev/interfaces/Library">API documentation</a> or this <a target="_blank" href="https://github.com/penpot/penpot-plugins-samples/tree/main/components-library">simple example</a>.
+Take a look at the Penpot Library methods in the <a target="_blank" href="https://doc.plugins.penpot.app/interfaces/Library">API documentation</a> or this <a target="_blank" href="https://github.com/penpot/penpot-plugins-samples/tree/main/components-library">simple example</a>.
 
 ### Is there a place where I can share my plugin?
 
-You will be able to share your plugin with the <a target="_blank" href="https://community.penpot.app/">Penpot community</a>. In the future, we plan to create a place where we will publish the plugins we know about, but this is still something we have to define.
+<a target="_blank" href="https://penpot.app/penpothub">Penpot Hub</a> is where you can share plugins, templates and libraries all made possible through open-source collaboration. To add your plugin to our catalog, simply fill out <a target="_blank" href="https://penpot.app/penpothub/plugins/create-plugin">this form</a> with your plugin's details.
 
 ### My plugin works on my local machine, but I couldn’t install it on Penpot. What could be the problem?
 

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.components.forms
   (:require-macros [app.main.style :as stl])
@@ -11,7 +11,7 @@
    [app.common.data.macros :as dm]
    [app.main.ui.components.select :as cs]
    [app.main.ui.hooks :as hooks]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.forms :as fm]
    [app.util.i18n :as i18n :refer [tr]]
@@ -32,6 +32,9 @@
         input-name   (get props :name)
         more-classes (get props :class)
         auto-focus?  (get props :auto-focus? false)
+        input-ref    (mf/use-ref nil)
+
+        data-testid  (d/nilv data-testid input-name)
 
         form         (or form (mf/use-ctx form-ctx))
 
@@ -45,19 +48,22 @@
                          (= @type' "email"))
         placeholder  (when is-text? (or placeholder label))
 
-        touched?     (get-in @form [:touched input-name])
-        error        (get-in @form [:errors input-name])
+        touched?     (and (contains? (:data @form) input-name)
+                          (get-in @form [:touched input-name]))
+
+        error        (or (get-in @form [:errors input-name])
+                         (get-in @form [:extra-errors input-name]))
 
         value        (get-in @form [:data input-name] "")
 
         help-icon'   (cond
                        (and (= input-type "password")
                             (= @type' "password"))
-                       i/shown
+                       deprecated-icon/shown
 
                        (and (= input-type "password")
                             (= @type' "text"))
-                       i/hide
+                       deprecated-icon/hide
 
                        :else
                        help-icon)
@@ -77,7 +83,6 @@
                       (swap! form assoc-in [:touched input-name] true)
                       (fm/on-input-change form input-name value trim)
                       (on-change-value name value)))
-
         on-blur
         (fn [_]
           (reset! focus? false))
@@ -87,9 +92,27 @@
           (when-not (get-in @form [:touched input-name])
             (swap! form assoc-in [:touched input-name] true)))
 
+        on-clear
+        (fn [event]
+          (dom/prevent-default event)
+          (swap! form (fn [state]
+                        (-> state
+                            (assoc-in [:data input-name] "")
+                            (assoc-in [:touched input-name] false))))
+          (some-> (mf/ref-val input-ref) (dom/focus!)))
+
+        on-key-press
+        (mf/use-fn
+         (mf/deps input-ref)
+         (fn [e]
+           (dom/prevent-default e)
+           (when (kbd/space? e)
+             (dom/click (mf/ref-val input-ref)))))
+
         props (-> props
                   (dissoc :help-icon :form :trim :children :show-success? :auto-focus? :label)
                   (assoc :id (name input-name)
+                         :ref input-ref
                          :value value
                          :auto-focus auto-focus?
                          :on-click (when (or is-radio? is-checkbox?) on-click)
@@ -126,7 +149,7 @@
                  :for (name input-name)} label
 
          (when is-checkbox?
-           [:span {:class (stl/css-case :global/checked checked?)} (when checked? i/status-tick)])
+           [:span {:class (stl/css-case :global/checked checked?) :tab-index "0" :on-key-press on-key-press} (when checked? deprecated-icon/status-tick)])
 
          (if is-checkbox?
            [:> :input props]
@@ -141,11 +164,14 @@
 
             (when show-valid?
               [:span {:class (stl/css :valid-icon)}
-               i/tick])
+               deprecated-icon/tick])
 
             (when show-invalid?
-              [:span {:class (stl/css :invalid-icon)}
-               i/close])])]
+              [:button {:class (stl/css :invalid-icon)
+                        :type "button"
+                        :tab-index "-1"
+                        :on-click on-clear}
+               deprecated-icon/close])])]
 
         (some? children)
         [:label {:for (name input-name)}
@@ -153,6 +179,20 @@
          children])
 
       (cond
+        (and touched? (:message error) show-error)
+        (let [message (:message error)
+              options (:options error)]
+          [:div {:id (dm/str "error-" input-name)
+                 :class (stl/css :error)
+                 :data-testid (dm/str data-testid "-error")}
+           message
+           (when (seq options)
+             [:ul {:class (stl/css :error-options)}
+              (for [opt options]
+                [:li {:key opt
+                      :class (stl/css :error-option)} opt])])])
+
+        ;; FIXME: DEPRECATED
         (and touched? (:code error) show-error)
         (let [code (:code error)]
           [:div {:id (dm/str "error-" input-name)
@@ -173,7 +213,9 @@
 
         focus?   (mf/use-state false)
 
-        touched? (get-in @form [:touched input-name])
+        touched? (and (contains? (:data @form) input-name)
+                      (get-in @form [:touched input-name]))
+
         error    (get-in @form [:errors input-name])
 
         value    (get-in @form [:data input-name] "")
@@ -183,7 +225,7 @@
                   :valid     (and touched? (not error))
                   :invalid   (and touched? error)
                   :disabled  disabled)
-                  ;; :empty     (str/empty? value)
+        ;; :empty     (str/empty? value)
 
 
         on-focus  #(reset! focus? true)
@@ -211,6 +253,9 @@
      [:label {:class (stl/css :textarea-label)} label]
      [:> :textarea props]
      (cond
+       (and touched? (:message error))
+       [:span {:class (stl/css :error)} (:message error)]
+
        (and touched? (:code error))
        [:span {:class (stl/css :error)} (tr (:code error))]
 
@@ -409,7 +454,7 @@
                       (dom/prevent-default event)
                       (when (fn? on-submit)
                         (on-submit form event))))]
-    [:& (mf/provider form-ctx) {:value form}
+    [:> (mf/provider form-ctx) {:value form}
      [:form {:class class :on-submit on-submit'} children]]))
 
 (defn- conj-dedup
@@ -420,12 +465,14 @@
   (into [] (distinct) (conj coll item)))
 
 (mf/defc multi-input
-  [{:keys [form label class name trim valid-item-fn caution-item-fn on-submit] :as props}]
+  [{:keys [form label class trim valid-item-fn caution-item-fn on-submit] :as props}]
   (let [form       (or form (mf/use-ctx form-ctx))
         input-name (get props :name)
         touched?   (get-in @form [:touched input-name])
         error      (get-in @form [:errors input-name])
         focus?     (mf/use-state false)
+
+        auto-focus?  (get props :auto-focus? false)
 
         items      (mf/use-state
                     (fn []
@@ -516,6 +563,33 @@
                  (dom/stop-propagation event)
                  (swap! items (fn [items] (if (c/empty? items) items (pop items)))))))))
 
+        on-paste
+        (mf/use-fn
+         (fn [event]
+           (when-let [clipboard-data (.-clipboardData event)]
+             (let [paste-data (.getData clipboard-data "text")]
+               (when (and (string? paste-data)
+                          (re-find #"[,\s]" paste-data))
+                 (dom/prevent-default event)
+                 (dom/stop-propagation event)
+
+                 ;; Mark as touched
+                 (swap! form assoc-in [:touched input-name] true)
+
+                 ;; Split pasted text by commas and/or whitespace, add each valid part
+                 (let [parts (->> (str/split paste-data #",|\s+")
+                                  (map str/trim)
+                                  (remove str/empty?))]
+                   (doseq [part parts]
+                     (when (valid-item-fn part)
+                       (swap! items conj-dedup {:text part
+                                                :valid true
+                                                :caution (caution-item-fn part)})))
+
+                   ;; Reset input value and mark as untouched after successful paste
+                   (reset! value "")
+                   (swap! form assoc-in [:touched input-name] false)))))))
+
         on-blur
         (mf/use-fn
          (fn [_]
@@ -543,12 +617,14 @@
 
     [:div {:class klass}
      [:input {:id (name input-name)
+              :name (name input-name)
               :class in-klass
               :type "text"
-              :auto-focus true
+              :auto-focus auto-focus?
               :on-focus on-focus
               :on-blur on-blur
               :on-key-down on-key-down
+              :on-paste on-paste
               :value @value
               :on-change on-change
               :placeholder (when empty? label)}]
@@ -566,4 +642,4 @@
                                         :caution (:caution item))}
             [:span {:class (stl/css :text)} (:text item)]
             [:button {:class (stl/css :icon)
-                      :on-click #(remove-item! item)} i/close]]])])]))
+                      :on-click #(remove-item! item)} deprecated-icon/close]]])])]))

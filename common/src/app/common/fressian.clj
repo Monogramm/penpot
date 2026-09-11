@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.fressian
   (:require
@@ -17,11 +17,11 @@
    java.util.List
    linked.map.LinkedMap
    linked.set.LinkedSet
+   org.fressian.handlers.ReadHandler
+   org.fressian.handlers.WriteHandler
    org.fressian.Reader
    org.fressian.StreamingWriter
-   org.fressian.Writer
-   org.fressian.handlers.ReadHandler
-   org.fressian.handlers.WriteHandler))
+   org.fressian.Writer))
 
 (set! *warn-on-reflection* true)
 
@@ -30,6 +30,11 @@
    (str->bytes s "UTF-8"))
   ([^String s, ^String encoding]
    (.getBytes s encoding)))
+
+;; --- DEPTH TRACKING
+
+(def ^:dynamic *read-depth* 0)
+(def ^:const max-read-depth 128)
 
 ;; --- LOW LEVEL FRESSIAN API
 
@@ -41,7 +46,13 @@
 
 (defn read-object!
   [^Reader r]
-  (.readObject r))
+  (when (>= *read-depth* max-read-depth)
+    (throw (ex-info "maximum Fressian read depth exceeded"
+                    {:type :validation
+                     :code :max-read-depth-reached
+                     :hint "maximum Fressian read depth exceeded"})))
+  (binding [*read-depth* (inc *read-depth*)]
+    (.readObject r)))
 
 (defn write-tag!
   ([^Writer w ^String n]
@@ -118,6 +129,36 @@
             (d/ordered-map)
             (partition-all 2 (seq kvs)))))
 
+
+(defn- adapt-write-handler
+  [{:keys [name class wfn]}]
+  [class {name (reify WriteHandler
+                 (write [_ w o]
+                   (wfn name w o)))}])
+
+(defn- adapt-read-handler
+  [{:keys [name rfn]}]
+  [name (reify ReadHandler
+          (read [_ rdr _ _]
+            (rfn rdr)))])
+
+(defn- merge-handlers
+  [m1 m2]
+  (-> (merge m1 m2)
+      (d/without-nils)))
+
+(def ^:private
+  xf:adapt-write-handler
+  (comp
+   (filter :wfn)
+   (map adapt-write-handler)))
+
+(def ^:private
+  xf:adapt-read-handler
+  (comp
+   (filter :rfn)
+   (map adapt-read-handler)))
+
 (def ^:dynamic *write-handler-lookup* nil)
 (def ^:dynamic *read-handler-lookup* nil)
 
@@ -126,36 +167,39 @@
 
 (defn add-handlers!
   [& handlers]
-  (letfn [(adapt-write-handler [{:keys [name class wfn]}]
-            [class {name (reify WriteHandler
-                           (write [_ w o]
-                             (wfn name w o)))}])
+  (let [write-handlers'
+        (into {} xf:adapt-write-handler handlers)
 
-          (adapt-read-handler [{:keys [name rfn]}]
-            [name (reify ReadHandler
-                    (read [_ rdr _ _]
-                      (rfn rdr)))])
+        read-handlers'
+        (into {} xf:adapt-read-handler handlers)
 
-          (merge-and-clean [m1 m2]
-            (-> (merge m1 m2)
-                (d/without-nils)))]
+        write-handlers'
+        (swap! write-handlers merge-handlers write-handlers')
 
-    (let [whs (into {}
-                    (comp
-                     (filter :wfn)
-                     (map adapt-write-handler))
-                    handlers)
-          rhs (into {}
-                    (comp
-                     (filter :rfn)
-                     (map adapt-read-handler))
-                    handlers)
-          cwh (swap! write-handlers merge-and-clean whs)
-          crh (swap! read-handlers merge-and-clean rhs)]
+        read-handlers'
+        (swap! read-handlers merge-handlers read-handlers')]
 
-      (alter-var-root #'*write-handler-lookup* (constantly (-> cwh fres/associative-lookup fres/inheritance-lookup)))
-      (alter-var-root #'*read-handler-lookup* (constantly (-> crh fres/associative-lookup)))
-      nil)))
+    (alter-var-root #'*write-handler-lookup*
+                    (constantly
+                     (-> write-handlers' fres/associative-lookup fres/inheritance-lookup)))
+
+    (alter-var-root #'*read-handler-lookup*
+                    (constantly (-> read-handlers' fres/associative-lookup)))
+
+    nil))
+
+(defn overwrite-read-handlers
+  [& handlers]
+  (->> (into {} xf:adapt-read-handler handlers)
+       (merge-handlers @read-handlers)
+       (fres/associative-lookup)))
+
+(defn overwrite-write-handlers
+  [& handlers]
+  (->> (into {} xf:adapt-write-handler handlers)
+       (merge-handlers @write-handlers)
+       (fres/associative-lookup)
+       (fres/inheritance-lookup)))
 
 (defn write-char
   [n w o]

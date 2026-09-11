@@ -1,73 +1,33 @@
-FROM ubuntu:22.04
+FROM dhi.io/debian-base:trixie-debian13-dev AS build
 LABEL maintainer="Penpot <docker@penpot.app>"
 
-ENV LANG='en_US.UTF-8' \
-    LC_ALL='en_US.UTF-8' \
+ENV LANG='C.UTF-8' \
+    LC_ALL='C.UTF-8' \
     JAVA_HOME="/opt/jdk" \
-    PATH=/opt/jdk/bin:/opt/node/bin:$PATH \
     DEBIAN_FRONTEND=noninteractive \
-    NODE_VERSION=v20.18.0 \
     TZ=Etc/UTC
 
 RUN set -ex; \
-    useradd -U -M -u 1001 -s /bin/false -d /opt/penpot penpot; \
     apt-get -qq update; \
-    apt-get -qq upgrade; \
+    apt-get -qq dist-upgrade; \
     apt-get -qqy --no-install-recommends install \
-        nano \
-        curl \
-        tzdata \
-        locales \
+        binutils \
         ca-certificates \
-        imagemagick \
-        webp \
-        rlwrap \
-        fontconfig \
-        woff-tools \
-        woff2 \
-        python3 \
-        python3-tabulate \
-        fontforge \
+        curl \
     ; \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen; \
-    locale-gen; \
-    mkdir -p /opt/data/assets; \
-    mkdir -p /opt/penpot; \
-    chown -R penpot:penpot /opt/penpot; \
-    chown -R penpot:penpot /opt/data; \
-    rm -rf /var/lib/apt/lists/*;
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
     case "${ARCH}" in \
        aarch64|arm64) \
-         BINARY_URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-arm64.tar.gz"; \
+         ESUM='5b222fce0b7076a10ac7ae3b1009a6c2caf4f35bc4e81de72010af6750c5e146'; \
+         BINARY_URL='https://cdn.azul.com/zulu/bin/zulu26.32.13-ca-jdk26.0.2-linux_aarch64.tar.gz'; \
          ;; \
        amd64|x86_64) \
-         BINARY_URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.gz"; \
-         ;; \
-       *) \
-         echo "Unsupported arch: ${ARCH}"; \
-         exit 1; \
-         ;; \
-    esac; \
-    curl -LfsSo /tmp/nodejs.tar.gz ${BINARY_URL}; \
-    mkdir -p /opt/node; \
-    cd /opt/node; \
-    tar -xf /tmp/nodejs.tar.gz --strip-components=1; \
-    chown -R root /opt/node; \
-    rm -rf /tmp/nodejs.tar.gz;
-
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    case "${ARCH}" in \
-       aarch64|arm64) \
-         ESUM='3ce6a2b357e2ef45fd6b53d6587aa05bfec7771e7fb982f2c964f6b771b7526a'; \
-         BINARY_URL='https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.2_13.tar.gz'; \
-         ;; \
-       amd64|x86_64) \
-         ESUM='454bebb2c9fe48d981341461ffb6bf1017c7b7c6e15c6b0c29b959194ba3aaa5'; \
-         BINARY_URL='https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz'; \
+         ESUM='4b7c114917aebd0fc6284fc7111245d7747a4d9603bd12d86b384b1abc9d575d'; \
+         BINARY_URL='https://cdn.azul.com/zulu/bin/zulu26.32.13-ca-jdk26.0.2-linux_x64.tar.gz'; \
          ;; \
        *) \
          echo "Unsupported arch: ${ARCH}"; \
@@ -79,9 +39,76 @@ RUN set -eux; \
     mkdir -p /opt/jdk; \
     cd /opt/jdk; \
     tar -xf /tmp/openjdk.tar.gz --strip-components=1; \
-    rm -rf /tmp/openjdk.tar.gz;
+    rm -rf /tmp/openjdk.tar.gz; \
+    /opt/jdk/bin/jlink \
+       --no-header-files \
+       --no-man-pages \
+       --strip-debug \
+       --add-modules java.base,jdk.net,jdk.management.agent,java.se,jdk.compiler,jdk.javadoc,jdk.attach,jdk.unsupported,jdk.jfr,jdk.jcmd \
+       --output /opt/jre;
 
-COPY --chown=penpot:penpot ./bundle-backend/ /opt/penpot/backend/
+
+FROM dhi.io/debian-base:trixie-debian13-dev AS image
+LABEL maintainer="Penpot <docker@penpot.app>"
+
+ENV LANG='C.UTF-8' \
+    LC_ALL='C.UTF-8' \
+    JAVA_HOME="/opt/jre" \
+    PATH=/opt/jre/bin:/opt/imagick/bin:$PATH \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    LD_LIBRARY_PATH=/opt/imagick/lib/deps
+
+RUN set -ex; \
+    apt-get -qq update; \
+    apt-get -qqy --no-install-recommends install passwd; \
+    useradd -U -M -u 1001 -s /bin/false -d /opt/penpot penpot; \
+    apt-get -qq dist-upgrade; \
+    apt-get -qqy --no-install-recommends install \
+        ca-certificates \
+        curl \
+        fontconfig \
+        fontforge \
+        libfontconfig1 \
+        libfreetype6 \
+        libglib2.0-0 \
+        libgomp1 \
+        libheif1 \
+        libjpeg62-turbo \
+        liblcms2-2 \
+        libopenexr-3-1-30 \
+        libopenjp2-7 \
+        libpng16-16 \
+        librsvg2-2 \
+        libtiff6 \
+        libwebp7 \
+        libwebpdemux2 \
+        libwebpmux3 \
+        libxml2 \
+        libzip5 \
+        libzstd1 \
+        python3 \
+        python3-tabulate \
+        tzdata \
+        woff-tools \
+        woff2 \
+    ; \
+    find tmp/usr/share/zoneinfo/* -type d ! -name 'Etc' |xargs rm -rf; \
+    apt-get clean; \
+    rm -rf /var/lib /var/cache; \
+    rm -rf /usr/include; \
+    mkdir -p /opt/data/assets; \
+    mkdir -p /opt/penpot; \
+    chown -R penpot:penpot /opt/penpot; \
+    chown -R penpot:penpot /opt/data;
+
+COPY --from=build /opt/jre /opt/jre
+COPY --from=penpotapp/imagemagick:7.1.2-27 /opt/imagick /opt/imagick
+
+COPY files/imagemagick-policy.xml /opt/imagick/etc/ImageMagick-7/policy.xml
+
+ARG BUNDLE_PATH="./bundle-backend/"
+COPY --chown=penpot:penpot $BUNDLE_PATH /opt/penpot/backend/
 
 USER penpot:penpot
 WORKDIR /opt/penpot/backend

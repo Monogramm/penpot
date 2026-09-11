@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.selection
   (:require
@@ -16,19 +16,24 @@
    [app.common.geom.shapes :as gsh]
    [app.common.logic.libraries :as cll]
    [app.common.types.component :as ctk]
+   [app.common.types.container :as ctn]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
    [app.main.data.event :as ev]
    [app.main.data.helpers :as dsh]
    [app.main.data.modal :as md]
    [app.main.data.workspace.collapse :as dwc]
+   [app.main.data.workspace.edition :as dwe]
+   [app.main.data.workspace.pages :as-alias dwpg]
    [app.main.data.workspace.specialized-panel :as-alias dwsp]
    [app.main.data.workspace.undo :as dwu]
+   [app.main.data.workspace.viewport-wasm :as dwvw]
    [app.main.data.workspace.zoom :as dwz]
+   [app.main.features :as features]
    [app.main.refs :as refs]
    [app.main.router :as rt]
    [app.main.streams :as ms]
-   [app.main.worker :as uw]
+   [app.main.worker :as mw]
    [app.util.mouse :as mse]
    [beicon.v2.core :as rx]
    [beicon.v2.operators :as rxo]
@@ -53,13 +58,17 @@
       (assoc-in state [:workspace-local :selrect] selrect))))
 
 (defn handle-area-selection
-  [preserve?]
+  [append? remove? ignore-groups?]
   (ptk/reify ::handle-area-selection
     ptk/WatchEvent
     (watch [_ state stream]
       (let [zoom          (dm/get-in state [:workspace-local :zoom] 1)
             stopper       (mse/drag-stopper stream)
             init-position @ms/mouse-position
+
+            initial-set   (if (or append? remove?)
+                            (dsh/lookup-selected state)
+                            lks/empty-linked-set)
 
             init-selrect  (grc/make-rect
                            (dm/get-prop init-position :x)
@@ -90,7 +99,7 @@
                  (rx/take-until stopper))]
 
         (rx/concat
-         (if preserve?
+         (if (or append? remove?)
            (rx/empty)
            (rx/of (deselect-all)))
 
@@ -102,20 +111,14 @@
                (rx/buffer-time 100)
                (rx/map last)
                (rx/pipe (rxo/distinct-contiguous))
-               (rx/with-latest-from ms/keyboard-mod ms/keyboard-shift)
-               (rx/map
-                (fn [[_ mod? shift?]]
-                  (select-shapes-by-current-selrect shift? mod?))))
+               (rx/map #(select-shapes-by-current-selrect initial-set remove? ignore-groups?)))
 
           ;; The last "tick" from the mouse cannot be buffered so we are sure
           ;; a selection is returned. Without this we can have empty selections on
           ;; very fast movement
           (->> selrect-stream
                (rx/last)
-               (rx/with-latest-from ms/keyboard-mod ms/keyboard-shift)
-               (rx/map
-                (fn [[_ mod? shift?]]
-                  (select-shapes-by-current-selrect shift? mod? false)))))
+               (rx/map #(select-shapes-by-current-selrect initial-set remove? ignore-groups? false))))
 
          (->> (rx/of (update-selrect nil))
               ;; We need the async so the current event finishes before updating the selrect
@@ -131,6 +134,8 @@
   ([id toggle?]
    (dm/assert! (uuid? id))
    (ptk/reify ::select-shape
+     ev/PerformanceEvent
+
      ptk/UpdateEvent
      (update [_ state]
        (-> state
@@ -170,13 +175,17 @@
              current        (get objects first-selected)
              parent         (get objects (:parent-id current))
              sibling-ids    (:shapes parent)
-             current-index  (d/index-of sibling-ids first-selected)
-             sibling        (if (= (dec (count sibling-ids)) current-index)
-                              (first sibling-ids)
-                              (nth sibling-ids (inc current-index)))]
+             ;; `index-of` is nil when the shape is not listed under the parent (stale
+             ;; selection or inconsistent tree). Do not call `nth` with `(dec nil)` — in
+             ;; ClojureScript that is -1 and throws (see penpot#7064).
+             current-index  (some-> sibling-ids (d/index-of first-selected))
+             sibling        (when (some? current-index)
+                              (if (= (dec (count sibling-ids)) current-index)
+                                (first sibling-ids)
+                                (nth sibling-ids (inc current-index) nil)))]
 
          (cond
-           (= 1 count-selected)
+           (and (= 1 count-selected) (some? sibling))
            (rx/of (select-shape sibling))
 
            (> count-selected 1)
@@ -195,12 +204,13 @@
              current        (get objects first-selected)
              parent         (get objects (:parent-id current))
              sibling-ids    (:shapes parent)
-             current-index  (d/index-of sibling-ids first-selected)
-             sibling        (if (= 0 current-index)
-                              (last sibling-ids)
-                              (nth sibling-ids (dec current-index)))]
+             current-index  (some-> sibling-ids (d/index-of first-selected))
+             sibling        (when (some? current-index)
+                              (if (= 0 current-index)
+                                (last sibling-ids)
+                                (nth sibling-ids (dec current-index) nil)))]
          (cond
-           (= 1 count-selected)
+           (and (= 1 count-selected) (some? sibling))
            (rx/of (select-shape sibling))
 
            (> count-selected 1)
@@ -212,7 +222,7 @@
   (ptk/reify ::deselect-shape
     ptk/WatchEvent
     (watch [_ _ _]
-      (rx/of ::dwsp/interrupt))
+      (rx/of :interrupt ::dwsp/interrupt))
     ptk/UpdateEvent
     (update [_ state]
       (-> state
@@ -227,7 +237,7 @@
    (ptk/reify ::shift-select-shapes
      ptk/WatchEvent
      (watch [_ _ _]
-       (rx/of ::dwsp/interrupt))
+       (rx/of :interrupt ::dwsp/interrupt))
      ptk/UpdateEvent
      (update [_ state]
        (let [objects (or objects (dsh/lookup-page-objects state))
@@ -248,6 +258,8 @@
         (d/ordered-set? ids)))
 
   (ptk/reify ::select-shapes
+    ev/PerformanceEvent
+
     ptk/UpdateEvent
     (update [_ state]
       (let [objects (dsh/lookup-page-objects state)
@@ -259,14 +271,23 @@
 
     ptk/WatchEvent
     (watch [_ state _]
-      (let [objects (dsh/lookup-page-objects state)]
-        (rx/of
-         (dwc/expand-all-parents ids objects)
-         ::dwsp/interrupt)))))
+      (let [objects (dsh/lookup-page-objects state)
+            ;; Schedule expanding parents asynchronously to avoid blocking
+            ;; the event loop
+            expand-s (->> (rx/of (dwc/expand-all-parents ids objects))
+                          (rx/observe-on :async))
+            ;; :interrupt aborts drag-stopper; only emit it when clearing edition
+            ;; (unconditional emit broke marquee selection after #10798).
+            interrupt-s (if (some? (dm/get-in state [:workspace-local :edition]))
+                          (rx/of :interrupt ::dwsp/interrupt)
+                          (rx/of ::dwsp/interrupt))]
+        (rx/merge expand-s interrupt-s)))))
 
 (defn select-all
   []
   (ptk/reify ::select-all
+    ev/PerformanceEvent
+
     ptk/WatchEvent
     (watch [_ state _]
       (let [;; Make the select-all aware of the focus mode; in this
@@ -305,8 +326,9 @@
      (watch [_ state _]
        (let [params-without-board (-> (rt/get-params state)
                                       (dissoc :board-id))]
-         (rx/of ::dwsp/interrupt)
-         (rx/of (rt/nav :workspace params-without-board {::rt/replace true}))))
+         (rx/of ::dwsp/interrupt
+                (dwe/clear-edition-mode)
+                (rt/nav :workspace params-without-board {::rt/replace true}))))
 
      ptk/UpdateEvent
      (update [_ state]
@@ -323,26 +345,27 @@
 ;; --- Select Shapes (By selrect)
 
 (defn select-shapes-by-current-selrect
-  ([preserve? ignore-groups?]
-   (select-shapes-by-current-selrect preserve? ignore-groups? true))
-  ([preserve? ignore-groups? buffered?]
+  "Sends the current selection rectangle to the worker to compute the selection,
+  and sends its result to select-shapes for storage in the state."
+  ([initial-set remove? ignore-groups?]
+   (select-shapes-by-current-selrect initial-set remove? ignore-groups? true))
+
+  ([initial-set remove? ignore-groups? buffered?]
    (ptk/reify ::select-shapes-by-current-selrect
      ptk/WatchEvent
      (watch [_ state _]
        (let [page-id     (:current-page-id state)
-             objects     (dsh/lookup-page-objects state)
-             selected    (dsh/lookup-selected state)
-             initial-set (if preserve?
-                           selected
-                           lks/empty-linked-set)
+             objects     (dsh/lookup-page-objects state page-id)
              selrect     (dm/get-in state [:workspace-local :selrect])
              blocked?    (fn [id] (dm/get-in objects [id :blocked] false))
-
-             ask-worker (if buffered? uw/ask-buffered! uw/ask!)]
+             ask-worker  (if buffered? mw/ask-buffered! mw/ask!)
+             filter-objs (comp
+                          (filter (complement blocked?))
+                          (remove (partial cfh/hidden-parent? objects)))]
 
          (if (some? selrect)
            (->> (ask-worker
-                 {:cmd :selection/query
+                 {:cmd :index/query-selection
                   :page-id page-id
                   :rect selrect
                   :include-frames? true
@@ -351,9 +374,9 @@
                   :using-selrect? true})
                 (rx/filter some?)
                 (rx/map #(cfh/clean-loops objects %))
-                (rx/map #(into initial-set (comp
-                                            (filter (complement blocked?))
-                                            (remove (partial cfh/hidden-parent? objects))) %))
+                (rx/map (if remove?
+                          #(apply disj initial-set %)
+                          #(into initial-set filter-objs %)))
                 (rx/map select-shapes))
            (rx/empty)))))))
 
@@ -430,6 +453,16 @@
 
         (gpt/subtract new-pos pt-obj)))))
 
+(defn- get-new-dom-text-ids
+  [state changes]
+  (when-not (features/active-feature? state "render-wasm/v1")
+    (->> (:redo-changes changes)
+         (keep (fn [{:keys [type obj]}]
+                 (when (and (= type :add-obj)
+                            (cfh/text-shape? obj))
+                   (:id obj))))
+         (not-empty))))
+
 (defn duplicate-shapes
   [ids & {:keys [move-delta? alt-duplication? change-selection? return-ref]
           :or {move-delta? false alt-duplication? false change-selection? true return-ref nil}}]
@@ -455,7 +488,7 @@
                 library-data    (dsh/lookup-file-data state file-id)
 
                 changes         (-> (pcb/empty-changes it)
-                                    (cll/generate-duplicate-changes objects page ids delta libraries library-data file-id)
+                                    (cll/generate-duplicate-changes objects page ids delta libraries library-data file-id {:alt-duplication? alt-duplication?})
                                     (cll/generate-duplicate-changes-update-indices objects ids))
 
                 tags            (or (:tags changes) #{})
@@ -471,6 +504,9 @@
                                      (map #(get-in % [:obj :id]))
                                      (into (d/ordered-set)))
 
+                new-dom-text-ids
+                (get-new-dom-text-ids state changes)
+
                 id-duplicated   (first new-ids)
 
                 frames          (into #{}
@@ -478,17 +514,42 @@
                                       ids)
                 undo-id         (js/Symbol)]
             (rx/concat
-             (->> (map (d/getf objects) ids)
-                  (filter ctk/instance-head?)
-                  (map (fn [{:keys [component-file]}]
-                         (ptk/event ::ev/event
-                                    {::ev/name "use-library-component"
-                                     ::ev/origin "duplicate"
-                                     :external-library (not= file-id component-file)})))
-                  (rx/from))
-            ;; Warning: This order is important for the focus mode.
+             (->> (rx/from ids)
+                  (rx/map (fn [shape-id]
+                            (let [shape       (get objects shape-id)
+                                  parent-type (cfh/get-shape-type objects (:parent-id shape))
+                                  external-lib? (not= file-id (:component-file shape))
+                                  component     (ctn/get-component-from-shape shape libraries)
+                                  origin        "workspace:duplicate-shapes"]
+
+                              ;; NOTE: we don't emit the create-shape event all the time for
+                              ;; avoid send a lot of events (that are not necessary); this
+                              ;; decision is made explicitly by the responsible team.
+                              (if (ctk/instance-head? shape)
+                                (ev/event {::ev/name "use-library-component"
+                                           ::ev/origin origin
+                                           :is-external-library external-lib?
+                                           :type (get shape :type)
+                                           :parent-type parent-type
+                                           :is-variant (ctk/is-variant? component)})
+                                (if (cfh/has-layout? objects (:parent-id shape))
+                                  (ev/event {::ev/name "layout-add-element"
+                                             ::ev/origin origin
+                                             :type (get shape :type)
+                                             :parent-type parent-type})
+                                  (ev/event {::ev/name "create-shape"
+                                             ::ev/origin origin
+                                             :type (get shape :type)
+                                             :parent-type parent-type})))))))
+
+             ;; Warning: This order is important for the focus mode.
              (->> (rx/of
                    (dwu/start-undo-transaction undo-id)
+                   ;; Track cloned texts before they mount.
+                   (when new-dom-text-ids
+                     (ptk/data-event :text/reflow
+                                     {:ids new-dom-text-ids
+                                      :page-id (:id page)}))
                    (dch/commit-changes changes)
                    (when change-selection?
                      (select-shapes new-ids))
@@ -536,6 +597,11 @@
             (assoc :workspace-focus-selected focus))))))
 
 (defn toggle-focus-mode
+  "Zoom in on and center viewport on selection;
+   hide all other layers in viewport and layer panel.
+
+   When in focus mode, exit restoring previous viewport and selection.
+  "
   []
   (ptk/reify ::toggle-focus-mode
     ev/Event
@@ -543,32 +609,45 @@
 
     ptk/UpdateEvent
     (update [_ state]
-      (let [selected (dsh/lookup-selected state)]
-        (cond-> state
-          (and (empty? (:workspace-focus-selected state))
-               (d/not-empty? selected))
-          (assoc :workspace-focus-selected selected)
+      (let [selected (dsh/lookup-selected state)
+            have-selection? (d/not-empty? selected)
+            in-mode? (d/not-empty? (:workspace-focus-selected state))]
 
-          (d/not-empty? (:workspace-focus-selected state))
-          (dissoc :workspace-focus-selected))))
+        (if in-mode?
+          ;; Exit focus, restoring previous viewport, selection, etc
+          (-> state
+              (assoc :workspace-local (:workspace-pre-focus state))
+              (dissoc :workspace-focus-selected)
+              (dissoc :workspace-pre-focus))
+          (if have-selection?
+            ;; Enter focus and save viewport, selection, etc
+            (-> state
+                (assoc :workspace-focus-selected selected)
+                (assoc :workspace-pre-focus (:workspace-local state)))
+            state))))
+
+    ptk/EffectEvent
+    (effect [_ state _]
+      (dwvw/maybe-sync-workspace-local-viewport! state))
 
     ptk/WatchEvent
     (watch [_ state stream]
       (let [stopper (rx/filter #(or (= ::toggle-focus-mode (ptk/type %))
-                                    (= :app.main.data.workspace/finalize-page (ptk/type %))) stream)]
+                                    (= ::dwpg/finalize-page (ptk/type %))) stream)]
         (when (d/not-empty? (:workspace-focus-selected state))
-          (rx/merge
-           (rx/of dwz/zoom-to-selected-shape
-                  (deselect-all))
-           (->> (rx/from-atom refs/workspace-page-objects {:emit-current-value? true})
-                (rx/take-until stopper)
-                (rx/map (comp set keys))
-                (rx/buffer 2 1)
-                (rx/merge-map
-                 (fn [[old-keys new-keys]]
-                   (let [removed (set/difference old-keys new-keys)
-                         added (set/difference new-keys old-keys)]
+          (->> (rx/merge
+                (rx/of dwz/zoom-to-selected-shape
+                       (deselect-all))
+                (->> (rx/from-atom refs/workspace-page-objects {:emit-current-value? true})
+                     (rx/map (comp set keys))
+                     (rx/buffer 2 1)
+                     (rx/merge-map
+                      ;; While focus is active, update it with any new and deleted shapes
+                      (fn [[old-keys new-keys]]
+                        (let [removed (set/difference old-keys new-keys)
+                              added (set/difference new-keys old-keys)]
 
-                     (if (or (d/not-empty? added) (d/not-empty? removed))
-                       (rx/of (update-focus-shapes added removed))
-                       (rx/empty))))))))))))
+                          (if (or (d/not-empty? added) (d/not-empty? removed))
+                            (rx/of (update-focus-shapes added removed))
+                            (rx/empty)))))))
+               (rx/take-until stopper)))))))

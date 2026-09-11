@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.helpers
   "General purpose RPC helpers."
@@ -11,7 +11,7 @@
    [app.common.data.macros :as dm]
    [app.http :as-alias http]
    [app.rpc :as-alias rpc]
-   [yetti.response :as-alias yres]))
+   [yetti.response :as yres]))
 
 ;; A utilty wrapper object for wrap service responses that does not
 ;; implements the IObj interface that make possible attach metadata to
@@ -78,3 +78,21 @@
                (let [exp (if (integer? max-age) max-age (inst-ms max-age))
                      val (dm/fmt "max-age=%" (int (/ exp 1000.0)))]
                  (update response ::yres/headers assoc "cache-control" val)))))
+
+(defn stream
+  "A convenience allias for yetti.response/stream-body"
+  [f]
+  (yres/stream-body f))
+
+(defn get-request
+  "Get http request from RPC params"
+  [params]
+  (assert (contains? params ::rpc/request-at) "rpc params required")
+  (-> (meta params)
+      (get ::http/request)))
+
+(defn get-auth-data
+  "Get http auth-data from RPC params"
+  [params]
+  (-> (get-request params)
+      (get ::http/auth-data)))

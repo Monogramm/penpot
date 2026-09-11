@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.helpers
   (:require
@@ -15,6 +15,7 @@
    [app.common.pprint :as pp]
    [app.common.schema :as sm]
    [app.common.spec :as us]
+   [app.common.time :as ct]
    [app.common.transit :as tr]
    [app.common.uuid :as uuid]
    [app.config :as cf]
@@ -29,11 +30,11 @@
    [app.rpc.commands.files :as files]
    [app.rpc.commands.files-create :as files.create]
    [app.rpc.commands.files-update :as files.update]
+   [app.rpc.commands.projects :as projects]
    [app.rpc.commands.teams :as teams]
    [app.rpc.helpers :as rph]
    [app.util.blob :as blob]
    [app.util.services :as sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [app.worker.runner]
    [clojure.java.io :as io]
@@ -61,8 +62,9 @@
 
 (def default
   {:database-uri "postgresql://postgres/penpot_test"
-   :redis-uri "redis://redis/1"
-   :auto-file-snapshot-every 1})
+   :redis-uri "redis://valkey/1"
+   :auto-file-snapshot-every 1
+   :file-data-backend "db"})
 
 (def config
   (cf/read-config :prefix "penpot-test"
@@ -74,63 +76,69 @@
    :enable-smtp
    :enable-quotes
    :enable-rpc-climit
-   :enable-feature-fdata-pointer-map
-   :enable-feature-fdata-objets-map
-   :enable-feature-components-v2
    :enable-auto-file-snapshot
    :disable-file-validation])
 
-(defn state-init
+(defn init-config
+  ([next]
+   (init-config nil next))
+  ([extra-flags next]
+   (let [flags (into default-flags extra-flags)]
+     (with-redefs [app.config/flags (flags/parse flags/default flags)
+                   app.config/config config
+                   app.loggers.audit/submit (constantly nil)
+                   app.auth/derive-password identity
+                   app.auth/verify-password (fn [a b] {:valid (= a b)})
+                   app.common.features/get-enabled-features
+                   (fn [& _] app.common.features/supported-features)]
+       (cf/validate! :exit-on-error? false)
+       (fs/create-dir "/tmp/penpot")
+       (next)))))
+
+(defn init-system
   [next]
-  (with-redefs [app.config/flags (flags/parse flags/default default-flags)
-                app.config/config config
-                app.loggers.audit/submit! (constantly nil)
-                app.auth/derive-password identity
-                app.auth/verify-password (fn [a b] {:valid (= a b)})
-                app.common.features/get-enabled-features (fn [& _] app.common.features/supported-features)]
+  (let [templates [{:id "test"
+                    :name "test"
+                    :file-uri "test"
+                    :thumbnail-uri "test"
+                    :path (-> "backend_tests/test_files/template.penpot" io/resource fs/path)}]
+        system (-> (merge main/system-config main/worker-config)
+                   (assoc-in [:app.redis/client :app.redis/uri] (:redis-uri config))
+                   (assoc-in [::db/pool ::db/uri] (:database-uri config))
+                   (assoc-in [::db/pool ::db/username] (:database-username config))
+                   (assoc-in [::db/pool ::db/password] (:database-password config))
+                   (assoc-in [:app.rpc/methods :app.setup/templates] templates)
+                   (assoc-in [:app.rpc/methods :app.setup/templates] templates)
+                   (update :app.rpc/rlimit assoc
+                           :app.loggers.mattermost/reporter nil
+                           :app.loggers.database/reporter nil)
+                   (update :app.rpc/methods assoc
+                           :app.setup/templates templates
+                           :app.loggers.mattermost/reporter nil
+                           :app.loggers.database/reporter nil)
+                   (dissoc :app.srepl/server
+                           :app.http/server
+                           :app.http/route
+                           :app.setup/templates
+                           :app.http.oauth/handler
+                           :app.notifications/handler
+                           :app.loggers.mattermost/reporter
+                           :app.loggers.database/reporter
+                           :app.worker/cron
+                           :app.worker/dispatcher
+                           [:app.main/default :app.worker/runner]
+                           [:app.main/webhook :app.worker/runner]))
+        _      (ig/load-namespaces system)
+        system (-> (ig/expand system) (ig/init))]
+    (try
+      (binding [*system* system
+                *pool*   (:app.db/pool system)]
+        (next))
+      (finally
+        (ig/halt! system)))))
 
-    (cf/validate! :exit-on-error? false)
-
-    (fs/create-dir "/tmp/penpot")
-
-    (let [templates [{:id "test"
-                      :name "test"
-                      :file-uri "test"
-                      :thumbnail-uri "test"
-                      :path (-> "backend_tests/test_files/template.penpot" io/resource fs/path)}]
-          system (-> (merge main/system-config main/worker-config)
-                     (assoc-in [:app.redis/redis :app.redis/uri] (:redis-uri config))
-                     (assoc-in [::db/pool ::db/uri] (:database-uri config))
-                     (assoc-in [::db/pool ::db/username] (:database-username config))
-                     (assoc-in [::db/pool ::db/password] (:database-password config))
-                     (assoc-in [:app.rpc/methods :app.setup/templates] templates)
-                     (dissoc :app.srepl/server
-                             :app.http/server
-                             :app.http/router
-                             :app.auth.oidc.providers/google
-                             :app.auth.oidc.providers/gitlab
-                             :app.auth.oidc.providers/github
-                             :app.auth.oidc.providers/generic
-                             :app.setup/templates
-                             :app.auth.oidc/routes
-                             :app.worker/monitor
-                             :app.http.oauth/handler
-                             :app.notifications/handler
-                             :app.loggers.mattermost/reporter
-                             :app.loggers.database/reporter
-                             :app.worker/cron
-                             :app.worker/dispatcher
-                             [:app.main/default :app.worker/runner]
-                             [:app.main/webhook :app.worker/runner]))
-          _      (ig/load-namespaces system)
-          system (-> (ig/expand system)
-                     (ig/init))]
-      (try
-        (binding [*system* system
-                  *pool*   (:app.db/pool system)]
-          (next))
-        (finally
-          (ig/halt! system))))))
+(def state-init
+  (t/compose-fixtures init-config init-system))
 
 (defn database-reset
   [next]
@@ -138,14 +146,13 @@
                  "  FROM information_schema.tables "
                  " WHERE table_schema = 'public' "
                  "   AND table_name != 'migrations';")]
-    (db/with-atomic [conn *pool*]
-      (db/exec-one! conn ["SET CONSTRAINTS ALL DEFERRED"])
-      (db/exec-one! conn ["SET LOCAL rules.deletion_protection TO off"])
-      (let [result (->> (db/exec! conn [sql])
-                        (map :table-name))]
-        (doseq [table result]
-          (db/exec! conn [(str "delete from " table ";")]))))
-
+    (db/transact! *pool* (fn [conn]
+                           (db/exec-one! conn ["SET CONSTRAINTS ALL DEFERRED"])
+                           (db/exec-one! conn ["SET LOCAL rules.deletion_protection TO off"])
+                           (let [result (->> (db/exec! conn [sql])
+                                             (map :table-name))]
+                             (doseq [table result]
+                               (db/exec! conn [(str "delete from " table ";")])))))
     (next)))
 
 (defn clean-storage
@@ -182,27 +189,29 @@
    (let [params (merge {:id (mk-uuid "profile" i)
                         :fullname (str "Profile " i)
                         :email (str "profile" i ".test@nodomain.com")
-                        :password "123123"
+                        :password "Test123!"
                         :is-demo false}
                        params)]
      (db/run! system
-              (fn [{:keys [::db/conn]}]
+              (fn [cfg]
                 (->> params
-                     (cmd.auth/create-profile! conn)
-                     (cmd.auth/create-profile-rels! conn)))))))
+                     (cmd.auth/create-profile cfg)
+                     (cmd.auth/create-profile-rels cfg)))))))
 
 (defn create-project*
   ([i params] (create-project* *system* i params))
   ([system i {:keys [profile-id team-id] :as params}]
-   (us/assert uuid? profile-id)
-   (us/assert uuid? team-id)
 
-   (db/run! system
-            (fn [{:keys [::db/conn]}]
-              (->> (merge {:id (mk-uuid "project" i)
-                           :name (str "project" i)}
-                          params)
-                   (#'teams/create-project conn))))))
+   (assert (uuid? profile-id))
+   (assert (uuid? team-id))
+   (let [timestamp (ct/now)]
+     (db/run! system
+              (fn [cfg]
+                (->> (merge {:id (mk-uuid "project" i)
+                             :name (str "project" i)}
+                            params
+                            {::rpc/request-at timestamp})
+                     (#'projects/create-project cfg)))))))
 
 (defn create-file*
   ([i params]
@@ -210,20 +219,20 @@
   ([system i {:keys [profile-id project-id] :as params}]
    (dm/assert! "expected uuid" (uuid? profile-id))
    (dm/assert! "expected uuid" (uuid? project-id))
-   (db/run! system
-            (fn [system]
-              (let [features (cfeat/get-enabled-features cf/flags)]
-                (files.create/create-file system
-                                          (merge {:id (mk-uuid "file" i)
-                                                  :name (str "file" i)
-                                                  :features features}
-                                                 params)))))))
+   (db/tx-run! system
+               (fn [system]
+                 (let [features (cfeat/get-enabled-features cf/flags)]
+                   (files.create/create-file system
+                                             (merge {:id (mk-uuid "file" i)
+                                                     :name (str "file" i)
+                                                     :features features}
+                                                    params)))))))
 
 (defn mark-file-deleted*
   ([params]
    (mark-file-deleted* *system* params))
   ([conn {:keys [id] :as params}]
-   (#'files/mark-file-deleted conn id)))
+   (#'files/mark-file-deleted conn {} id)))
 
 (defn create-team*
   ([i params] (create-team* *system* i params))
@@ -232,10 +241,10 @@
    (dm/with-open [conn (db/open system)]
      (let [id       (mk-uuid "team" i)
            features (cfeat/get-enabled-features cf/flags)]
-       (teams/create-team conn {:id id
-                                :profile-id profile-id
-                                :features features
-                                :name (str "team" i)})))))
+       (teams/create-team {::db/conn conn} {:id id
+                                            :profile-id profile-id
+                                            :features features
+                                            :name (str "team" i)})))))
 
 (defn create-file-media-object*
   ([params] (create-file-media-object* *system* params))
@@ -264,7 +273,7 @@
   (dm/with-open [conn (db/open system)]
     (db/insert! conn :profile-complaint-report
                 {:profile-id id
-                 :created-at (or created-at (dt/now))
+                 :created-at (or created-at (ct/now))
                  :type (name type)
                  :content (db/tjson {})})))
 
@@ -274,16 +283,17 @@
     (db/insert! conn :global-complaint-report
                 {:email email
                  :type (name type)
-                 :created-at (or created-at (dt/now))
+                 :created-at (or created-at (ct/now))
                  :content (db/tjson {})})))
 
 (defn create-team-role*
   ([params] (create-team-role* *system* params))
   ([system {:keys [team-id profile-id role] :or {role :owner}}]
    (dm/with-open [conn (db/open system)]
-     (#'teams/create-team-role conn {:team-id team-id
-                                     :profile-id profile-id
-                                     :role role}))))
+     (#'teams/create-team-role {::db/conn conn}
+                               {:team-id team-id
+                                :profile-id profile-id
+                                :role role}))))
 
 (defn create-project-role*
   ([params] (create-project-role* *system* params))
@@ -306,7 +316,7 @@
   ([system {:keys [file-id changes session-id profile-id revn]
             :or {session-id (uuid/next) revn 0}}]
    (-> system
-       (assoc ::files.update/timestamp (dt/now))
+       (assoc ::files.update/timestamp (ct/now))
        (db/tx-run! (fn [{:keys [::db/conn] :as system}]
                      (let [file (files.update/get-file conn file-id)]
                        (#'files.update/update-file* system
@@ -380,7 +390,18 @@
     ;; (app.common.pprint/pprint (:app.rpc/methods *system*))
     (try-on! (method-fn (-> data
                             (dissoc ::type)
-                            (assoc :app.rpc/request-at (dt/now)))))))
+                            (assoc :app.rpc/request-at (ct/now)))))))
+
+(defn management-command!
+  [{:keys [::type] :as data}]
+  (let [[_ method-fn] (get-in *system* [:app.rpc/management-methods type])]
+    (when-not method-fn
+      (ex/raise :type :assertion
+                :code :rpc-method-not-found
+                :hint (str/ffmt "management rpc method '%' not found" (name type))))
+    (try-on! (method-fn (-> data
+                            (dissoc ::type)
+                            (assoc :app.rpc/request-at (ct/now)))))))
 
 (defn run-task!
   ([name]
@@ -526,7 +547,7 @@
 
 (defn sleep
   [ms-or-duration]
-  (Thread/sleep (inst-ms (dt/duration ms-or-duration))))
+  (Thread/sleep (inst-ms (ct/duration ms-or-duration))))
 
 (defn config-get-mock
   [data]
@@ -553,6 +574,44 @@
       (io/copy r sw)
       (.toString sw))))
 
+(defn parse-sse
+  [content]
+  (let [state
+        (reduce (fn [{:keys [events data event id] :as state} line]
+                  (cond
+                    ;; empty line → dispatch event if we have data
+                    (str/blank? line)
+                    (if (seq data)
+                      (-> state
+                          (update :events conj {:event (or event "message")
+                                                :data (-> (str/join "\n" data))})
+                          (assoc :data [] :event nil))
+                      state)
+
+                    ;; comment line (starts with :)
+                    (str/starts-with? line ":")
+                    state
+
+                    :else
+                    (let [[field raw-value] (str/split line #":" 2)
+                          value (some-> raw-value (str/replace #"^ " ""))]
+                      (case field
+                        "data"  (update state :data conj (or value ""))
+                        "event" (assoc state :event value)
+                        ;; ignore retry and unknown fields
+                        state))))
+                {:events [] :data [] :event nil}
+                (str/split content #"\r?\n"))
+
+        ;; handle unterminated last event (no trailing blank line)
+        state (if (seq (:data state))
+                (update state :events conj
+                        {:event (or (:event state) "message")
+                         :data (str/join "\n" (:data state))})
+                state)]
+
+    (:events state)))
+
 (defn consume-sse
   [callback]
   (let [{:keys [::yres/status ::yres/body ::yres/headers] :as response} (callback {})
@@ -562,12 +621,9 @@
     (try
       (px/exec! :virtual #(rcp/write-body-to-stream body nil output))
       (into []
-            (map (fn [event]
-                   (let [[item1 item2] (re-seq #"(.*): (.*)\n?" event)]
-
-                     [(keyword (nth item1 2))
-                      (tr/decode-str (nth item2 2))])))
-            (-> (slurp' input)
-                (str/split "\n\n")))
+            (map (fn [{:keys [event data]}]
+                   (d/vec2 (keyword event)
+                           (tr/decode-str data))))
+            (parse-sse (slurp' input)))
       (finally
         (.close input)))))

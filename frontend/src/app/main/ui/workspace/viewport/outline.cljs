@@ -2,37 +2,34 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.viewport.outline
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
-   [app.common.exceptions :as ex]
    [app.common.files.helpers :as cfh]
    [app.common.geom.shapes :as gsh]
+   [app.common.types.component :as ctk]
    [app.common.types.container :as ctn]
    [app.main.refs :as refs]
    [app.main.ui.hooks :as hooks]
    [app.main.ui.shapes.attrs :as attrs]
    [app.util.object :as obj]
-   [app.util.path.format :as upf]
    [clojure.set :as set]
    [rumext.v2 :as mf]))
 
-(mf/defc outline
-  {::mf/wrap-props false}
-  [props]
-  (let [shape     (unchecked-get props "shape")
-        modifier  (unchecked-get props "modifier")
-
-        zoom      (d/nilv (unchecked-get props "zoom") 1)
+(mf/defc outline*
+  [{:keys [shape modifier zoom]}]
+  (let [zoom      (d/nilv zoom 1)
         shape     (gsh/transform-shape shape (:modifiers modifier))
         transform (gsh/transform-str shape)
 
         ;; NOTE: that we don't use mf/deref to avoid a repaint dependency here
         objects   (deref refs/workspace-page-objects)
-        color     (if (ctn/in-any-component? objects shape)
+        color     (if (or
+                       (ctn/in-any-component? objects shape)
+                       (ctk/is-variant-container? shape))
                     "var(--assets-component-hightlight)"
                     "var(--color-accent-tertiary)")
 
@@ -48,7 +45,7 @@
         path-data
         (mf/with-memo [path? content]
           (when (and ^boolean path? (some? content))
-            (d/nilv (ex/ignoring (upf/format-path content)) "")))
+            (.toString content)))
 
         border-attrs
         (attrs/get-border-props shape)
@@ -94,46 +91,29 @@
 
     [:> outline-type props]))
 
-(mf/defc shape-outlines-render
-  {::mf/wrap-props false
-   ::mf/wrap [#(mf/memo' % (mf/check-props ["shapes" "zoom" "modifiers"]))]}
-  [props]
-  (let [shapes    (unchecked-get props "shapes")
-        zoom      (unchecked-get props "zoom")
-        modifiers (unchecked-get props "modifiers")]
+(mf/defc shape-outlines-render*
+  {::mf/wrap [#(mf/memo' % (mf/check-props ["shapes" "zoom" "modifiers"]))]}
+  [{:keys [shapes zoom modifiers]}]
+  (for [shape shapes]
+    (let [shape-id (dm/get-prop shape :id)
+          modifier (get modifiers shape-id)]
+      [:> outline* {:key (dm/str "outline-" shape-id)
+                    :shape shape
+                    :modifier modifier
+                    :zoom zoom}])))
 
-    (for [shape shapes]
-      (let [shape-id (dm/get-prop shape :id)
-            modifier (get modifiers shape-id)]
-        [:& outline {:key (dm/str "outline-" shape-id)
-                     :shape shape
-                     :modifier modifier
-                     :zoom zoom}]))))
-
-(defn- show-outline?
-  [shape]
-  (and (not (:hidden shape))
-       (not (:blocked shape))))
-
-(mf/defc shape-outlines
-  {::mf/wrap-props false}
-  [props]
-  (let [selected    (or (obj/get props "selected") #{})
-        hover       (or (obj/get props "hover") #{})
-        highlighted (or (obj/get props "highlighted") #{})
-
-        objects     (obj/get props "objects")
-        edition     (obj/get props "edition")
-        zoom        (obj/get props "zoom")
-        modifiers   (obj/get props "modifiers")
+(mf/defc shape-outlines*
+  [{:keys [selected hover highlighted objects edition zoom modifiers]}]
+  (let [selected    (or selected #{})
+        hover       (or hover #{})
+        highlighted (or highlighted #{})
 
         lookup      (d/getf objects)
         edition?    (fn [o] (= edition o))
 
         shapes      (-> #{}
                         (into (comp (remove edition?)
-                                    (keep lookup)
-                                    (filter show-outline?))
+                                    (keep lookup))
                               (set/union selected hover))
                         (into (comp (remove edition?)
                                     (keep lookup))
@@ -143,7 +123,7 @@
         modifiers (hooks/use-equal-memo modifiers)
         shapes    (hooks/use-equal-memo shapes)]
 
-    [:g.outlines
-     [:& shape-outlines-render {:shapes shapes
-                                :zoom zoom
-                                :modifiers modifiers}]]))
+    [:g.outlines.blurrable
+     [:> shape-outlines-render* {:shapes shapes
+                                 :zoom zoom
+                                 :modifiers modifiers}]]))

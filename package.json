@@ -1,26 +1,24 @@
 {
   "name": "penpot",
-  "version": "1.20.0",
+  "version": "2.17.0",
   "license": "MPL-2.0",
-  "author": "Kaleidos INC",
+  "author": "Kaleidos INC Sucursal en España SL",
   "private": true,
-  "packageManager": "yarn@4.2.2",
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
   "repository": {
     "type": "git",
     "url": "https://github.com/penpot/penpot"
   },
   "type": "module",
-  "scripts": {
-    "fmt:clj:check": "cljfmt check --parallel=true common/src/ common/test/ frontend/src/ frontend/test/ backend/src/ backend/test/ exporter/src/",
-    "fmt:clj": "cljfmt fix --parallel=true common/src/ common/test/ frontend/src/ frontend/test/ backend/src/ backend/test/ exporter/src/",
-    "lint:clj:common": "clj-kondo --parallel=true --lint common/src",
-    "lint:clj:frontend": "clj-kondo --parallel=true --lint frontend/src",
-    "lint:clj:backend": "clj-kondo --parallel=true --lint backend/src",
-    "lint:clj:exporter": "clj-kondo --parallel=true --lint exporter/src",
-    "lint:clj": "yarn run lint:clj:common && yarn run lint:clj:frontend && yarn run lint:clj:backend && yarn run lint:clj:exporter"
-  },
   "devDependencies": {
-    "@playwright/test": "^1.43.1",
-    "@types/node": "^20.12.7"
+    "@playwright/mcp": "^0.0.78",
+    "@playwright/test": "^1.62.0",
+    "@types/node": "^26.1.2",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "esbuild": "^0.28.1",
+    "mdts": "^0.20.6",
+    "nrepl-client": "^0.3.0",
+    "playwright": "1.62.1"
   }
 }

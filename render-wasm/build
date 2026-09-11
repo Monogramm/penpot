@@ -1,46 +1,36 @@
 #!/usr/bin/env bash
 
-if [ "$NODE_ENV" = "production" ];  then
-    export _BUILD_MODE="release";
-else
-    export _BUILD_MODE=${1:-debug};
-fi
-
-export EMCC_CFLAGS="--no-entry \
-    -Os \
-    -sASSERTIONS=1 \
-    -sALLOW_TABLE_GROWTH=1 \
-    -sALLOW_MEMORY_GROWTH=1 \
-    -sENVIRONMENT=web \
-    -sERROR_ON_UNDEFINED_SYMBOLS=0 \
-    -sMAX_WEBGL_VERSION=2 \
-    -sMODULARIZE=1 \
-    -sEXPORT_NAME=createRustSkiaModule \
-    -sEXPORTED_RUNTIME_METHODS=GL,stringToUTF8 \
-    -sEXPORT_ES6=1"
-
-EMSDK_QUIET=1 . /usr/local/emsdk/emsdk_env.sh;
-. /usr/local/cargo/env
-
-export EM_CACHE="/tmp/emsdk_cache";
-
-set -x
+# Usage: ./build [frontend|export] [extra cargo params...]
+#
+# With no target, builds both. Set BUILD_MODE=release (or NODE_ENV=production)
+# for an optimized build. See `_build_env` for what each target changes.
 
 _SCRIPT_DIR=$(dirname $0);
-_CARGO_PARAMS="--target=wasm32-unknown-emscripten";
 
-if [ "$_BUILD_MODE" = "release" ]; then
-    _CARGO_PARAMS="--release $_CARGO_PARAMS"
-fi
+# Each target needs its own `_build_env`, so re-enter per target.
+case "${1:-}" in
+    frontend|export)
+        ;;
+    *)
+        for _target in frontend export; do
+            "$_SCRIPT_DIR/build" "$_target" "$@" || exit $?;
+        done
+        exit 0;
+        ;;
+esac
 
-export SKIA_BINARIES_URL="https://github.com/penpot/skia-binaries/releases/download/0.80.1-1/skia-binaries-9e7d2684a17084095aef-wasm32-unknown-emscripten-gl-svg-textlayout.tar.gz"
+EMSDK_QUIET=1 . /opt/emsdk/emsdk_env.sh
 
 pushd $_SCRIPT_DIR;
-cargo build $_CARGO_PARAMS
 
-cp target/wasm32-unknown-emscripten/$_BUILD_MODE/render_wasm.js ../frontend/resources/public/js/
-cp target/wasm32-unknown-emscripten/$_BUILD_MODE/render_wasm.wasm ../frontend/resources/public/js/
+. ./_build_env
 
-sed -i "s/render_wasm.wasm/render_wasm.wasm?version=develop/g" ../frontend/resources/public/js/render_wasm.js;
+set -ex;
+
+setup;
+build;
+copy_target_artifacts;
+
+exit $?;
 
 popd

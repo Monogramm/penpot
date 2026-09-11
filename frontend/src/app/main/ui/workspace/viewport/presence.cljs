@@ -2,14 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.viewport.presence
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data.macros :as dm]
+   [app.common.time :as ct]
    [app.main.refs :as refs]
-   [app.util.time :as dt]
    [app.util.timers :as ts]
    [beicon.v2.core :as rx]
    [cuerdas.core :as str]
@@ -23,9 +23,8 @@
           "11.78,1.82,11.05L11.58,1.30ZL11.58,1.30ZM1.37,12.15L2.90,"
           "13.68L1.67,13.89L1.165,13.39L1.37,12.15ZL1.37,12.15Z"))
 
-(mf/defc session-cursor
-  {::mf/props :obj
-   ::mf/memo true}
+(mf/defc session-cursor*
+  {::mf/wrap [mf/memo]}
   [{:keys [session profile zoom]}]
   (let [point     (:point session)
         bg-color  (:color session)
@@ -63,14 +62,14 @@
         sessions (->> (vals sessions)
                       (filter :point)
                       (filter #(= page-id (:page-id %)))
-                      (filter #(>= 5000 (- (inst-ms (dt/now))
+                      (filter #(>= 5000 (- (inst-ms (ct/now))
                                            (inst-ms (:updated-at %))))))]
     (mf/with-effect nil
       (let [sem (ts/schedule 1000 #(swap! counter inc))]
         (fn [] (rx/dispose! sem))))
 
     (for [session sessions]
-      [:& session-cursor
+      [:> session-cursor*
        {:session session
         :zoom zoom
         :profile (get profiles (:profile-id session))

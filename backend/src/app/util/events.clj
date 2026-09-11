@@ -2,15 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.events
   "A generic asynchronous events notifications subsystem; used mainly
   for mark event points in functions and be able to attach listeners
   to them. Mainly used in http.sse for progress reporting."
-  (:refer-clojure :exclude [tap run!])
+  (:refer-clojure :exclude [run!])
   (:require
-   [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [promesa.exec :as px]
@@ -18,33 +17,30 @@
 
 (def ^:dynamic *channel* nil)
 
-(defn channel
-  []
-  (sp/chan :buf 32))
-
 (defn tap
-  [type data]
-  (when-let [channel *channel*]
-    (sp/put! channel [type data])
-    nil))
+  ([type data]
+   (when-let [channel *channel*]
+     (sp/put! channel [type data])
+     nil))
+  ([channel type data]
+   (when channel
+     (sp/put! channel [type data])
+     nil)))
 
-(defn start-listener
-  [on-event on-close]
-
-  (dm/assert!
-   "expected active events channel"
-   (sp/chan? *channel*))
+(defn spawn-listener
+  [channel on-event on-close]
+  (assert (sp/chan? channel) "expected active events channel")
 
   (px/thread
     {:virtual true}
     (try
       (loop []
-        (when-let [event (sp/take! *channel*)]
+        (when-let [event (sp/take! channel)]
           (let [result (ex/try! (on-event event))]
             (if (ex/exception? result)
               (do
                 (l/wrn :hint "unexpected exception" :cause result)
-                (sp/close! *channel*))
+                (sp/close! channel))
               (recur)))))
       (finally
         (on-close)))))
@@ -55,7 +51,7 @@
   [f on-event]
 
   (binding [*channel* (sp/chan :buf 32)]
-    (let [listener (start-listener on-event (constantly nil))]
+    (let [listener (spawn-listener *channel* on-event (constantly nil))]
       (try
         (f)
         (finally

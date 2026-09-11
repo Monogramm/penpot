@@ -2,12 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.plugins.format
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.plugins.image-data :refer [create-image-data]]
    [app.util.object :as obj]))
 
 (def shape-proxy nil)
@@ -21,9 +22,11 @@
   (when kw (d/name kw)))
 
 (defn format-array
+  "Formats a collection into a JS array, applying `format-fn` to each item.
+  Always returns an array; an empty array is returned for a nil/empty `coll`."
   [format-fn coll]
-  (when (some? coll)
-    (apply array (keep format-fn coll))))
+  (apply array (keep format-fn coll)))
+
 
 (defn format-mixed
   [value]
@@ -44,6 +47,7 @@
     :frame "board"
     :rect "rectangle"
     :circle "ellipse"
+    :bool "boolean"
     (d/name type)))
 
 ;;export type Bounds = {
@@ -106,15 +110,9 @@
 ;;   keepAspectRatio?: boolean;
 ;; };
 (defn format-image
-  [{:keys [name width height mtype id keep-aspect-ratio] :as image}]
+  [image]
   (when (some? image)
-    (obj/without-empty
-     #js {:name name
-          :width width
-          :height height
-          :mtype mtype
-          :id (format-id id)
-          :keepAspectRatio keep-aspect-ratio})))
+    (create-image-data image)))
 
 ;; export interface Color {
 ;;   id?: string;
@@ -139,6 +137,8 @@
             :path path
             :color color
             :opacity opacity
+            :refId (format-id ref-id)
+            :refFile (format-id ref-file)
             :gradient (format-gradient gradient)
             :image (format-image image)}))))
 
@@ -147,15 +147,15 @@
   [[color attrs]]
   (let [shapes-info (apply array (map format-shape-info attrs))
         color (format-color color)]
-    (obj/set! color "shapeInfo" shapes-info)
+    (obj/set! color "shapesInfo" shapes-info)
     color))
 
 
 ;; export interface Shadow {
 ;;   id?: string;
 ;;   style?: 'drop-shadow' | 'inner-shadow';
-;;   offsetX?: number;
-;;   offsetY?: number;
+;;   offset-x?: number;
+;;   offset-y?: number;
 ;;   blur?: number;
 ;;   spread?: number;
 ;;   hidden?: boolean;
@@ -174,11 +174,6 @@
           :hidden hidden
           :color (format-color color)})))
 
-(defn format-shadows
-  [shadows]
-  (when (some? shadows)
-    (format-array format-shadow shadows)))
-
 ;;export interface Fill {
 ;;  fillColor?: string;
 ;;  fillOpacity?: number;
@@ -187,6 +182,7 @@
 ;;  fillColorRefId?: string;
 ;;  fillImage?: ImageData;
 ;;}
+
 (defn format-fill
   [{:keys [fill-color fill-opacity fill-color-gradient fill-color-ref-file fill-color-ref-id fill-image] :as fill}]
   (when (some? fill)
@@ -198,17 +194,6 @@
           :fillColorRefId (format-id fill-color-ref-id)
           :fillImage (format-image fill-image)})))
 
-(defn format-fills
-  [fills]
-  (cond
-    (= fills :multiple)
-    "mixed"
-
-    (= fills "mixed")
-    "mixed"
-
-    (some? fills)
-    (format-array format-fill fills)))
 
 ;; export interface Stroke {
 ;;   strokeColor?: string;
@@ -221,11 +206,13 @@
 ;;   strokeCapStart?: StrokeCap;
 ;;   strokeCapEnd?: StrokeCap;
 ;;   strokeColorGradient?: Gradient;
+;;   strokeImage?: ImageData;
 ;; }
 (defn format-stroke
   [{:keys [stroke-color stroke-color-ref-file stroke-color-ref-id
            stroke-opacity stroke-style stroke-width stroke-alignment
-           stroke-cap-start stroke-cap-end stroke-color-gradient] :as stroke}]
+           stroke-cap-start stroke-cap-end stroke-color-gradient
+           stroke-image] :as stroke}]
 
   (when (some? stroke)
     (obj/without-empty
@@ -238,45 +225,36 @@
           :strokeAlignment (format-key stroke-alignment)
           :strokeCapStart (format-key stroke-cap-start)
           :strokeCapEnd (format-key stroke-cap-end)
-          :strokeColorGradient (format-gradient stroke-color-gradient)})))
+          :strokeColorGradient (format-gradient stroke-color-gradient)
+          :strokeImage (format-image stroke-image)})))
 
-(defn format-strokes
-  [strokes]
-  (when (some? strokes)
-    (format-array format-stroke strokes)))
 
 ;; export interface Blur {
 ;;   id?: string;
-;;   type?: 'layer-blur';
 ;;   value?: number;
 ;;   hidden?: boolean;
 ;; }
 (defn format-blur
-  [{:keys [id type value hidden] :as blur}]
+  [{:keys [id value hidden] :as blur}]
   (when (some? blur)
     (obj/without-empty
      #js {:id (format-id id)
-          :type (format-key type)
           :value value
           :hidden hidden})))
 
 ;; export interface Export {
-;;   type: 'png' | 'jpeg' | 'svg' | 'pdf';
+;;   type: 'png' | 'jpeg' | 'webp' | 'svg' | 'pdf';
 ;;   scale: number;
 ;;   suffix: string;
 ;; }
 (defn format-export
-  [{:keys [type scale suffix] :as export}]
+  [{:keys [type scale suffix skip-children] :as export}]
   (when (some? export)
     (obj/without-empty
      #js {:type (format-key type)
           :scale scale
-          :suffix suffix})))
-
-(defn format-exports
-  [exports]
-  (when (some? exports)
-    (format-array format-export exports)))
+          :suffix suffix
+          :skipChildren skip-children})))
 
 ;; export interface GuideColumnParams {
 ;;   color: { color: string; opacity: number };
@@ -358,8 +336,7 @@
 
 (defn format-frame-guides
   [guides]
-  (when (some? guides)
-    (format-array format-frame-guide guides)))
+  (format-array format-frame-guide guides))
 
 ;;interface PathCommand {
 ;;  command:
@@ -413,8 +390,7 @@
 
 (defn format-path-content
   [content]
-  (when (some? content)
-    (format-array format-command content)))
+  (format-array format-command content))
 
 ;; export type TrackType = 'flex' | 'fixed' | 'percent' | 'auto';
 ;;
@@ -428,11 +404,6 @@
     (obj/without-empty
      #js {:type (-> type format-key)
           :value value})))
-
-(defn format-tracks
-  [tracks]
-  (when (some? tracks)
-    (format-array format-track tracks)))
 
 
 ;; export interface Dissolve {
@@ -599,3 +570,10 @@
   (case axis
     :y "horizontal"
     :x "vertical"))
+
+(defn format-geom-rect
+  [{:keys [x y width height]}]
+  #js {:x x
+       :y y
+       :width width
+       :height height})

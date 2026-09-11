@@ -2,23 +2,23 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.assets
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data.macros :as dm]
-   [app.config :as cf]
+   [app.common.types.components-list :as ctkl]
    [app.main.data.modal :as modal]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.assets :as dwa]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.context-menu-a11y :refer [context-menu*]]
-   [app.main.ui.components.search-bar :refer [search-bar]]
+   [app.main.ui.components.search-bar :refer [search-bar*]]
    [app.main.ui.context :as ctx]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.main.ui.workspace.sidebar.assets.common :as cmm]
    [app.main.ui.workspace.sidebar.assets.file-library :refer [file-library*]]
    [app.util.dom :as dom]
@@ -29,15 +29,13 @@
 
 (mf/defc assets-libraries*
   {::mf/wrap [mf/memo]
-   ::mf/props :obj
    ::mf/private true}
   [{:keys [filters]}]
   (let [file-id   (mf/use-ctx ctx/current-file-id)
-
-        libraries (mf/deref refs/libraries)
-        libraries (mf/with-memo [libraries file-id]
-                    (->> (vals libraries)
-                         (remove :is-indirect)
+        files     (mf/deref refs/files)
+        libraries (mf/with-memo [files file-id]
+                    (->> (refs/select-libraries files file-id)
+                         (vals)
                          (remove #(= file-id (:id %)))
                          (map (fn [file]
                                 (update file :data dissoc :pages-index)))
@@ -56,9 +54,8 @@
                (update file :data dissoc :pages-index))
              refs/file))
 
-(mf/defc assets-local-library
-  {::mf/wrap [mf/memo]
-   ::mf/wrap-props false}
+(mf/defc assets-local-library*
+  {::mf/private true}
   [{:keys [filters]}]
   (let [file (mf/deref ref:local-library)]
     [:> file-library*
@@ -68,21 +65,27 @@
       :filters filters}]))
 
 (defn- toggle-values
-  [v [a b]]
+  [v a b]
   (if (= v a) b a))
 
-(mf/defc assets-toolbox
-  {::mf/wrap [mf/memo]
-   ::mf/wrap-props false}
-  [{:keys [size]}]
-  (let [components-v2  (mf/use-ctx ctx/components-v2)
-        read-only?     (mf/use-ctx ctx/workspace-read-only?)
+;; Per-file, session-scoped (in-memory only) so the search term and section
+;; filter survive switching between the Layers and Assets sidebar tabs without
+;; leaking across files or persisting across reloads.
+(defonce ^:private session-filters*
+  (atom {}))
+
+(mf/defc assets-toolbox*
+  {::mf/wrap [mf/memo]}
+  [{:keys [size file-id]}]
+  (let [read-only?     (mf/use-ctx ctx/workspace-read-only?)
         filters*       (mf/use-state
-                        {:term ""
-                         :section "all"
-                         :ordering (dwa/get-current-assets-ordering)
-                         :list-style (dwa/get-current-assets-list-style)
-                         :open-menu false})
+                        (fn []
+                          (-> (or (get @session-filters* file-id)
+                                  {:term ""
+                                   :section "all"})
+                              (assoc :ordering (dwa/get-current-assets-ordering)
+                                     :list-style (dwa/get-current-assets-list-style)
+                                     :open-menu false))))
         filters        (deref filters*)
         term           (:term filters)
         list-style     (:list-style filters)
@@ -90,19 +93,17 @@
         section        (:section filters)
         ordering       (:ordering filters)
         reverse-sort?  (= :desc ordering)
-        num-libs       (count (mf/deref refs/libraries))
-
-        show-templates-04-test1?
-        (and (cf/external-feature-flag "templates-04" "test1") (zero? num-libs))
-
-        show-templates-04-test2?
-        (and (cf/external-feature-flag "templates-04" "test2") (zero? num-libs))
+        libs           (mf/deref refs/libraries)
+        num-libs       (count libs)
+        file           (get libs file-id)
+        shared?        (:is-shared file)
+        components     (mf/with-memo [file] (ctkl/components (:data file)))
 
         toggle-ordering
         (mf/use-fn
          (mf/deps ordering)
          (fn []
-           (let [new-value (toggle-values ordering [:asc :desc])]
+           (let [new-value (toggle-values ordering :asc :desc)]
              (swap! filters* assoc :ordering new-value)
              (dwa/set-current-assets-ordering! new-value))))
 
@@ -110,7 +111,7 @@
         (mf/use-fn
          (mf/deps list-style)
          (fn []
-           (let [new-value (toggle-values list-style [:thumbs :list])]
+           (let [new-value (toggle-values list-style :thumbs :list)]
              (swap! filters* assoc :list-style new-value)
              (dwa/set-current-assets-list-style! new-value))))
 
@@ -132,9 +133,9 @@
 
         show-libraries-dialog
         (mf/use-fn
+         (mf/deps file-id)
          (fn []
-           (modal/show! :libraries-dialog {})
-           (modal/allow-click-outside!)))
+           (modal/show! :libraries-dialog {:file-id file-id})))
 
         on-open-menu
         (mf/use-fn  #(swap! filters* update :open-menu not))
@@ -142,60 +143,60 @@
         on-menu-close
         (mf/use-fn #(swap! filters* assoc :open-menu false))
 
+        ;; Memoize options to prevent infinite re-render loops when dev-tools are open.
+        ;;
+        ;; Problem: When dev-tools are open, they constantly monitor the application state,
+        ;; triggering frequent updates to okulary refs. This causes the parent component to
+        ;; re-render constantly, recreating the options array on every render.
+        ;;
+        ;; The context-menu* component has a mf/with-effect that depends on [options].
+        ;; When options are recreated (even with identical content), the effect runs,
+        ;; updating the internal state, which triggers another re-render, creating
+        ;; an infinite loop: render -> new options -> effect -> state update -> render...
         options
-        [{:name    (tr "workspace.assets.box-filter-all")
-          :id      "all"
-          :handler on-section-filter-change}
-         {:name    (tr "workspace.assets.components")
-          :id      "components"
-          :handler on-section-filter-change}
+        (mf/with-memo [on-section-filter-change]
+          [{:name    (tr "workspace.assets.box-filter-all")
+            :id      "all"
+            :handler on-section-filter-change}
+           {:name    (tr "workspace.assets.components")
+            :id      "components"
+            :handler on-section-filter-change}
+           {:name    (tr "workspace.assets.colors")
+            :id      "colors"
+            :handler on-section-filter-change}
+           {:name    (tr "workspace.assets.typography")
+            :id      "typographies"
+            :handler on-section-filter-change}])]
 
-         (when (not components-v2)
-           {:name    (tr "workspace.assets.graphics")
-            :id      "graphics"
-            :handler on-section-filter-change})
-
-         {:name    (tr "workspace.assets.colors")
-          :id      "colors"
-          :handler on-section-filter-change}
-
-         {:name    (tr "workspace.assets.typography")
-          :id      "typographies"
-          :handler on-section-filter-change}]]
+    (mf/with-effect [file-id term section]
+      (swap! session-filters* assoc file-id {:term term :section section}))
 
     [:article  {:class (stl/css :assets-bar)}
      [:div {:class (stl/css :assets-header)}
       (when-not ^boolean read-only?
-        (cond
-          show-templates-04-test1?
-          [:button {:class (stl/css :libraries-button)
-                    :on-click show-libraries-dialog
-                    :data-testid "libraries"}
-           (tr "workspace.assets.add-library")]
-          show-templates-04-test2?
+        (if (and (= num-libs 1) (empty? components) (not shared?))
           [:button {:class (stl/css :add-library-button)
                     :on-click show-libraries-dialog
                     :data-testid "libraries"}
            (tr "workspace.assets.add-library")]
-          :else
+
           [:button {:class (stl/css :libraries-button)
                     :on-click show-libraries-dialog
                     :data-testid "libraries"}
-           [:span {:class (stl/css :libraries-icon)}
-            i/library]
-           (tr "workspace.assets.libraries")]))
+           (tr "workspace.assets.manage-library")]))
 
 
       [:div {:class (stl/css :search-wrapper)}
-       [:& search-bar {:on-change on-search-term-change
-                       :value term
-                       :placeholder (tr "workspace.assets.search")}
+       [:> search-bar* {:on-change on-search-term-change
+                        :value term
+                        :placeholder (tr "workspace.assets.search")}
         [:button
          {:on-click on-open-menu
           :title (tr "workspace.assets.filter")
           :class (stl/css-case :section-button true
                                :opened menu-open?)}
-         i/filter-icon]]
+         deprecated-icon/filter-icon]]
+
        [:> context-menu*
         {:on-close on-menu-close
          :selectable true
@@ -207,6 +208,7 @@
          :top 158
          :left 18
          :options options}]
+
        [:> icon-button* {:variant "ghost"
                          :aria-label (tr "workspace.assets.sort")
                          :on-click toggle-ordering
@@ -216,5 +218,5 @@
       [:& (mf/provider cmm/assets-toggle-ordering) {:value toggle-ordering}
        [:& (mf/provider cmm/assets-toggle-list-style) {:value toggle-list-style}
         [:*
-         [:& assets-local-library {:filters filters}]
+         [:> assets-local-library* {:filters filters}]
          [:> assets-libraries* {:filters filters}]]]]]]))

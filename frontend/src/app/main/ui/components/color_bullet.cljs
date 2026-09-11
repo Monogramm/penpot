@@ -2,30 +2,38 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.components.color-bullet
   (:require-macros [app.main.style :as stl])
   (:require
+   [app.common.math :as mth]
    [app.config :as cfg]
    [app.util.color :as uc]
    [app.util.i18n :refer [tr]]
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
 
+(defn- format-color-with-alpha
+  [color opacity]
+  (if (and (number? opacity) (< opacity 1))
+    (str color " " (mth/round (* opacity 100)) "%")
+    color))
+
 (defn- color-title
   [color-item]
-  (let [name (:name color-item)
-        path (:path color-item)
+  (let [{:keys [name path]} (meta color-item)
         path-and-name (if path (str path " / " name) name)
         gradient (:gradient color-item)
         image (:image color-item)
-        color (:color color-item)]
+        opacity (:opacity color-item)
+        color (:color color-item)
+        color-str (when color (format-color-with-alpha color opacity))]
 
     (if (some? name)
       (cond
         (some? color)
-        (str/ffmt "% (%)" path-and-name color)
+        (str/ffmt "% (%)" path-and-name color-str)
 
         (some? gradient)
         (str/ffmt "% (%)" path-and-name (uc/gradient-type->string (:type gradient)))
@@ -38,7 +46,7 @@
 
       (cond
         (some? color)
-        color
+        color-str
 
         (some? gradient)
         (uc/gradient-type->string (:type gradient))
@@ -50,9 +58,8 @@
   [title]
   (str/replace title "." ".\u200B"))
 
-(mf/defc color-bullet
-  {::mf/wrap [mf/memo]
-   ::mf/wrap-props false}
+(mf/defc color-bullet*
+  {::mf/wrap [mf/memo]}
   [{:keys [color on-click mini area]}]
   (let [read-only? (nil? on-click)
         on-click
@@ -68,7 +75,7 @@
              :title (color-title color)}]
       ;; No multiple selection
       (let [color    (if (string? color) {:color color :opacity 1} color)
-            id       (:id color)
+            id       (or (:ref-id color) (:id color))
             gradient (:gradient color)
             opacity  (:opacity color)
             image    (:image color)]
@@ -104,10 +111,10 @@
             [:div {:class (stl/css :color-bullet-right)
                    :style {:background (uc/color->background color)}}]])]))))
 
-(mf/defc color-name
-  {::mf/wrap-props false}
+(mf/defc color-name*
   [{:keys [color size on-click on-double-click origin]}]
-  (let [{:keys [name color gradient]} (if (string? color) {:color color :opacity 1} color)]
+  (let [{:keys [name]} (meta color)
+        {:keys [color gradient]} (if (string? color) {:color color :opacity 1} color)]
     (when (or (not size) (> size 64))
       [:span {:class (stl/css-case
                       :color-text (and (= origin :palette) (< size 72))

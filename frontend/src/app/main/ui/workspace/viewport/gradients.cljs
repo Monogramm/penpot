@@ -2,12 +2,11 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.viewport.gradients
   "Gradients handlers and renders"
   (:require
-   [app.common.colors :as cc]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.geom.matrix :as gmt]
@@ -15,7 +14,10 @@
    [app.common.geom.shapes :as gsh]
    [app.common.geom.shapes.points :as gsp]
    [app.common.math :as mth]
+   [app.common.types.color :as cc]
+   [app.common.types.fills :as types.fills]
    [app.main.data.workspace.colors :as dc]
+   [app.main.features :as features]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.workspace.viewport.viewport-ref :as uwvv]
@@ -41,7 +43,7 @@
 (def gradient-endpoint-radius-selected 6)
 (def gradient-endpoint-radius-handler 20)
 
-(mf/defc shadow [{:keys [id offset]}]
+(mf/defc shadow* [{:keys [id offset]}]
   [:filter {:id id
             :x "-10%"
             :y "-10%"
@@ -59,7 +61,7 @@
 
 (def checkerboard "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA8AAAAPCAIAAAC0tAIdAAACvUlEQVQoFQGyAk39AeLi4gAAAAAAAB0dHQAAAAAAAOPj4wAAAAAAAB0dHQAAAAAAAOPj4wAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB////AAAAAAAA4+PjAAAAAAAAHR0dAAAAAAAA4+PjAAAAAAAAHR0dAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATj4+MAAAAAAAAdHR0AAAAAAADj4+MAAAAAAAAdHR0AAAAAAADj4+MAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjScaa0cU7nIAAAAASUVORK5CYII=")
 
-(mf/defc gradient-color-handler
+(mf/defc gradient-color-handler*
   [{:keys [zoom point color angle selected index
            on-click on-pointer-down on-pointer-up on-pointer-move on-lost-pointer-capture]}]
   [:g {:filter "url(#gradient-drop-shadow)"
@@ -116,7 +118,7 @@
              :r (/ 2 zoom)
              :fill "var(--app-white)"}]])
 
-(mf/defc gradient-handler-transformed
+(mf/defc gradient-handler-transformed*
   [{:keys [from-p
            to-p
            width-p
@@ -130,6 +132,9 @@
         start-offset (mf/use-ref nil)
 
         handler-state (mf/use-state {:display? false :offset 0 :hover nil})
+
+        render-wasm?  (features/use-feature "render-wasm/v1")
+        can-add-stop? (if render-wasm? (< (count stops) types.fills/MAX-GRADIENT-STOPS) true)
 
         endpoint-on-pointer-down
         (fn [position event]
@@ -164,7 +169,8 @@
         points-on-pointer-enter
         (mf/use-fn
          (fn []
-           (swap! handler-state assoc :display? true)))
+           (when can-add-stop?
+             (swap! handler-state assoc :display? true))))
 
         points-on-pointer-leave
         (mf/use-fn
@@ -177,17 +183,18 @@
          (fn [e]
            (dom/prevent-default e)
            (dom/stop-propagation e)
-
-           (let [raw-pt (dom/get-client-position e)
-                 position (uwvv/point->viewport raw-pt)
-                 lv (-> (gpt/to-vec from-p to-p) (gpt/unit))
-                 nv (gpt/normal-left lv)
-                 offset (-> (gsp/project-t position [from-p to-p] nv)
-                            (mth/precision 2))
-                 new-stop (cc/interpolate-gradient stops offset)
-                 stops (conj stops new-stop)
-                 stops (->> stops (sort-by :offset) (into []))]
-             (st/emit! (dc/update-colorpicker-stops stops)))))
+           (when can-add-stop?
+             (let [raw-pt (dom/get-client-position e)
+                   position (uwvv/point->viewport raw-pt)
+                   lv (-> (gpt/to-vec from-p to-p) (gpt/unit))
+                   nv (gpt/normal-left lv)
+                   offset (-> (gsp/project-t position [from-p to-p] nv)
+                              (mth/clamp 0 1)
+                              (mth/precision 2))
+                   new-stop (cc/interpolate-gradient stops offset)
+                   stops (conj stops new-stop)
+                   stops (->> stops (sort-by :offset) (into []))]
+               (st/emit! (dc/update-colorpicker-stops stops))))))
 
         points-on-pointer-move
         (mf/use-fn
@@ -264,7 +271,7 @@
 
     [:g.gradient-handlers {:pointer-events "none"}
      [:defs
-      [:& shadow {:id "gradient-drop-shadow" :offset (/ 2 zoom)}]]
+      [:> shadow* {:id "gradient-drop-shadow" :offset (/ 2 zoom)}]]
 
      (let [lv (-> (gpt/to-vec from-p to-p)
                   (gpt/unit))
@@ -354,7 +361,7 @@
                   :cx (:x width-p)
                   :cy (:y width-p)
                   :r (/ gradient-width-handler-radius-handler zoom)
-                  :fill "transpgarent"
+                  :fill "transparent"
                   :on-pointer-down (partial endpoint-on-pointer-down :width-p)
                   :on-pointer-enter (partial endpoint-on-pointer-enter :width-p)
                   :on-pointer-leave (partial endpoint-on-pointer-leave :width-p)
@@ -419,7 +426,7 @@
               (-> (gpt/to-vec from-p to-p)
                   (gpt/scale (:offset stop))))]
 
-         [:& gradient-color-handler
+         [:> gradient-color-handler*
           {:key index
            :selected (= editing index)
            :zoom zoom
@@ -441,13 +448,38 @@
                    :r (/ 4 zoom)
                    :fill "var(--app-white)"}]))]))
 
+;; The gradient geometry is defined in objectBoundingBox units, so the
+;; perpendicular of the gradient vector has to be taken in that normalized
+;; space and only afterwards mapped to the shape dimensions. Doing it the other
+;; way around blows the handler up by the shape aspect ratio (see #10069).
+
+(defn radial-width-point
+  "Position, in shape local coordinates, of the radial gradient width handler."
+  [{:keys [x y width height]} gradient]
+  (let [{:keys [start-x start-y end-x end-y] gwidth :width} gradient
+        vx (- end-x start-x)
+        vy (- end-y start-y)]
+    (gpt/point (+ x (* width (+ start-x (* gwidth vy))))
+               (+ y (* height (- start-y (* gwidth vx)))))))
+
+(defn point->gradient-width
+  "Inverse of `radial-width-point`: the radial gradient `:width` factor that
+  places its width handler on the given shape local coordinates point."
+  [{:keys [x y width height]} gradient point]
+  (let [{:keys [start-x start-y end-x end-y]} gradient
+        dx (- (/ (- (:x point) x) width) start-x)
+        dy (- (/ (- (:y point) y) height) start-y)]
+    (/ (mth/hypot dx dy)
+       (mth/hypot (- end-x start-x) (- end-y start-y)))))
+
 (mf/defc gradient-handlers-impl*
-  {::mf/props :obj}
   [{:keys [zoom stops gradient editing shape]}]
   (let [transform         (gsh/transform-matrix shape)
         transform-inverse (gsh/inverse-transform-matrix shape)
 
-        {:keys [x y width height] :as sr} (:selrect shape)
+        selrect (:selrect shape)
+
+        {:keys [x y width height]} selrect
 
         from-p (-> (gpt/point (+ x (* width (:start-x gradient)))
                               (+ y (* height (:start-y gradient))))
@@ -456,15 +488,9 @@
                               (+ y (* height (:end-y gradient))))
                    (gpt/transform transform))
 
-        gradient-vec    (gpt/to-vec from-p to-p)
-        gradient-length (gpt/length gradient-vec)
-
-        width-v (-> gradient-vec
-                    (gpt/normal-right)
-                    (gpt/multiply (gpt/point (* (:width gradient) (/ gradient-length (/ height 2)))))
-                    (gpt/multiply (gpt/point (/ width 2))))
-
-        width-p (gpt/add from-p width-v)
+        width-p (when (= :radial (:type gradient))
+                  (-> (radial-width-point selrect gradient)
+                      (gpt/transform transform)))
 
         change!
         (mf/use-fn
@@ -491,19 +517,18 @@
 
         on-change-width
         (mf/use-fn
-         (mf/deps gradient-length width height)
+         (mf/deps transform-inverse selrect gradient)
          (fn [point]
-           (let [scale-factor-y (/ gradient-length (/ height 2))
-                 norm-dist (/ (gpt/distance point from-p)
-                              (* (/ width 2) scale-factor-y))]
-             (when (and norm-dist (d/num? norm-dist))
+           (let [point     (gpt/transform point transform-inverse)
+                 norm-dist (point->gradient-width selrect gradient point)]
+             (when (d/num? norm-dist)
                (change! {:width norm-dist})))))]
 
-    [:& gradient-handler-transformed
+    [:> gradient-handler-transformed*
      {:editing editing
       :from-p from-p
       :to-p to-p
-      :width-p (when (= :radial (:type gradient)) width-p)
+      :width-p width-p
       :stops stops
       :zoom zoom
       :on-change-start on-change-start
@@ -511,14 +536,16 @@
       :on-change-width on-change-width}]))
 
 (mf/defc gradient-handlers*
-  {::mf/wrap [mf/memo]
-   ::mf/props :obj}
+  {::mf/wrap [mf/memo]}
   [{:keys [id zoom]}]
   (let [shape-ref    (mf/use-memo (mf/deps id) #(refs/object-by-id id))
         shape        (mf/deref shape-ref)
         state        (mf/deref refs/colorpicker)
         gradient     (:gradient state)
-        stops        (:stops state)
+        render-wasm? (features/use-feature "render-wasm/v1")
+        stops        (if render-wasm?
+                       (vec (take types.fills/MAX-GRADIENT-STOPS (:stops state)))
+                       (:stops state))
         editing-stop (:editing-stop state)]
 
     (when (and (some? gradient) (= id (:shape-id gradient)))

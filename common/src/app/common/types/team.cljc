@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.team
   (:require
@@ -17,4 +17,19 @@
    :admin  {:can-edit true :is-admin true :is-owner false}
    :owner  {:can-edit true :is-admin true :is-owner true}})
 
-(sm/register! ::role [::sm/one-of valid-roles])
+(def schema:role
+  [::sm/one-of {:title "TeamRole"} valid-roles])
+
+(def schema:team-name
+  [:and
+   [::sm/text {:max 250}]
+   [:fn {:error/code "errors.team-name-invalid-chars"}
+    (fn [s] (not (re-find #"[.:/]" s)))]])
+
+;; FIXME: specify more fields
+(def schema:team
+  [:map {:title "Team"}
+   [:id ::sm/uuid]
+   [:name :string]])
+
+

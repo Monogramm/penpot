@@ -2,12 +2,11 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.webapi
   "HTML5 web api helpers."
   (:require
-   [app.common.data :as d]
    [app.common.exceptions :as ex]
    [app.common.logging :as log]
    [app.util.globals :as globals]
@@ -18,17 +17,34 @@
 
 (log/set-level! :warn)
 
+;; NOTE: this operation is necessary because some versions of safari/webkit,
+;; returns something like "data:image/png, image/png;base64,iVBOR" (repeated
+;; mimetype). The regex replacement strips the repeated mimetype.
+(def webkit-datauri-fix-re
+  #"^(data:image/\w+)(,\s*image/\w+)?(;base64.*)$")
+
+(defn- fix-webkit-data-uri
+  [duri]
+  (cond-> duri
+    (string? duri)
+    (str/replace webkit-datauri-fix-re "$1$3")))
+
 (defn- file-reader
   [f]
   (rx/create
    (fn [subs]
      (let [reader (js/FileReader.)]
-       (obj/set! reader "onload" #(do (rx/push! subs (.-result ^js reader))
-                                      (rx/end! subs)))
-       (obj/set! reader "onerror" #(rx/error! subs %))
-       (obj/set! reader "onabort" #(rx/error! subs (ex/error :type :internal
-                                                             :code :abort
-                                                             :hint "operation aborted")))
+       (obj/set! reader "onload"
+                 #(let [result (.-result ^js reader)
+                        result (fix-webkit-data-uri result)]
+                    (rx/push! subs result)
+                    (rx/end! subs)))
+       (obj/set! reader "onerror"
+                 #(rx/error! subs %))
+       (obj/set! reader "onabort"
+                 #(rx/error! subs (ex/error :type :abort
+                                            :code :operation-aborted
+                                            :hint "operation aborted")))
        (f reader)
        (fn []
          (.abort ^js reader))))))
@@ -81,84 +97,27 @@
 
 (defn data-uri->blob
   [data-uri]
-  (let [[mtype b64-data] (str/split data-uri ";base64," 2)
-        mtype   (subs mtype (inc (str/index-of mtype ":")))
-        decoded (.atob js/window b64-data)
-        size    (.-length ^js decoded)
-        content (js/Uint8Array. size)]
-
-    (loop [i 0]
-      (when (< i size)
-        (aset content i (.charCodeAt ^js decoded i))
-        (recur (inc i))))
-
+  (let [[meta data] (str/split data-uri "," 2)
+        mtype-end   (or (str/index-of meta ";") (count meta))
+        mtype       (subs meta (inc (str/index-of meta ":")) mtype-end)
+        base64?     (str/includes? meta ";base64")
+        content     (if base64?
+                      (let [decoded (.atob js/globalThis data)
+                            size    (.-length ^js decoded)
+                            bytes   (js/Uint8Array. size)]
+                        (loop [i 0]
+                          (when (< i size)
+                            (aset bytes i (.charCodeAt ^js decoded i))
+                            (recur (inc i))))
+                        bytes)
+                      ;; Data URIs can be plain/URL-encoded (e.g. ;utf8,<svg...>).
+                      ;; Encode into UTF-8 bytes before creating the Blob.
+                      (.encode (js/TextEncoder.) (.decodeURIComponent js/globalThis data)))]
     (create-blob content mtype)))
 
 (defn get-current-selected-text
   []
   (.. js/window getSelection toString))
-
-(defn write-to-clipboard
-  [data]
-  (assert (string? data) "`data` should be string")
-  (let [cboard (unchecked-get js/navigator "clipboard")]
-    (.writeText ^js cboard data)))
-
-(defn write-to-clipboard-promise
-  [mimetype promise]
-  (let [cboard (unchecked-get js/navigator "clipboard")
-        data   (js/ClipboardItem.
-                (-> (obj/create)
-                    (obj/set! mimetype promise)))]
-    (.write ^js cboard #js [data])))
-
-(defn read-from-clipboard
-  []
-  (try
-    (let [cboard (unchecked-get js/navigator "clipboard")]
-      (if (.-readText ^js cboard)
-        (rx/from (.readText ^js cboard))
-        (rx/throw (ex-info "This browser does not implement read from clipboard protocol"
-                           {:not-implemented true}))))
-    (catch :default cause
-      (rx/throw cause))))
-
-(defn read-image-from-clipboard
-  []
-  (try
-    (let [cboard (unchecked-get js/navigator "clipboard")
-          read-item (fn [item]
-                      (let [img-type (->> (.-types ^js item)
-                                          (d/seek #(str/starts-with? % "image/")))]
-                        (if img-type
-                          (rx/from (.getType ^js item img-type))
-                          (rx/empty))))]
-      (->> (rx/from (.read ^js cboard)) ;; Get a stream of item lists
-           (rx/mapcat identity)     ;; Convert each item into an emission
-           (rx/switch-map read-item)))
-    (catch :default cause
-      (rx/throw cause))))
-
-(defn read-from-paste-event
-  [event]
-  (let [target (.-target ^js event)]
-    (when (and (not (.-isContentEditable ^js target)) ;; ignore when pasting into
-               (not= (.-tagName ^js target) "INPUT")) ;; an editable control
-      (.. ^js event getBrowserEvent -clipboardData))))
-
-(defn extract-html-text
-  [clipboard-data]
-  (.getData clipboard-data "text/html"))
-
-(defn extract-text
-  [clipboard-data]
-  (.getData clipboard-data "text"))
-
-(defn extract-images
-  "Get image files from clipboard data. Returns a native js array."
-  [clipboard-data]
-  (let [files (obj/into-array (.-files ^js clipboard-data))]
-    (.filter ^js files #(str/starts-with? (obj/get % "type") "image/"))))
 
 (defn create-canvas-element
   [width height]
@@ -245,6 +204,24 @@
        (fn []
          (.disconnect ^js obs))))))
 
+(defn on-dpr-change
+  "Registers a recurring listener for device-pixel-ratio changes (browser zoom).
+   Calls `f` with the new DPR each time it changes. Returns a 0-arity cancel fn."
+  [f]
+  (let [cancelled? (volatile! false)]
+    (letfn [(listen! []
+              (when-not @cancelled?
+                (let [dpr (.-devicePixelRatio ^js globals/window)
+                      mq  (.matchMedia globals/window (str "(resolution: " dpr "dppx)"))]
+                  (.addEventListener mq "change"
+                                     (fn [_]
+                                       (when-not @cancelled?
+                                         (f (.-devicePixelRatio ^js globals/window))
+                                         (listen!)))
+                                     #js {:once true}))))]
+      (listen!)
+      (fn [] (vreset! cancelled? true)))))
+
 (defn empty-png-size*
   [width height]
   (p/create
@@ -282,9 +259,12 @@
   (.selectAllChildren selection node))
 
 (defn get-selection
+  "Only returns valid selection"
   []
   (when-let [document globals/document]
-    (.getSelection document)))
+    (let [selection (.getSelection document)]
+      (when (not= (.-type selection) "None")
+        selection))))
 
 (defn get-anchor-node
   [^js selection]

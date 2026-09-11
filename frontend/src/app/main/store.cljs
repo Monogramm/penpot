@@ -2,15 +2,17 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.store
   (:require
    [app.common.logging :as log]
+   [app.common.time :as ct]
    [app.util.object :as obj]
    [app.util.timers :as tm]
    [beicon.v2.core :as rx]
    [beicon.v2.operators :as rxo]
+   [cuerdas.core :as str]
    [okulary.core :as l]
    [potok.v2.core :as ptk]))
 
@@ -28,6 +30,28 @@
 (def on-event identity)
 
 (def ^:dynamic *debug-events* false)
+(def ^:dynamic *debug-events-time* false)
+
+(def current-measure (atom nil))
+
+(defn measure-time-to-render [event]
+  (if @current-measure
+    (swap! current-measure conj event)
+
+    (let [start (js/performance.now)]
+      (reset! current-measure [event])
+
+      (tm/raf
+       #(js/scheduler.postTask
+         (fn []
+           (let [time (- (js/performance.now) start)]
+             ;; Only print sets that last over 1second
+             (when (> time 1000)
+               (println
+                (str time "|" (str/join "," @current-measure)))))
+           (reset! current-measure nil))
+
+         #js {"priority" "user-blocking"})))))
 
 ;; Only created in development build
 (when *assert*
@@ -38,6 +62,8 @@
       :app.main.data.workspace.selection/change-hover-state})
 
   (set! on-event (fn [e]
+                   (when (and *debug-events-time* (ptk/event? e))
+                     (measure-time-to-render (ptk/type e)))
                    (when (and *debug-events*
                               (ptk/event? e)
                               (not (debug-exclude-events (ptk/type e))))
@@ -69,6 +95,7 @@
          (rx/filter #(not (contains? omitset %)))
          (rx/map str)
          (rx/pipe (rxo/distinct-contiguous))
+         (rx/map (fn [event] {:name event :t (ct/now)}))
          (rx/scan (fn [buffer event]
                     (cond-> (conj buffer event)
                       (> (count buffer) 50)
@@ -76,6 +103,30 @@
                   #queue [])
          (rx/subs! #(reset! buffer (vec %))))
     buffer))
+
+(defn format-last-events
+  "Render the `last-events` buffer as a multi-line string with the
+  wall-clock time of each event and the delta (ms) since the previous
+  entry. The delta column is right-padded to 10 chars so the event
+  names align. Useful for embedding in error reports."
+  ([] (format-last-events @last-events))
+  ([events]
+   (let [lines
+         (loop [prev-t nil
+                xs     (seq events)
+                out    (transient [])]
+           (if xs
+             (let [{:keys [name t]} (first xs)
+                   iso        (ct/format-inst t :iso)
+                   delta      (if prev-t
+                                (str "(+" (ct/diff-ms prev-t t) "ms)")
+                                "(+0ms)")
+                   delta-pad  (str/pad delta {:length 10 :type :right})]
+               (recur t
+                      (next xs)
+                      (conj! out (str iso "  " delta-pad "  " name))))
+             (persistent! out)))]
+     (str/join "\n" lines))))
 
 (defn emit!
   ([] nil)

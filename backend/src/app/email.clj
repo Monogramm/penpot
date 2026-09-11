@@ -2,11 +2,12 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.email
   "Main api for send emails."
   (:require
+   [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
@@ -21,14 +22,33 @@
    [cuerdas.core :as str]
    [integrant.core :as ig])
   (:import
-   jakarta.mail.Message$RecipientType
-   jakarta.mail.Session
-   jakarta.mail.Transport
    jakarta.mail.internet.InternetAddress
    jakarta.mail.internet.MimeBodyPart
    jakarta.mail.internet.MimeMessage
    jakarta.mail.internet.MimeMultipart
+   jakarta.mail.Message$RecipientType
+   jakarta.mail.Session
+   jakarta.mail.Transport
    java.util.Properties))
+
+(defn clean
+  "Clean and normalizes email address string"
+  [email]
+  (let [email (str/lower email)
+        email (if (str/starts-with? email "mailto:")
+                (subs email 7)
+                email)
+        email (if (or (str/starts-with? email "<")
+                      (str/ends-with? email ">"))
+                (str/trim email "<>")
+                email)]
+    email))
+
+(defn get-domain
+  [email]
+  (let [email      (clean email)
+        [_ domain] (str/split email "@" 2)]
+    domain))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; EMAIL IMPL
@@ -93,36 +113,42 @@
                headers)))
 
 (defn- assign-body
-  [^MimeMessage mmsg {:keys [body charset] :or {charset "utf-8"}}]
-  (let [mpart (MimeMultipart. "mixed")]
+  [^MimeMessage mmsg {:keys [body charset attachments] :or {charset "utf-8"}}]
+  (let [mixed-mpart  (MimeMultipart. "mixed")]
     (cond
       (string? body)
-      (let [bpart (MimeBodyPart.)]
-        (.setContent bpart ^String body (str "text/plain; charset=" charset))
-        (.addBodyPart mpart bpart))
-
-      (vector? body)
-      (let [mmp (MimeMultipart. "alternative")
-            mbp (MimeBodyPart.)]
-        (.addBodyPart mpart mbp)
-        (.setContent mbp mmp)
-        (doseq [item body]
-          (let [mbp (MimeBodyPart.)]
-            (.setContent mbp
-                         ^String (:content item)
-                         ^String (str (:type item "text/plain") "; charset=" charset))
-            (.addBodyPart mmp mbp))))
+      (let [text-part (MimeBodyPart.)]
+        (.setText text-part ^String body ^String charset)
+        (.addBodyPart mixed-mpart text-part))
 
       (map? body)
-      (let [bpart (MimeBodyPart.)]
-        (.setContent bpart
-                     ^String (:content body)
-                     ^String (str (:type body "text/plain") "; charset=" charset))
-        (.addBodyPart mpart bpart))
+      (let [content-part      (MimeBodyPart.)
+            alternative-mpart (MimeMultipart. "alternative")]
+
+        (when-let [content (get body "text/plain")]
+          (let [text-part (MimeBodyPart.)]
+            (.setText text-part ^String content ^String charset)
+            (.addBodyPart alternative-mpart text-part)))
+
+        (when-let [content (get body "text/html")]
+          (let [html-part (MimeBodyPart.)]
+            (.setContent html-part ^String content
+                         (str "text/html; charset=" charset))
+            (.addBodyPart alternative-mpart html-part)))
+
+        (.setContent content-part alternative-mpart)
+        (.addBodyPart mixed-mpart content-part))
 
       :else
-      (throw (ex-info "Unsupported type" {:body body})))
-    (.setContent mmsg mpart)
+      (throw (IllegalArgumentException. "invalid email body provided")))
+
+    (doseq [[name content] attachments]
+      (let [attachment-part (MimeBodyPart.)]
+        (.setFileName attachment-part ^String name)
+        (.setContent attachment-part ^String content (str "text/plain; charset=" charset))
+        (.addBodyPart mixed-mpart attachment-part)))
+
+    (.setContent mmsg mixed-mpart)
     mmsg))
 
 (defn- opts->props
@@ -210,24 +236,26 @@
       (ex/raise :type :internal
                 :code :missing-email-templates))
     {:subject subj
-     :body (into
-            [{:type "text/plain"
-              :content text}]
-            (when html
-              [{:type "text/html"
-                :content html}]))}))
+     :body (d/without-nils
+            {"text/plain" text
+             "text/html" html})}))
 
-(def ^:private schema:context
-  [:map
+(def ^:private schema:params
+  [:map {:title "Email Params"}
    [:to [:or ::sm/email [::sm/vec ::sm/email]]]
    [:reply-to {:optional true} ::sm/email]
    [:from {:optional true} ::sm/email]
    [:lang {:optional true} ::sm/text]
+   [:subject {:optional true} ::sm/text]
    [:priority {:optional true} [:enum :high :low]]
-   [:extra-data {:optional true} ::sm/text]])
+   [:extra-data {:optional true} ::sm/text]
+   [:body {:optional true}
+    [:or :string [:map-of :string :string]]]
+   [:attachments {:optional true}
+    [:map-of :string :string]]])
 
-(def ^:private check-context
-  (sm/check-fn schema:context))
+(def ^:private check-params
+  (sm/check-fn schema:params))
 
 (defn template-factory
   [& {:keys [id schema]}]
@@ -235,9 +263,9 @@
   (let [check-fn (if schema
                    (sm/check-fn schema)
                    (constantly nil))]
-    (fn [context]
-      (let [context (-> context check-context check-fn)
-            email   (build-email-template id context)]
+    (fn [params]
+      (let [params (-> params check-params check-fn)
+            email  (build-email-template id params)]
         (when-not email
           (ex/raise :type :internal
                     :code :email-template-does-not-exists
@@ -245,35 +273,40 @@
                     :template-id id))
 
         (cond-> (assoc email :id (name id))
-          (:extra-data context)
-          (assoc :extra-data (:extra-data context))
+          (:extra-data params)
+          (assoc :extra-data (:extra-data params))
 
-          (:from context)
-          (assoc :from (:from context))
+          (seq (:attachments params))
+          (assoc :attachments (:attachments params))
 
-          (:reply-to context)
-          (assoc :reply-to (:reply-to context))
+          (:from params)
+          (assoc :from (:from params))
 
-          (:to context)
-          (assoc :to (:to context)))))))
+          (:reply-to params)
+          (assoc :reply-to (:reply-to params))
+
+          (:to params)
+          (assoc :to (:to params)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; PUBLIC HIGH-LEVEL API
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn render
-  [email-factory context]
-  (email-factory context))
+  [email-factory params]
+  (email-factory params))
 
 (defn send!
   "Schedule an already defined email to be sent using asynchronously
   using worker task."
-  [{:keys [::conn ::factory] :as context}]
+  [{:keys [::conn ::factory] :as params}]
   (assert (db/connectable? conn) "expected a valid database connection or pool")
 
   (let [email (if factory
-                (factory context)
-                (dissoc context ::conn))]
+                (factory params)
+                (-> params
+                    (dissoc params)
+                    (check-params)))]
     (wrk/submit! {::wrk/task :sendmail
                   ::wrk/delay 0
                   ::wrk/max-retries 4
@@ -343,8 +376,10 @@
 
 (def ^:private schema:feedback
   [:map
-   [:subject ::sm/text]
-   [:content ::sm/text]])
+   [:feedback-subject ::sm/text]
+   [:feedback-type ::sm/text]
+   [:feedback-content ::sm/text]
+   [:profile :map]])
 
 (def user-feedback
   "A profile feedback email."
@@ -384,10 +419,19 @@
    :id ::change-email
    :schema schema:change-email))
 
+(def ^:private schema:organization-data
+  [:map
+   [:name ::sm/text]
+   [:initials {:optional true} [:maybe :string]]
+   [:logo {:optional true} [:maybe ::sm/uri]]
+   [:avatar-bg-url {:optional true} [:maybe ::sm/uri]]
+   [:sso-active {:optional true} [:maybe ::sm/boolean]]])
+
 (def ^:private schema:invite-to-team
   [:map
    [:invited-by ::sm/text]
    [:team ::sm/text]
+   [:organization {:optional true} [:maybe schema:organization-data]]
    [:token ::sm/text]])
 
 (def invite-to-team
@@ -395,6 +439,42 @@
   (template-factory
    :id ::invite-to-team
    :schema schema:invite-to-team))
+
+(def ^:private schema:invite-to-organization
+  [:map
+   [:invited-by ::sm/text]
+   [:user-name [:maybe ::sm/text]]
+   [:token ::sm/text]
+   [:organization schema:organization-data]])
+
+(def invite-to-organization
+  "Organization member invitation email."
+  (template-factory
+   :id ::invite-to-organization
+   :schema schema:invite-to-organization))
+
+(def ^:private schema:organization-setup-sso
+  [:map
+   [:organization-name ::sm/text]])
+
+(def organization-setup-sso
+  "Email when an organization set up SSO"
+  (template-factory
+   :id ::organization-setup-sso
+   :schema schema:organization-setup-sso))
+
+(def ^:private schema:renewal-notice
+  [:map
+   [:user-name [:maybe ::sm/text]]
+   [:renewal-date ::sm/text]
+   [:estimated-amount ::sm/text]
+   [:organizations [:vector schema:organization-data]]])
+
+(def renewal-notice
+  "Enterprise subscription renewal notice email."
+  (template-factory
+   :id ::renewal-notice
+   :schema schema:renewal-notice))
 
 (def ^:private schema:join-team
   [:map
@@ -425,13 +505,13 @@
    :schema schema:request-file-access))
 
 (def request-file-access-yourpenpot
-  "File access on Your Penpot request email."
+  "File access on Personal Projects request email."
   (template-factory
    :id ::request-file-access-yourpenpot
    :schema schema:request-file-access))
 
 (def request-file-access-yourpenpot-view
-  "File access on Your Penpot view mode request email."
+  "File access on Personal Projects view mode request email."
   (template-factory
    :id ::request-file-access-yourpenpot-view
    :schema schema:request-file-access))

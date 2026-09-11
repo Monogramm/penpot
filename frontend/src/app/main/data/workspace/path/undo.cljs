@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.path.undo
   (:require
@@ -10,8 +10,10 @@
    [app.common.data.undo-stack :as u]
    [app.common.uuid :as uuid]
    [app.main.data.workspace.common :as dwc]
-   [app.main.data.workspace.path.changes :as changes]
+   [app.main.data.workspace.edition :as-alias dwe]
+   [app.main.data.workspace.pages :as-alias dwpg]
    [app.main.data.workspace.path.common :as common]
+   [app.main.data.workspace.path.helpers :as helpers]
    [app.main.data.workspace.path.state :as st]
    [app.main.store :as store]
    [beicon.v2.core :as rx]
@@ -26,17 +28,17 @@
   [event]
   (= :app.main.data.workspace.common/redo (ptk/type event)))
 
+;; Undo entries skip the render-only preview.
 (defn- make-entry [state]
   (let [id (st/get-path-id state)
         shape (st/get-path state)]
     {:content (:content shape)
      :selrect (:selrect shape)
      :points  (:points shape)
-     :preview (get-in state [:workspace-local :edit-path id :preview])
      :last-point (get-in state [:workspace-local :edit-path id :last-point])
      :prev-handler (get-in state [:workspace-local :edit-path id :prev-handler])}))
 
-(defn- load-entry [state {:keys [content selrect points preview last-point prev-handler]}]
+(defn- load-entry [state {:keys [content selrect points last-point prev-handler]}]
   (let [id (st/get-path-id state)
         old-content (st/get-path state :content)]
     (-> state
@@ -45,11 +47,14 @@
         (d/assoc-in-when (st/get-path-location state :points) points)
         (d/update-in-when
          [:workspace-local :edit-path id]
-         assoc
-         :preview preview
-         :last-point last-point
-         :prev-handler prev-handler
-         :old-content old-content))))
+         (fn [edit-state]
+           ;; Remap the selection to the restored content.
+           (cond-> (assoc edit-state
+                          :preview nil
+                          :last-point last-point
+                          :prev-handler prev-handler)
+             (some? content)
+             (update :selection helpers/remap-selection old-content content)))))))
 
 (defn undo-path []
   (ptk/reify ::undo-path
@@ -70,10 +75,8 @@
     (watch [_ state _]
       (let [id (st/get-path-id state)
             undo-stack (get-in state [:workspace-local :edit-path id :undo-stack])]
-        (if (> (:index undo-stack) 0)
-          (rx/of (changes/save-path-content {:preserve-move-to true}))
-          (rx/of (changes/save-path-content {:preserve-move-to true})
-                 (common/finish-path)
+        (when (zero? (:index undo-stack))
+          (rx/of (common/finish-path)
                  (dwc/show-toolbar)))))))
 
 (defn redo-path []
@@ -88,11 +91,7 @@
             (load-entry entry)
             (d/assoc-in-when
              [:workspace-local :edit-path id :undo-stack]
-             undo-stack))))
-
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (rx/of (changes/save-path-content)))))
+             undo-stack))))))
 
 (defn merge-head
   "Joins the head with the previous undo in one. This is done so when the user changes a
@@ -133,8 +132,8 @@
 
 (defn- stop-undo? [event]
   (let [type (ptk/type event)]
-    (or (= :app.main.data.workspace.edition/clear-edition-mode type)
-        (= :app.main.data.workspace/finalize-page type))))
+    (or (= ::dwe/clear-edition-mode type)
+        (= ::dwpg/finalize-page type))))
 
 (def path-content-ref
   (letfn [(selector [state]
@@ -169,4 +168,3 @@
                     (rx/map #(add-undo-entry)))
 
                (rx/of (end-path-undo))))))))))
-

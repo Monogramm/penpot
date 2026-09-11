@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.text-svg-position
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.transit :as transit]
+   [app.common.types.text :as txt]
    [app.main.fonts :as fonts]
    [app.util.dom :as dom]
    [app.util.text-position-data :as tpd]
@@ -105,7 +106,8 @@
                      :text-decoration (dm/str (get-prop styles "text-decoration"))
                      :letter-spacing  (dm/str (get-prop styles "letter-spacing"))
                      :font-style      (dm/str (get-prop styles "font-style"))
-                     :fills           (transit/decode-str (get-prop styles "--fills"))
+                     :fills           (or (transit/decode-str (get-prop styles "--fills"))
+                                          txt/default-text-fills)
                      :text            text})))]
 
     (when (some? shape-id)

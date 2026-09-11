@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.viewport.frame-grid
   (:require
@@ -15,9 +15,10 @@
    [app.common.types.shape-tree :as ctst]
    [app.common.uuid :as uuid]
    [app.main.refs :as refs]
+   [app.main.ui.workspace.viewport.rulers :as rulers]
    [rumext.v2 :as mf]))
 
-(mf/defc square-grid [{:keys [frame zoom grid] :as props}]
+(mf/defc square-grid* [{:keys [frame zoom grid]}]
   (let [grid-id (mf/use-memo #(uuid/next))
         {:keys [size] :as params} (-> grid :params)
         {color-value :color color-opacity :opacity} (-> grid :params :color)
@@ -45,7 +46,7 @@
              :height (:height frame)
              :fill (str "url(#" grid-id ")")}]]))
 
-(mf/defc layout-grid
+(mf/defc layout-grid*
   [{:keys [key frame grid zoom]}]
   (let [{color-value :color color-opacity :opacity} (-> grid :params :color)
         ;; Support for old color format
@@ -124,7 +125,7 @@
    selrect
    parents))
 
-(mf/defc grid-display-frame
+(mf/defc grid-display-frame*
   {::mf/wrap [mf/memo]}
   [{:keys [frame zoom transforming]}]
   (let [frame-id (:id frame)
@@ -154,28 +155,31 @@
                           :zoom zoom
                           :grid grid}]
            (case (:type grid)
-             :square [:> square-grid props]
-             :column [:> layout-grid props]
-             :row    [:> layout-grid props])))])))
+             :square [:> square-grid* props]
+             :column [:> layout-grid* props]
+             :row    [:> layout-grid* props])))])))
 
 (defn has-grid?
   [{:keys [grids]}]
   (and (some? grids)
        (d/not-empty? (->> grids (filter :display)))))
 
-(mf/defc frame-grid
+(mf/defc frame-grid*
   {::mf/wrap [mf/memo]}
-  [{:keys [zoom transform selected focus]}]
+  [{:keys [zoom transform selected focus vbox clip-rulers] :or {clip-rulers false}}]
   (let [frames        (->> (mf/deref refs/workspace-frames)
                            (filter has-grid?))
         transforming  (when (some? transform) selected)]
 
-    [:g.grid-display {:style {:pointer-events "none"}}
+    [:g.grid-display {:style {:pointer-events "none"}
+                      :clip-path (when clip-rulers "url(#clip-frame-grid)")}
+     (when clip-rulers
+       [:> rulers/rulers-clip-path* {:id "clip-frame-grid" :vbox vbox :zoom zoom}])
      (for [frame frames]
        (when (and #_(not (is-transform? frame))
               (not (ctst/rotated-frame? frame))
                   (or (empty? focus) (contains? focus (:id frame))))
-         [:& grid-display-frame {:key (str "grid-" (:id frame))
-                                 :zoom zoom
-                                 :frame frame
-                                 :transforming transforming}]))]))
+         [:> grid-display-frame* {:key (str "grid-" (:id frame))
+                                  :zoom zoom
+                                  :frame frame
+                                  :transforming transforming}]))]))

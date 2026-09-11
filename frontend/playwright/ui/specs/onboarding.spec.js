@@ -4,6 +4,7 @@ import OnboardingPage from "../pages/OnboardingPage";
 
 test.beforeEach(async ({ page }) => {
   await DashboardPage.init(page);
+  await DashboardPage.mockConfigFlags(page, ["enable-onboarding"]);
   await DashboardPage.mockRPC(
     page,
     "get-profile",
@@ -14,6 +15,8 @@ test.beforeEach(async ({ page }) => {
 test("User can complete the onboarding", async ({ page }) => {
   const dashboardPage = new DashboardPage(page);
   const onboardingPage = new OnboardingPage(page);
+
+  await dashboardPage.mockConfigFlags(["enable-onboarding"]);
 
   await dashboardPage.goToDashboard();
   await expect(
@@ -27,19 +30,10 @@ test("User can complete the onboarding", async ({ page }) => {
 
   await onboardingPage.fillOnboardingInputsStep2();
   await expect(
-    page.getByRole("heading", { name: "Tell us about your job" }),
-  ).toBeVisible();
-
-  await onboardingPage.fillOnboardingInputsStep3();
-  await expect(
     page.getByRole("heading", { name: "Where would you like to get" }),
   ).toBeVisible();
 
-  await onboardingPage.fillOnboardingInputsStep4();
-  await expect(
-    page.getByRole("heading", { name: "How did you hear about Penpot?" }),
-  ).toBeVisible();
+  await onboardingPage.fillOnboardingInputsStep3();
 
-  await onboardingPage.fillOnboardingInputsStep5();
   await expect(page.getByRole("button", { name: "Start" })).toBeEnabled();
 });

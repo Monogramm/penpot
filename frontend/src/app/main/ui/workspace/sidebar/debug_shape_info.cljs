@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.debug-shape-info
   (:require-macros [app.main.style :as stl])
@@ -13,7 +13,6 @@
    [app.main.data.workspace :as dw]
    [app.main.refs :as refs]
    [app.main.store :as st]
-   [app.main.ui.icons :as i]
    [debug :as dbg]
    [rumext.v2 :as mf]))
 
@@ -118,19 +117,13 @@
 
     [:div {:class (stl/css :attrs-container-value)} (str value)]))
 
-(mf/defc debug-shape-info
+(mf/defc debug-shape-info*
   []
-  (let [objects (mf/deref refs/workspace-page-objects)
+  (let [objects  (mf/deref refs/workspace-page-objects)
         selected (->> (mf/deref refs/selected-shapes)
                       (map (d/getf objects)))]
 
     [:div {:class (stl/css :shape-info)}
-     [:div {:class (stl/css :shape-info-title)}
-      [:span "Debug"]
-      [:div {:class (stl/css :close-button)
-             :on-click #(dbg/disable! :shape-panel)}
-       i/close]]
-
      (if (empty? selected)
        [:div {:class (stl/css :attrs-container)} "No shapes selected"]
        (for [[idx current] (d/enumerate selected)]

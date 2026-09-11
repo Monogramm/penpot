@@ -1,0 +1,11 @@
+FROM dhi.io/nginx:1.31.1-alpine3.22
+LABEL maintainer="Penpot <docker@penpot.app>"
+
+ARG BUNDLE_PATH="./bundle-storybook/"
+
+COPY --chown=65532:65532 $BUNDLE_PATH /var/www/
+COPY --chown=65532:65532 ./files/nginx.storybook.conf /etc/nginx/conf.d/default.conf
+
+# Already the default user in the DHI runtime; explicit for clarity. Numeric
+# UID, not by name -- this image has no "nonroot" entry in /etc/passwd.
+USER 65532:65532

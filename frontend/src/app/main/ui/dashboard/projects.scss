@@ -2,40 +2,47 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "common/refactor/common-refactor.scss" as *;
 @use "common/refactor/common-dashboard";
+@use "ds/typography.scss" as t;
+@use "ds/_borders.scss" as *;
+@use "ds/spacing.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/z-index.scss" as *;
+@use "ds/mixins.scss" as *;
+@use "ds/_utils.scss" as *;
 
 .dashboard-container {
   flex: 1 0 0;
-  width: 100%;
-  margin-right: $s-16;
-  border-top: $s-1 solid var(--panel-border-color);
+  inline-size: 100%;
+  margin-inline-end: var(--sp-l);
+  border-block-start: $b-1 solid var(--panel-border-color);
   overflow-y: auto;
 }
 
 .dashboard-projects {
   user-select: none;
-  height: calc(100vh - $s-64);
+  block-size: calc(100vh - px2rem(80));
 }
 
 .with-team-hero {
-  height: calc(100vh - $s-280);
+  block-size: calc(100vh - px2rem(360));
 }
 
 .dashboard-shared {
-  width: calc(100vw - $s-320);
-  margin-right: $s-52;
+  inline-size: calc(100vw - px2rem(320));
+  margin-inline-end: px2rem(52);
 }
 
 .search {
-  margin-top: $s-12;
+  margin-block-start: var(--sp-m);
 }
 
 .dashboard-project-row {
   --actions-opacity: 0;
-  margin-bottom: $s-24;
+
+  margin-block-end: var(--sp-xxl);
   position: relative;
 
   &:hover,
@@ -59,11 +66,11 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: $s-8;
-  width: 99%;
-  max-height: $s-40;
-  padding: $s-8 $s-8 $s-8 $s-16;
-  margin-top: $s-16;
+  gap: var(--sp-s);
+  inline-size: 99%;
+  max-block-size: $sz-40;
+  padding: var(--sp-s) var(--sp-s) var(--sp-s) var(--sp-l);
+  margin-block-start: var(--sp-l);
   border-radius: $br-4;
 }
 
@@ -71,33 +78,38 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  width: 100%;
-  min-height: $s-32;
-  margin-left: $s-8;
+  inline-size: 100%;
+  min-block-size: $sz-32;
+  margin-inline-start: var(--sp-s);
 }
 
 .project-name {
-  @include bodyLargeTypography;
-  @include textEllipsis;
-  width: fit-content;
-  margin-right: $s-12;
-  line-height: 0.8;
+  @include text-ellipsis;
+  @include t.use-typography("body-large");
+
   color: var(--title-foreground-color-hover);
   cursor: pointer;
-  height: $s-16;
+  block-size: $sz-16;
+  line-height: 0.8;
+  margin-inline-end: var(--sp-m);
+  flex: 0 1 auto;
+  min-inline-size: 0;
 }
 
 .info-wrapper {
   display: flex;
   align-items: center;
-  gap: $s-8;
+  flex: 0 0 auto;
+  gap: var(--sp-s);
 }
 
 .info,
 .recent-files-row-title-info {
-  @include bodyMediumTypography;
+  @include t.use-typography("body-medium");
+
   color: var(--title-foreground-color);
-  @media (max-width: 760px) {
+
+  @media (width <= 760px) {
     display: none;
   }
 }
@@ -105,44 +117,50 @@
 .project-actions {
   display: flex;
   opacity: var(--actions-opacity);
-  margin-left: $s-32;
+  margin-inline-start: var(--sp-xxxl);
 }
 
 .add-file-btn,
 .options-btn {
-  @extend .button-tertiary;
-  height: $s-32;
-  width: $s-32;
-  margin: 0 $s-8;
-  padding: $s-8;
+  @extend %button-tertiary;
+
+  block-size: $sz-32;
+  inline-size: $sz-32;
+  margin: 0 var(--sp-s);
+  padding: var(--sp-s);
 }
 
 .add-icon,
 .menu-icon {
-  @extend .button-icon;
+  @extend %button-icon;
+
   stroke: var(--icon-foreground);
 }
 
 .grid-container {
-  width: 100%;
-  padding: 0 $s-4;
+  inline-size: 100%;
+  padding: 0 var(--sp-xs);
 }
 
 .placeholder-placement {
-  margin: $s-16 $s-32;
+  margin: var(--sp-l) var(--sp-xxxl);
 }
 
 .show-more {
   --show-more-color: var(--button-secondary-foreground-color-rest);
-  @include buttonStyle;
-  @include bodyMediumTypography;
+
+  @include t.use-typography("body-medium");
+
+  border: none;
+  background: none;
+  cursor: pointer;
   position: absolute;
-  top: $s-8;
-  right: $s-52;
+  inset-block-start: var(--sp-s);
+  inset-inline-end: px2rem(52);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  column-gap: $s-12;
+  column-gap: var(--sp-m);
   color: var(--show-more-color);
 
   &:hover {
@@ -151,8 +169,8 @@
 }
 
 .show-more-icon {
-  height: $s-16;
-  width: $s-16;
+  block-size: $sz-16;
+  inline-size: $sz-16;
   fill: none;
   stroke: var(--show-more-color);
 }
@@ -163,18 +181,17 @@
   border-radius: $br-8;
   border: none;
   display: flex;
-  margin: $s-16;
-  padding: $s-8;
+  margin: var(--sp-l);
+  padding: var(--sp-s);
   position: relative;
 
   img {
     border-radius: $br-4;
-    height: $s-200;
-    width: auto;
+    inline-size: auto;
 
-    @media (max-width: 1200px) {
+    @media (width <= 1200px) {
       display: none;
-      width: 0;
+      inline-size: 0;
     }
   }
 }
@@ -184,62 +201,63 @@
   flex-direction: column;
   align-items: flex-start;
   flex-grow: 1;
-  padding: $s-20 $s-20;
+  padding: var(--sp-xl) var(--sp-xl);
 }
 
 .title {
-  font-size: $fs-24;
   color: var(--color-foreground-primary);
-  font-weight: $fw400;
+  font-size: px2rem(24);
 }
 
 .info {
   flex: 1;
-  font-size: $fs-16;
+  font-size: $sz-16;
+
   span {
     color: var(--color-foreground-secondary);
     display: block;
   }
+
   a {
     color: var(--color-accent-primary);
   }
-  padding: $s-8 0;
+
+  padding: var(--sp-s) 0;
 }
 
 .close {
   --close-icon-foreground-color: var(--icon-foreground);
+
   position: absolute;
-  top: $s-20;
-  right: $s-24;
-  width: $s-24;
+  top: var(--sp-xl);
+  inset-inline-end: var(--sp-xxl);
+  inline-size: var(--sp-xxl);
   background-color: transparent;
   border: none;
   cursor: pointer;
+
   &:hover {
     --close-icon-foreground-color: var(--button-icon-foreground-color-selected);
   }
 }
 
 .close-icon {
-  @extend .button-icon;
-  stroke: var(--close-icon-foreground-color);
-}
+  @extend %button-icon;
 
-.invite {
-  height: $s-32;
-  width: $s-180;
+  stroke: var(--close-icon-foreground-color);
 }
 
 .img-wrapper {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: $s-200;
-  height: $s-200;
+  inline-size: var(--sp-xl) 0;
+  block-size: var(--sp-xl) 0;
   overflow: hidden;
   border-radius: $br-4;
-  @media (max-width: 1200px) {
+
+  @media (width <= 1200px) {
     display: none;
-    width: 0;
+    inline-size: 0;
   }
 }

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.geom.shapes.transforms
   (:require
@@ -12,11 +12,10 @@
    [app.common.geom.matrix :as gmt]
    [app.common.geom.point :as gpt]
    [app.common.geom.rect :as grc]
-   [app.common.geom.shapes.bool :as gshb]
    [app.common.geom.shapes.common :as gco]
-   [app.common.geom.shapes.path :as gpa]
    [app.common.math :as mth]
-   [app.common.types.modifiers :as ctm]))
+   [app.common.types.modifiers :as ctm]
+   [app.common.types.path :as path]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -77,7 +76,11 @@
               position-data)
         position-data))))
 
-;; FIXME: revist usage of mutability
+;; FIXME: review performance of this; this function is executing too
+;; many times, including when the point vector is 0,0. This function
+;; can be implemented in function of transform which is already mor
+;; performant
+
 (defn move
   "Move the shape relatively to its current
   position applying the provided delta."
@@ -95,8 +98,8 @@
         (d/update-when :x d/safe+ dx)
         (d/update-when :y d/safe+ dy)
         (d/update-when :position-data move-position-data mvec)
-        (cond-> (= :bool type) (update :bool-content gpa/move-content mvec))
-        (cond-> (= :path type) (update :content gpa/move-content mvec)))))
+        (cond-> (or (= :bool type) (= :path type))
+          (update :content path/move-content mvec)))))
 
 ;; --- Absolute Movement
 
@@ -280,7 +283,7 @@
     [selrect transform (when (some? transform) (gmt/inverse transform))]))
 
 (defn- adjust-shape-flips
-  "After some tranformations the flip-x/flip-y flags can change we need
+  "After some transformations the flip-x/flip-y flags can change we need
   to check this before adjusting the selrect"
   [shape points]
   (let [points' (dm/get-prop shape :points)
@@ -300,13 +303,13 @@
       (neg? dot-x)
       (update :flip-x not)
 
-      (neg? dot-x)
-      (update :rotation -)
-
       (neg? dot-y)
       (update :flip-y not)
 
-      (neg? dot-y)
+      ;; Negate rotation only when an odd number of axes are flipped,
+      ;; since flipping both axes is equivalent to a 180° rotation and
+      ;; two negations would cancel each other out.
+      (not= (neg? dot-x) (neg? dot-y))
       (update :rotation -))))
 
 (defn- apply-transform-move
@@ -317,14 +320,11 @@
         points  (gco/transform-points  (dm/get-prop shape :points) transform-mtx)
         selrect (gco/transform-selrect (dm/get-prop shape :selrect) transform-mtx)
 
-        shape   (if (= type :bool)
-                  (update shape :bool-content gpa/transform-content transform-mtx)
-                  shape)
         shape   (if (= type :text)
                   (update shape :position-data transform-position-data transform-mtx)
                   shape)
-        shape   (if (= type :path)
-                  (update shape :content gpa/transform-content transform-mtx)
+        shape   (if (or (= type :path) (= type :bool))
+                  (update shape :content path/transform-content transform-mtx)
                   (assoc shape
                          :x (dm/get-prop selrect :x)
                          :y (dm/get-prop selrect :y)
@@ -346,39 +346,45 @@
 
         center    (gco/points->center points)
         selrect   (calculate-selrect points center)
-        transform (calculate-transform points center selrect)
-        inverse   (when (some? transform) (gmt/inverse transform))]
 
-    (if-not (and (some? inverse) (some? transform))
-      shape
-      (let [type     (dm/get-prop shape :type)
-            rotation (mod (+ (d/nilv (:rotation shape) 0)
-                             (d/nilv (dm/get-in shape [:modifiers :rotation]) 0))
-                          360)
-            shape    (if (= type :bool)
-                       (update shape :bool-content gpa/transform-content transform-mtx)
-                       shape)
+        [transform inverse]
+        (let [transform (calculate-transform points center selrect)
+              inverse (when (some? transform) (gmt/inverse transform))]
+          (if (and (some? transform) (some? inverse))
+            [transform inverse]
+            [(:transform shape (gmt/matrix)) (:transform-inverse shape (gmt/matrix))]))
 
-            shape    (if (= type :path)
-                       (update shape :content gpa/transform-content transform-mtx)
-                       (assoc shape
-                              :x (dm/get-prop selrect :x)
-                              :y (dm/get-prop selrect :y)
-                              :width (dm/get-prop selrect :width)
-                              :height (dm/get-prop selrect :height)))]
-        (-> shape
-            (assoc :transform transform)
-            (assoc :transform-inverse inverse)
-            (assoc :selrect selrect)
-            (assoc :points points)
-            (assoc :rotation rotation))))))
+        type     (dm/get-prop shape :type)
+        rotation (mod (+ (d/nilv (:rotation shape) 0)
+                         (d/nilv (dm/get-in shape [:modifiers :rotation]) 0))
+                      360)
+
+        shape    (if (or (= type :path) (= type :bool))
+                   (update shape :content path/transform-content transform-mtx)
+                   (assoc shape
+                          :x (dm/get-prop selrect :x)
+                          :y (dm/get-prop selrect :y)
+                          :width (dm/get-prop selrect :width)
+                          :height (dm/get-prop selrect :height)))]
+    (-> shape
+        (assoc :transform transform)
+        (assoc :transform-inverse inverse)
+        (assoc :selrect selrect)
+        (assoc :points points)
+        (assoc :rotation rotation))))
 
 (defn apply-transform
   "Given a new set of points transformed, set up the rectangle so it keeps
   its properties. We adjust de x,y,width,height and create a custom transform"
   [shape transform-mtx]
-  (if ^boolean (gmt/move? transform-mtx)
+  (cond
+    (nil? transform-mtx)
+    shape
+
+    ^boolean (gmt/move? transform-mtx)
     (apply-transform-move shape transform-mtx)
+
+    :else
     (apply-transform-generic shape transform-mtx)))
 
 (defn- update-group-viewbox
@@ -450,20 +456,7 @@
         (assoc :flip-x  (-> mask :flip-x))
         (assoc :flip-y  (-> mask :flip-y)))))
 
-(defn update-bool-selrect
-  "Calculates the selrect+points for the boolean shape"
-  [shape children objects]
-
-  (let [bool-content     (gshb/calc-bool-content shape objects)
-        shape            (assoc shape :bool-content bool-content)
-        [points selrect] (gpa/content->points+selrect shape bool-content)]
-
-    (if (and (some? selrect) (d/not-empty? points))
-      (-> shape
-          (assoc :selrect selrect)
-          (assoc :points points))
-      (update-group-selrect shape children))))
-
+;; FIXME: revisit
 (defn update-shapes-geometry
   [objects ids]
   (->> ids
@@ -477,7 +470,7 @@
                   (update-mask-selrect shape children)
 
                   (cfh/bool-shape? shape)
-                  (update-bool-selrect shape children objects)
+                  (path/update-bool-shape shape objects)
 
                   (cfh/group-shape? shape)
                   (update-group-selrect shape children)

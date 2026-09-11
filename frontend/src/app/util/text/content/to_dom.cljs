@@ -2,12 +2,12 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.text.content.to-dom
   (:require
    [app.common.data :as d]
-   [app.common.text :as txt]
+   [app.common.types.text :as txt]
    [app.util.dom :as dom]
    [app.util.text.content.styles :as styles]))
 
@@ -47,12 +47,15 @@
      element)))
 
 (defn get-styles-from-attrs
-  [node attrs]
-  (let [styles (reduce (fn [acc key] (assoc acc key (get node key))) {} attrs)
+  [node attrs defaults]
+  (let [styles (reduce
+                (fn [acc key]
+                  (let [default-value (get defaults key)]
+                    (assoc acc key (get node key default-value)))) {} attrs)
         fills
         (cond
-           ;; DEPRECATED: still here for backward compatibility with
-           ;; old penpot files that still has a single color.
+          ;; DEPRECATED: still here for backward compatibility with
+          ;; old penpot files that still has a single color.
           (or (some? (:fill-color node))
               (some? (:fill-opacity node))
               (some? (:fill-color-gradient node)))
@@ -68,60 +71,85 @@
 
 (defn get-paragraph-styles
   [paragraph]
-  (let [styles (get-styles-from-attrs paragraph (d/concat-set txt/paragraph-attrs txt/text-node-attrs))
+  (let [styles (get-styles-from-attrs
+                paragraph
+                (d/concat-set txt/paragraph-attrs txt/text-node-attrs)
+                txt/default-text-attrs)
         ;; If the text is not empty we must the paragraph font size to 0,
         ;; it affects to the height calculation the browser does
         font-size (if (some #(not= "" (:text %)) (:children paragraph))
                     "0"
-                    (:font-size styles (:font-size txt/default-text-attrs)))
+                    (:font-size styles (:font-size txt/default-typography)))
 
         line-height (:line-height styles)
         line-height (if (and (some? line-height) (not= "" line-height))
                       line-height
-                      (:line-height txt/default-text-attrs))]
+                      (:line-height txt/default-typography))]
     (-> styles
         (assoc :font-size font-size :line-height line-height))))
 
 (defn get-root-styles
   [root]
-  (get-styles-from-attrs root txt/root-attrs))
+  (get-styles-from-attrs root txt/root-attrs txt/default-text-attrs))
 
-(defn get-inline-styles
+(defn get-text-span-styles
   [inline paragraph]
-  (let [node (if (= "" (:text inline)) paragraph inline)
-        styles (get-styles-from-attrs node txt/text-node-attrs)]
-    (dissoc styles :line-height)))
+  (let [node (if (= "" (:text inline)) paragraph inline)]
+    (get-styles-from-attrs node txt/text-span-attrs txt/default-text-attrs)))
 
-(defn get-inline-children
-  [inline]
-  [(if (= "" (:text inline))
+(defn normalize-spaces
+  "Add zero-width spaces after forward slashes to enable word breaking"
+  [text]
+  (when text
+    (.replace text (js/RegExp "/" "g") "/\u200B")))
+
+(defn get-text-span-children
+  [inline paragraph]
+  [(if (and (= "" (:text inline))
+            (= 1 (count (:children paragraph))))
      (dom/create-element "br")
-     (dom/create-text (:text inline)))])
+     (dom/create-text (normalize-spaces (:text inline))))])
 
-(defn create-inline
+(defn create-random-key
+  []
+  (.toString (.floor js/Math (* (.random js/Math) (.-MAX_SAFE_INTEGER js/Number))) 36))
+
+(defn has-content?
+  [paragraph]
+  (some #(not= "" (:text % "")) (:children paragraph)))
+
+(defn create-text-span
   [inline paragraph]
   (create-element
    "span"
-   {:id (:key inline)
-    :data {:itype "inline"}
-    :style (get-inline-styles inline paragraph)}
-   (get-inline-children inline)))
+   {:id (or (:key inline) (create-random-key))
+    :data {:itype "span"}
+    :style (get-text-span-styles inline paragraph)}
+   (get-text-span-children inline paragraph)))
 
 (defn create-paragraph
   [paragraph]
   (create-element
    "div"
-   {:id (:key paragraph)
-    :data {:itype "paragraph"}
+   {:id (or (:key paragraph) (create-random-key))
+    :data {:itype "paragraph"
+           ;; Save the real font size to be restored later in from-dom/get-paragraph-styles,
+           ;; because the function get-paragraph-styles here sets it to "0" in the css properties, 
+           ;; to avoid the browser affecting the height calculation.
+           :saved-font-size (:font-size paragraph)}
     :style (get-paragraph-styles paragraph)}
-   (mapv #(create-inline % paragraph) (:children paragraph))))
+   (mapv #(create-text-span % paragraph) (:children paragraph))))
 
 (defn create-root
   [root]
-  (let [root-styles (get-root-styles root)]
+  (let [root-styles (get-root-styles root)
+        paragraphs (get-in root [:children 0 :children])
+        filtered-paragraphs (->> paragraphs
+                                 (map-indexed vector)
+                                 (mapv second))]
     (create-element
      "div"
-     {:id (:key root)
+     {:id (or (:key root) (create-random-key))
       :data {:itype "root"}
       :style root-styles}
-     (mapv create-paragraph (get-in root [:children 0 :children])))))
+     (mapv create-paragraph filtered-paragraphs))))

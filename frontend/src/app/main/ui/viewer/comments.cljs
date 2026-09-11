@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.viewer.comments
   (:require-macros [app.main.style :as stl])
@@ -15,12 +15,14 @@
    [app.common.geom.shapes :as gsh]
    [app.main.data.comments :as dcm]
    [app.main.data.event :as ev]
+   [app.main.data.workspace.comments :as dwcm]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.comments :as cmt]
    [app.main.ui.components.dropdown :refer [dropdown]]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.main.ui.workspace.comments :as wc]
+   [app.main.ui.workspace.viewport.utils :as utils]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [okulary.core :as l]
@@ -68,7 +70,7 @@
            :data-testid "viewer-comments-dropdown"
            :on-click toggle-dropdown}
      [:span {:class (stl/css :dropdown-title)} (tr "labels.comments")]
-     [:span {:class (stl/css :icon-dropdown)} i/arrow]
+     [:span {:class (stl/css :icon-dropdown)} deprecated-icon/arrow]
 
      [:& dropdown {:show @show-dropdown?
                    :on-close hide-dropdown}
@@ -81,7 +83,7 @@
              :on-click update-mode}
         [:span {:class (stl/css :label)} (tr "labels.show-all-comments")]
         (when (or (= :all cmode) (nil? cmode))
-          [:span {:class (stl/css :icon)} i/tick])]
+          [:span {:class (stl/css :icon)} deprecated-icon/tick])]
 
        [:li {:class (stl/css-case
                      :dropdown-element true
@@ -91,7 +93,17 @@
         [:span {:class (stl/css :label)} (tr "labels.show-your-comments")]
         (when (= :yours cmode)
           [:span {:class (stl/css :icon)}
-           i/tick])]
+           deprecated-icon/tick])]
+
+       [:li {:class (stl/css-case
+                     :dropdown-element true
+                     :selected (= :mentions cmode))
+             :data-value "mentions"
+             :on-click update-mode}
+        [:span {:class (stl/css :label)} (tr "labels.show-mentions")]
+        (when (= :mentions cmode)
+          [:span {:class (stl/css :icon)}
+           deprecated-icon/tick])]
 
        [:li {:class (stl/css :separator)}]
 
@@ -103,7 +115,7 @@
         [:span {:class (stl/css :label)} (tr "labels.hide-resolved-comments")]
         (when  (= :pending cshow)
           [:span {:class (stl/css :icon)}
-           i/tick])]
+           deprecated-icon/tick])]
 
        [:li {:class (stl/css :separator)}]
 
@@ -114,7 +126,7 @@
              :on-click update-options}
         [:span {:class (stl/css :label)} (tr "labels.show-comments-list")]
         (when show-sidebar?
-          [:span {:class (stl/css :icon)} i/tick])]]]]))
+          [:span {:class (stl/css :icon)} deprecated-icon/tick])]]]]))
 
 
 (defn- update-thread-position
@@ -130,6 +142,8 @@
   [{:keys [zoom file frame page]}]
   (let [profile        (mf/deref refs/profile)
         local          (mf/deref refs/comments-local)
+
+        cursor         (utils/get-cursor :comments)
 
         open-thread-id (:open local)
         page-id        (:id page)
@@ -173,13 +187,22 @@
                        (-> (dcm/open-thread thread)
                            (with-meta {::ev/origin "viewer"}))))))
 
+        expanded     (:expanded local)
+
         on-click
         (mf/use-fn
-         (mf/deps open-thread-id zoom page-id file-id modifier2)
+         (mf/deps open-thread-id expanded zoom page-id file-id modifier2)
          (fn [event]
            (dom/stop-propagation event)
-           (if (some? open-thread-id)
+           (cond
+             ;; A click anywhere first collapses a temporarily expanded cluster.
+             (some? expanded)
+             (st/emit! (dcm/collapse-comment-group))
+
+             (some? open-thread-id)
              (st/emit! (dcm/close-thread))
+
+             :else
              (let [event    (dom/event->native-event event)
                    position (-> (dom/get-offset-position event)
                                 (update :x #(/ % zoom))
@@ -201,24 +224,60 @@
              (st/emit! (dcm/create-thread-on-viewer params)
                        (dcm/close-thread)))))]
 
+    ;; Any zoom change collapses an expanded cluster back, matching the workspace.
+    (mf/with-effect [zoom]
+      (st/emit! (dcm/collapse-comment-group)))
+
     [:div {:class (stl/css :comments-section)
            :on-click on-click}
-     [:div {:class (stl/css :viewer-comments-container)}
+     [:div {:class (dm/str cursor " " (stl/css :viewer-comments-container))}
       [:div {:class (stl/css :threads)}
-       (for [item threads]
-         [:> cmt/comment-floating-bubble*
-          {:thread item
-           :position-modifier modifier1
-           :zoom zoom
-           :on-click on-bubble-click
-           :is-open (= (:id item) (:open local))
-           :key (:seqn item)
-           :origin :viewer}])
+       (for [thread-group (dwcm/group-bubbles zoom threads)]
+         (let [group?    (> (count thread-group) 1)
+               thread    (first thread-group)
+               expanded? (and group?
+                              (= expanded (into #{} (map :id) thread-group)))]
+           (cond
+             expanded?
+             [:* {:key (:seqn thread)}
+              [:> cmt/comment-floating-ghost*
+               {:thread-group thread-group
+                :zoom zoom
+                :position-modifier modifier1}]
+              (for [[thread offset ring] (cmt/expanded-group-offsets zoom thread-group)]
+                [:> cmt/comment-floating-bubble*
+                 {:thread thread
+                  :position-modifier modifier1
+                  :zoom zoom
+                  :offset offset
+                  :ring ring
+                  :on-click on-bubble-click
+                  :is-open false
+                  :origin :viewer
+                  :key (:seqn thread)}])]
+
+             group?
+             [:> cmt/comment-floating-group*
+              {:thread-group thread-group
+               :zoom zoom
+               :position-modifier modifier1
+               :key (:seqn thread)}]
+
+             :else
+             [:> cmt/comment-floating-bubble*
+              {:thread thread
+               :position-modifier modifier1
+               :zoom zoom
+               :on-click on-bubble-click
+               :is-open (= (:id thread) (:open local))
+               :origin :viewer
+               :key (:seqn thread)}])))
 
        (when-let [thread (get threads-map open-thread-id)]
          [:> cmt/comment-floating-thread*
           {:thread thread
            :position-modifier modifier1
+           :origin :viewer
            :viewport {:offset-x 0 :offset-y 0 :width (:width vsize) :height (:height vsize)}
            :zoom zoom}])
 
@@ -228,10 +287,10 @@
            :position-modifier modifier1
            :on-cancel on-draft-cancel
            :on-submit on-draft-submit
+           :viewport nil
            :zoom zoom}])]]]))
 
 (mf/defc comments-sidebar*
-  {::mf/props :obj}
   [{:keys [profiles frame page]}]
   (let [profile     (mf/deref refs/profile)
         local       (mf/deref refs/comments-local)

@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.rpc-access-tokens-test
   (:require
    [app.common.uuid :as uuid]
    [app.db :as db]
    [app.http :as http]
+   [app.http.access-token :as actoken]
    [app.rpc :as-alias rpc]
    [app.storage :as sto]
    [backend-tests.helpers :as th]
@@ -29,8 +30,7 @@
     (t/testing "create access token without expiration date"
       (let [params {::th/type :create-access-token
                     ::rpc/profile-id (:id prof)
-                    :name "token 1"
-                    :perms ["get-profile"]}
+                    :name "token 1"}
             out    (th/command! params)]
         ;; (th/print-result! out)
         (t/is (nil? (:error out)))
@@ -40,13 +40,25 @@
           (t/is (contains? result :id))
           (t/is (contains? result :created-at))
           (t/is (contains? result :updated-at))
-          (t/is (contains? result :token)))))
+          (t/is (contains? result :token))
+          (t/is (not (contains? result :perms))))))
+
+    (t/testing "create access token ignores client-supplied perms"
+      (let [params {::th/type :create-access-token
+                    ::rpc/profile-id (:id prof)
+                    :name "token ignored-perms"
+                    :perms ["error-reports:read"]}
+            out    (th/command! params)]
+        (t/is (nil? (:error out)))
+        (let [result (:result out)
+              row    (th/db-get :access-token {:id (:id result)})]
+          (t/is (not (contains? result :perms)))
+          (t/is (= [] (db/decode-pgarray (:perms row) []))))))
 
     (t/testing "create access token with expiration date in the future"
       (let [params {::th/type :create-access-token
                     ::rpc/profile-id (:id prof)
                     :name "token 1"
-                    :perms ["get-profile"]
                     :expiration "130h"}
             out    (th/command! params)]
         ;; (th/print-result! out)
@@ -64,7 +76,6 @@
       (let [params {::th/type :create-access-token
                     ::rpc/profile-id (:id prof)
                     :name "token 1"
-                    :perms ["get-profile"]
                     :expiration "-130h"}
             out    (th/command! params)]
         ;; (th/print-result! out)
@@ -85,11 +96,12 @@
         ;; (th/print-result! out)
         (t/is (nil? (:error out)))
         (let [[result :as results] (:result out)]
-          (t/is (= 3 (count results)))
+          (t/is (= 4 (count results)))
           (t/is (contains? result :id))
           (t/is (contains? result :created-at))
           (t/is (contains? result :updated-at))
-          (t/is (not (contains? result :token))))))
+          (t/is (not (contains? result :token)))
+          (t/is (not (contains? result :perms))))))
 
     (t/testing "delete access token"
       (let [params {::th/type :delete-access-token
@@ -107,4 +119,116 @@
         ;; (th/print-result! out)
         (t/is (nil? (:error out)))
         (let [results (:result out)]
-          (t/is (= 2 (count results))))))))
+          (t/is (= 3 (count results))))))
+
+    (t/testing "get mcp token"
+      (let [_ (th/command! {::th/type :create-access-token
+                            ::rpc/profile-id (:id prof)
+                            :type "mcp"
+                            :name "token 1"})
+            {:keys [error result]}
+            (th/command! {::th/type :get-current-mcp-token
+                          ::rpc/profile-id (:id prof)})]
+        ;; (th/print-result! result)
+        (t/is (nil? error))
+        (t/is (string? (:token result)))))
+
+    (t/testing "get-access-tokens returns :token for MCP tokens but not for regular tokens"
+      (let [;; Create a regular token
+            regular-out (th/command! {::th/type :create-access-token
+                                      ::rpc/profile-id (:id prof)
+                                      :name "regular token"})
+            regular-token (:result regular-out)
+
+            ;; Create an MCP token
+            mcp-out (th/command! {::th/type :create-access-token
+                                  ::rpc/profile-id (:id prof)
+                                  :type "mcp"
+                                  :name "mcp token"})
+            mcp-token (:result mcp-out)
+
+            ;; Fetch all tokens
+            {:keys [error result]}
+            (th/command! {::th/type :get-access-tokens
+                          ::rpc/profile-id (:id prof)})]
+
+        (t/is (nil? error))
+
+        ;; Find our tokens in the result
+        (let [regular (some #(when (= (:id %) (:id regular-token)) %) result)
+              mcp     (some #(when (= (:id %) (:id mcp-token)) %) result)]
+
+          ;; Regular tokens should NOT have :token
+          (t/is (some? regular))
+          (t/is (not (contains? regular :token)))
+
+          ;; MCP tokens SHOULD have :token
+          (t/is (some? mcp))
+          (t/is (contains? mcp :token))
+          (t/is (string? (:token mcp))))))
+
+    (t/testing "creating MCP token removes previous MCP tokens"
+      (let [;; Create first MCP token
+            first-out (th/command! {::th/type :create-access-token
+                                    ::rpc/profile-id (:id prof)
+                                    :type "mcp"
+                                    :name "first mcp"})
+            first-mcp (:result first-out)
+
+            ;; Create second MCP token
+            second-out (th/command! {::th/type :create-access-token
+                                     ::rpc/profile-id (:id prof)
+                                     :type "mcp"
+                                     :name "second mcp"})
+            second-mcp (:result second-out)
+
+            ;; Create third MCP token
+            third-out (th/command! {::th/type :create-access-token
+                                    ::rpc/profile-id (:id prof)
+                                    :type "mcp"
+                                    :name "third mcp"})
+            third-mcp (:result third-out)
+
+            ;; Fetch all tokens
+            {:keys [error result]}
+            (th/command! {::th/type :get-access-tokens
+                          ::rpc/profile-id (:id prof)})]
+
+        (t/is (nil? error))
+
+        ;; Count MCP tokens - should only be 1 (the third one)
+        (let [mcp-tokens (filter #(= (:type %) "mcp") result)]
+          (t/is (= 1 (count mcp-tokens)))
+          (t/is (= (:id third-mcp) (:id (first mcp-tokens)))))
+
+        ;; Verify the first and second MCP tokens are gone
+        (let [all-ids (set (map :id result))]
+          (t/is (not (contains? all-ids (:id first-mcp))))
+          (t/is (not (contains? all-ids (:id second-mcp))))
+          (t/is (contains? all-ids (:id third-mcp))))))))
+
+(t/deftest mcp-tokens-cannot-be-used-as-access-tokens
+  (let [prof (th/create-profile* 1 {:is-active true})
+        cfg  th/*system*]
+
+    (t/testing "MCP tokens use different issuer claim"
+      (let [{:keys [result]} (th/command! {::th/type :create-access-token
+                                           ::rpc/profile-id (:id prof)
+                                           :type "mcp"
+                                           :name "mcp token"})
+            mcp-token (:token result)
+
+            ;; Try to decode as access token (should fail)
+            decoded (actoken/decode-token cfg mcp-token)]
+        (t/is (nil? decoded))))
+
+    (t/testing "Regular access tokens use access-token issuer claim"
+      (let [{:keys [result]} (th/command! {::th/type :create-access-token
+                                           ::rpc/profile-id (:id prof)
+                                           :name "regular token"})
+            access-token (:token result)
+
+            ;; Should decode successfully
+            decoded (actoken/decode-token cfg access-token)]
+        (t/is (some? decoded))
+        (t/is (= (:id prof) (:uid decoded)))))))

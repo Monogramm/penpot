@@ -1,0 +1,52 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
+;;
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
+
+(ns app.rpc.management.exporter
+  (:require
+   [app.common.media :as cm]
+   [app.common.schema :as sm]
+   [app.common.time :as ct]
+   [app.common.uri :as u]
+   [app.config :as cf]
+   [app.media.validation :as media.v]
+   [app.rpc :as-alias rpc]
+   [app.rpc.doc :as doc]
+   [app.storage :as sto]
+   [app.util.services :as sv]))
+
+;; ---- RPC METHOD: UPLOAD-TEMPFILE
+
+(def ^:private
+  schema:upload-tempfile-params
+  [:map {:title "upload-templfile-params"}
+   [:content media.v/schema:upload]])
+
+(def ^:private
+  schema:upload-tempfile-result
+  [:map {:title "upload-templfile-result"}])
+
+(sv/defmethod ::upload-tempfile
+  {::doc/added "2.12"
+   ::sm/params schema:upload-tempfile-params
+   ::sm/result schema:upload-tempfile-result}
+  [cfg {:keys [::rpc/profile-id content]}]
+  (media.v/validate-media-type! content cm/tempfile-types)
+  (let [storage (sto/resolve cfg)
+        hash    (sto/calculate-hash (:path content))
+        data    (-> (sto/content (:path content))
+                    (sto/wrap-with-hash hash))
+        content {::sto/content data
+                 ::sto/deduplicate? false
+                 ::sto/touched-at (ct/in-future {:minutes 10})
+                 :profile-id profile-id
+                 :content-type (:mtype content)
+                 :bucket sto/tempfile-bucket}
+        object (sto/put-object! storage content)]
+    {:id (:id object)
+     :uri (-> (cf/get :public-uri)
+              (u/ensure-path-slash)
+              (u/join "assets/by-id/")
+              (u/join (str (:id object))))}))

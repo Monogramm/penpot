@@ -2,166 +2,134 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "../../ds/typography.scss" as *;
-@import "refactor/common-refactor.scss";
+@use "ds/typography.scss" as *;
+@use "ds/spacing.scss" as *;
+@use "refactor/common-refactor.scss" as deprecated;
 
 .sidebar-wrapper {
   display: grid;
   grid-template-rows: auto 1fr auto;
+
   // Overflow on the bottom section can't be done without hardcoded values for the height
   // This has to be changed from the wrapping sidebar styles
-  height: calc(100vh - #{$s-92});
+  height: calc(100vh - #{deprecated.$s-92});
   overflow: hidden;
 }
 
-.sets-section-wrapper {
-  position: relative;
+.token-management-section-wrapper {
   display: flex;
   flex: 1;
   height: var(--resize-height);
   flex-direction: column;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  position: relative;
+  padding-block-end: var(--sp-l);
 }
 
 .tokens-section-wrapper {
   height: 100%;
-  padding-left: $s-12;
+  padding-left: var(--sp-m);
   overflow-y: auto;
   scrollbar-gutter: stable;
-}
-
-.sets-sidebar {
-  position: relative;
-}
-
-.themes-header {
-  @include use-typography("headline-small");
-  display: block;
-  margin-bottom: $s-8;
-  padding-left: $s-8;
-  color: var(--title-foreground-color);
-}
-
-.themes-wrapper {
-  padding: $s-12 0 0 $s-12;
-}
-
-.empty-theme-wrapper {
-  padding: $s-12;
-  color: var(--color-foreground-secondary);
-}
-
-.empty-sets-wrapper {
-  padding: $s-12;
-  padding-inline-start: $s-24;
-  color: var(--color-foreground-secondary);
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-left: $s-12;
-  padding-top: $s-12;
+  margin-left: var(--sp-m);
+  padding-top: var(--sp-m);
   color: var(--layer-row-foreground-color);
 }
 
-.empty-state-message {
-  color: var(--color-foreground-secondary);
-}
-
-.token-pills-wrapper {
-  display: flex;
-  gap: $s-4;
-  flex-wrap: wrap;
-}
-
 .section-text-icon {
-  font-size: $fs-12;
-  width: $s-16;
-  height: $s-16;
+  font-size: deprecated.$fs-12;
+  width: var(--sp-l);
+  height: var(--sp-l);
   display: flex;
   place-content: center;
 }
 
 .section-icon {
-  margin-right: $s-4;
+  margin-right: var(--sp-xs);
+
   // Align better with the label
-  translate: 0px -1px;
+  translate: 0 -1px;
 }
 
 .import-export-button-wrapper {
   position: relative;
   display: flex;
+  gap: var(--sp-s);
   flex-direction: row;
   align-items: end;
   justify-content: end;
-  padding: $s-8;
+  padding: var(--sp-s);
   background-color: var(--color-background-primary);
   box-shadow: var(--el-shadow-dark);
 }
 
 .import-export-button {
-  @extend .button-secondary;
+  @extend %button-secondary;
+
   display: flex;
   align-items: center;
   justify-content: end;
-  padding: $s-6 $s-8;
+  padding: deprecated.$s-6 var(--sp-s);
   text-transform: uppercase;
-  gap: $s-8;
+  gap: var(--sp-s);
   background-color: var(--color-background-primary);
-
   box-shadow: var(--el-shadow-dark);
 }
 
 .import-export-menu {
-  @extend .menu-dropdown;
-  top: -#{$s-6};
+  @extend %menu-dropdown;
+
+  top: -#{deprecated.$s-6};
   right: 0;
   translate: 0 -100%;
-  width: $s-192;
+  width: deprecated.$s-192;
   margin: 0;
 }
 
 .import-export-menu-item {
-  @extend .menu-item-base;
+  @extend %menu-item-base;
+
   cursor: pointer;
+
   &:hover {
     color: var(--menu-foreground-color-hover);
   }
 }
 
-.theme-select-wrapper {
-  display: grid;
-  grid-template-columns: 1fr 0.28fr;
-  gap: $s-6;
-}
-
-.themes-button {
-  @extend .button-secondary;
-  width: auto;
-}
-
-.create-theme-button {
-  @include use-typography("body-small");
-  background-color: transparent;
-  border: none;
-  appearance: none;
-  color: var(--color-accent-primary);
-  cursor: pointer;
-}
-
-.edit-theme-button {
+.import-export-menu-item-icon {
+  display: flex;
+  align-items: center;
   justify-content: center;
 }
 
+.import-menu-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+}
+
 .resize-area-horiz {
+  background-color: var(--panel-background-color);
   position: absolute;
   left: 0;
   width: 100%;
-  border-bottom: $s-2 solid var(--resize-area-border-color);
+  padding: deprecated.$s-3 0 deprecated.$s-1 0;
+  height: deprecated.$s-6;
+  cursor: ns-resize;
+  z-index: 1;
+}
+
+.resize-handle-horiz {
+  border-bottom: deprecated.$s-2 solid var(--resize-area-border-color);
   cursor: ns-resize;
 }

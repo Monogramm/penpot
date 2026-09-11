@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.http
   (:require
@@ -17,16 +17,16 @@
    [app.http.awsns :as-alias awsns]
    [app.http.debug :as-alias debug]
    [app.http.errors :as errors]
+   [app.http.management :as mgmt]
    [app.http.middleware :as mw]
+   [app.http.security :as sec]
    [app.http.session :as session]
    [app.http.websocket :as-alias ws]
    [app.main :as-alias main]
    [app.metrics :as mtx]
    [app.rpc :as-alias rpc]
-   [app.rpc.doc :as-alias rpc.doc]
    [app.setup :as-alias setup]
    [integrant.core :as ig]
-   [promesa.exec :as px]
    [reitit.core :as r]
    [reitit.middleware :as rr]
    [yetti.adapter :as yt]
@@ -42,8 +42,8 @@
 (def default-params
   {::port 6060
    ::host "0.0.0.0"
-   ::max-body-size (* 1024 1024 30)             ; default 30 MiB
-   ::max-multipart-body-size (* 1024 1024 120)}) ; default 120 MiB
+   ::max-body-size 367001600 ; default 350 MiB
+   })
 
 (defmethod ig/expand-key ::server
   [k v]
@@ -53,8 +53,9 @@
   [:map
    [::port ::sm/int]
    [::host ::sm/text]
+   [::io-threads {:optional true} ::sm/int]
+   [::max-worker-threads {:optional true} ::sm/int]
    [::max-body-size {:optional true} ::sm/int]
-   [::max-multipart-body-size {:optional true} ::sm/int]
    [::router {:optional true} [:fn r/router?]]
    [::handler {:optional true} ::sm/fn]])
 
@@ -63,30 +64,41 @@
   (assert (sm/check schema:server-params params)))
 
 (defmethod ig/init-key ::server
-  [_ {:keys [::handler ::router ::host ::port] :as cfg}]
+  [_ {:keys [::handler ::router ::host ::port ::mtx/metrics] :as cfg}]
   (l/info :hint "starting http server" :port port :host host)
-  (let [options {:http/port port
-                 :http/host host
-                 :http/max-body-size (::max-body-size cfg)
-                 :http/max-multipart-body-size (::max-multipart-body-size cfg)
-                 :xnio/io-threads (or (::io-threads cfg)
-                                      (max 3 (px/get-available-processors)))
-                 :xnio/dispatch :virtual
-                 :ring/compat :ring2
-                 :socket/backlog 4069}
+  (let [on-dispatch
+        (fn [_ start-at-ns]
+          (let [timing (- (System/nanoTime) start-at-ns)
+                timing (int (/ timing 1000000))]
+            (mtx/run! metrics
+                      :id :http-server-dispatch-timing
+                      :val timing)))
 
-        handler (cond
-                  (some? router)
-                  (router-handler router)
+        options
+        {:http/port port
+         :http/host host
+         :http/max-body-size (::max-body-size cfg)
+         :http/max-multipart-body-size (::max-body-size cfg)
+         :xnio/direct-buffers false
+         :xnio/io-threads (::io-threads cfg)
+         :xnio/max-worker-threads (::max-worker-threads cfg)
+         :ring/compat :ring2
+         :events/on-dispatch on-dispatch
+         :socket/backlog 4069}
 
-                  (some? handler)
-                  handler
+        handler
+        (cond
+          (some? router)
+          (router-handler router)
 
-                  :else
-                  (throw (UnsupportedOperationException. "handler or router are required")))
+          (some? handler)
+          handler
 
-        options (d/without-nils options)
-        server  (yt/server handler options)]
+          :else
+          (throw (UnsupportedOperationException. "handler or router are required")))
+
+        server
+        (yt/server handler (d/without-nils options))]
 
     (assoc cfg ::server (yt/start! server))))
 
@@ -135,12 +147,12 @@
   [:map
    [::ws/routes schema:routes]
    [::rpc/routes schema:routes]
-   [::rpc.doc/routes schema:routes]
    [::oidc/routes schema:routes]
    [::assets/routes schema:routes]
    [::debug/routes schema:routes]
    [::mtx/routes schema:routes]
    [::awsns/routes schema:routes]
+   [::mgmt/routes schema:routes]
    ::session/manager
    ::setup/props
    ::db/pool])
@@ -153,12 +165,14 @@
   [_ cfg]
   (rr/router
    [["" {:middleware [[mw/server-timing]
+                      [sec/sec-fetch-metadata]
                       [mw/params]
                       [mw/format-response]
+                      [mw/auth {:bearer (partial session/decode-token cfg)
+                                :cookie (partial session/decode-token cfg)
+                                :token  (partial actoken/decode-token cfg)}]
                       [mw/parse-request]
                       [mw/errors errors/handle]
-                      [session/soft-auth cfg]
-                      [actoken/soft-auth cfg]
                       [mw/restrict-methods]]}
 
      (::mtx/routes cfg)
@@ -168,9 +182,9 @@
      ["/webhooks"
       (::awsns/routes cfg)]
 
-     (::ws/routes cfg)
+     ["/management"
+      (::mgmt/routes cfg)]
 
-     ["/api" {:middleware [[mw/cors]]}
-      (::oidc/routes cfg)
-      (::rpc.doc/routes cfg)
-      (::rpc/routes cfg)]]]))
+     (::ws/routes cfg)
+     (::oidc/routes cfg)
+     (::rpc/routes cfg)]]))

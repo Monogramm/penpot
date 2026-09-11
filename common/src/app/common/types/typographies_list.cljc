@@ -2,13 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.typographies-list
   (:require
    [app.common.data :as d]
-   [app.common.text :as txt]
-   [app.common.time :as dt]))
+   [app.common.time :as dt]
+   [app.common.types.text :as txt]))
 
 (defn typographies-seq
   [file-data]

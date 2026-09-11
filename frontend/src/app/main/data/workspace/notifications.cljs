@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.notifications
   (:require
@@ -10,6 +10,7 @@
    [app.common.data.macros :as dm]
    [app.common.files.changes :as cpc]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
    [app.main.data.common :as dc]
@@ -23,11 +24,11 @@
    [app.main.data.workspace.layout :as dwly]
    [app.main.data.workspace.libraries :as dwl]
    [app.main.data.workspace.texts :as dwt]
+   [app.main.router :as rt]
    [app.util.globals :refer [global]]
    [app.util.mouse :as mse]
    [app.util.object :as obj]
    [app.util.rxops :as rxs]
-   [app.util.time :as dt]
    [beicon.v2.core :as rx]
    [clojure.set :as set]
    [potok.v2.core :as ptk]))
@@ -38,7 +39,8 @@
 (declare handle-presence)
 (declare handle-pointer-update)
 (declare handle-file-change)
-(declare handle-file-restore)
+(declare handle-file-deleted)
+(declare handle-file-restored)
 (declare handle-library-change)
 (declare handle-pointer-send)
 (declare handle-export-update)
@@ -64,7 +66,6 @@
                              ;; Send the subscription message
                              (->> (rx/from initmsg)
                                   (rx/map dws/send))
-
 
                              ;; Subscribe to notifications of the subscription
                              (->> stream
@@ -124,17 +125,20 @@
 (defn- process-message
   [{:keys [type] :as msg}]
   (case type
-    :join-file              (handle-presence msg)
-    :leave-file             (handle-presence msg)
-    :presence               (handle-presence msg)
-    :disconnect             (handle-presence msg)
-    :pointer-update         (handle-pointer-update msg)
-    :file-change            (handle-file-change msg)
-    :file-restore           (handle-file-restore msg)
-    :library-change         (handle-library-change msg)
-    :notification           (dc/handle-notification msg)
-    :team-role-change       (handle-change-team-role msg)
-    :team-membership-change (dc/team-membership-change msg)
+    :join-file               (handle-presence msg)
+    :leave-file              (handle-presence msg)
+    :presence                (handle-presence msg)
+    :disconnect              (handle-presence msg)
+    :pointer-update          (handle-pointer-update msg)
+    :file-change             (handle-file-change msg)
+    :file-deleted            (handle-file-deleted msg)
+    :file-restored           (handle-file-restored msg)
+    :library-change          (handle-library-change msg)
+    :notification            (dc/handle-notification msg)
+    :team-role-change        (handle-change-team-role msg)
+    :team-membership-change  (dc/team-membership-change msg)
+    :team-organization-change         (dc/handle-change-team-organization msg)
+    :organization-change-sso (dc/handle-organization-change-sso msg)
     nil))
 
 (defn- handle-pointer-send
@@ -195,7 +199,7 @@
             (-> session
                 (assoc :id session-id)
                 (assoc :profile-id profile-id)
-                (assoc :updated-at (dt/now))
+                (assoc :updated-at (ct/now))
                 (assoc :version version)
                 (update :color update-color presence)
                 (assoc :text-color "#000000")))
@@ -212,6 +216,7 @@
           (update state :workspace-presence dissoc session-id)
           (update state :workspace-presence update-presence))))))
 
+
 (defn handle-pointer-update
   [{:keys [page-id session-id position zoom zoom-inverse vbox vport] :as msg}]
   (ptk/reify ::handle-pointer-update
@@ -225,7 +230,7 @@
                           :vbox vbox
                           :vport vport
                           :point position
-                          :updated-at (dt/now)
+                          :updated-at (ct/now)
                           :page-id page-id))))))
 
 (def ^:private
@@ -237,7 +242,7 @@
    [:session-id ::sm/uuid]
    [:revn :int]
    [:vern :int]
-   [:changes ::cpc/changes]])
+   [:changes cpc/schema:changes]])
 
 (def ^:private check-file-change-params!
   (sm/check-fn schema:handle-file-change))
@@ -267,24 +272,35 @@
                           :redo-changes (vec changes)
                           :undo-changes []})))))
 
+(defn handle-file-deleted
+  [{:keys [file-id] :as msg}]
+  (ptk/reify ::handle-file-deleted
+    ptk/WatchEvent
+    (watch [_ state _]
+      (let [curr-file-id (:current-file-id state)
+            team-id      (:current-team-id state)]
+        ;; If the deleted file is the currently open one
+        (when (= file-id curr-file-id)
+          (rx/of
+           (rt/nav :dashboard-recent {:team-id team-id})))))))
+
 (def ^:private
-  schema:handle-file-restore
-  [:map {:title "handle-file-restore"}
+  schema:handle-file-restored
+  [:map {:title "handle-file-restored"}
    [:type :keyword]
    [:file-id ::sm/uuid]
    [:vern :int]])
 
-(def ^:private check-file-restore-params
-  (sm/check-fn schema:handle-file-restore))
+(def ^:private check-file-restored-params
+  (sm/check-fn schema:handle-file-restored))
 
-(defn handle-file-restore
+(defn handle-file-restored
   [{:keys [file-id vern] :as msg}]
 
-  (dm/assert!
-   "expected valid parameters"
-   (check-file-restore-params msg))
+  (assert (check-file-restored-params msg)
+          "expected valid parameters")
 
-  (ptk/reify ::handle-file-restore
+  (ptk/reify ::handle-file-restored
     ptk/WatchEvent
     (watch [_ state _]
       (let [curr-file-id    (:current-file-id state)
@@ -302,21 +318,20 @@
    [:file-id ::sm/uuid]
    [:session-id ::sm/uuid]
    [:revn :int]
-   [:modified-at ::sm/inst]
-   [:changes ::cpc/changes]])
+   [:modified-at ::ct/inst]
+   [:changes cpc/schema:changes]])
 
-(def ^:private check-library-change-params!
+(def ^:private check-library-change-params
   (sm/check-fn schema:handle-library-change))
 
 (defn handle-library-change
   [{:keys [file-id modified-at changes revn] :as msg}]
-  (dm/assert!
-   "expected valid arguments"
-   (check-library-change-params! msg))
+  (assert (check-library-change-params msg)
+          "expected valid arguments")
 
   (ptk/reify ::handle-library-change
     ptk/WatchEvent
     (watch [_ state _]
-      (when (contains? (:libraries state) file-id)
+      (when (contains? (:files state) file-id)
         (rx/of (dwl/ext-library-changed file-id modified-at revn changes)
-               (dwl/notify-sync-file file-id))))))
+               (dwl/notify-sync-file))))))

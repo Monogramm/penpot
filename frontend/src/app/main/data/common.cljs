@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.common
   "A general purpose events."
@@ -10,13 +10,14 @@
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.schema :as sm]
-   [app.common.types.components-list :as ctkl]
+   [app.common.time :as ct]
+   [app.common.types.organization :as cto]
    [app.common.types.team :as ctt]
+   [app.config :as cf]
    [app.main.data.helpers :as dsh]
    [app.main.data.modal :as modal]
    [app.main.data.notifications :as ntf]
    [app.main.data.persistence :as-alias dps]
-   [app.main.features :as features]
    [app.main.repo :as rp]
    [app.main.router :as rt]
    [app.main.store :as st]
@@ -73,7 +74,7 @@
   (st/emit! (ntf/hide)))
 
 (defn handle-notification
-  [{:keys [message code level] :as params}]
+  [{:keys [message code] :as params}]
   (ptk/reify ::show-notification
     ptk/WatchEvent
     (watch [_ _ _]
@@ -81,26 +82,21 @@
         :upgrade-version
         (rx/of (ntf/dialog
                 :content (tr "notifications.by-code.upgrade-version")
-                :controls :inline-actions
-                :type :inline
-                :level level
-                :accept {:label (tr "Refresh")
+                :accept {:label (tr "labels.refresh")
                          :callback force-reload!}
                 :tag :notification))
 
         :maintenance
         (rx/of (ntf/dialog
                 :content (tr "notifications.by-code.maintenance")
-                :controls :inline-actions
-                :type level
                 :accept {:label (tr "labels.accept")
                          :callback hide-notifications!}
                 :tag :notification))
 
         (rx/of (ntf/dialog
                 :content message
-                :controls :close
-                :type level
+                :accept {:label (tr "labels.close")
+                         :callback hide-notifications!}
                 :tag :notification))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -111,32 +107,21 @@
   [file-id add-shared]
   (ptk/reify ::show-shared-dialog
     ptk/WatchEvent
-    (watch [_ state _]
-      (let [features (features/get-team-enabled-features state)
-            file     (dsh/lookup-file state)
-            data     (get file :data)]
-
-        (->> (if (and data file)
-               (rx/of {:name             (:name file)
-                       :components-count (count (ctkl/components-seq data))
-                       :graphics-count   (count (:media data))
-                       :colors-count     (count (:colors data))
-                       :typography-count (count (:typographies data))})
-               (rp/cmd! :get-file-summary {:id file-id :features features}))
-             (rx/map (fn [summary]
-                       (let [count (+ (:components-count summary)
-                                      (:graphics-count summary)
-                                      (:colors-count summary)
-                                      (:typography-count summary))]
-                         (modal/show
-                          {:type :confirm
-                           :title (tr "modals.add-shared-confirm.message" (:name summary))
-                           :message (if (zero? count) (tr "modals.add-shared-confirm-empty.hint") (tr "modals.add-shared-confirm.hint"))
-                           :cancel-label (if (zero? count) (tr "labels.cancel") :omit)
-                           :accept-label (tr "modals.add-shared-confirm.accept")
-                           :accept-style :primary
-                           :on-accept add-shared})))))))))
-
+    (watch [_ _ _]
+      (->> (rp/cmd! :get-file-summary {:id file-id})
+           (rx/map (fn [summary]
+                     (let [count (+ (-> summary :components :count)
+                                    (-> summary :graphics :count)
+                                    (-> summary :colors :count)
+                                    (-> summary :typographies :count))]
+                       (modal/show
+                        {:type :confirm
+                         :title (tr "modals.add-shared-confirm.message" (:name summary))
+                         :message (if (zero? count) (tr "modals.add-shared-confirm-empty.hint") (tr "modals.add-shared-confirm.hint"))
+                         :cancel-label (if (zero? count) (tr "labels.cancel") :omit)
+                         :accept-label (tr "modals.add-shared-confirm.accept")
+                         :accept-style :primary
+                         :on-accept add-shared}))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Exportations
@@ -169,8 +154,8 @@
   (ptk/reify ::export-files
     ptk/WatchEvent
     (watch [_ state _]
-      (let [features (features/get-team-enabled-features state)
-            team-id  (:current-team-id state)]
+      (let [features (get state :features)
+            team-id  (get state :current-team-id)]
         (->> (rx/from files)
              (rx/mapcat
               (fn [file]
@@ -216,8 +201,10 @@
 
   (ptk/reify ::change-team-role
     ptk/WatchEvent
-    (watch [_ _ _]
-      (rx/of (ntf/info (get-change-role-msg role))))
+    (watch [_ state _]
+      (let [current-team-id (:current-team-id state)]
+        (when (= team-id current-team-id)
+          (rx/of (ntf/info (get-change-role-msg role))))))
 
     ptk/UpdateEvent
     (update [_ state]
@@ -246,6 +233,148 @@
            (->> (rx/of (ntf/info message))
                 ;; Delay so the navigation can finish
                 (rx/delay 250))))))))
+
+(defn- check-team-sso
+  [team-id]
+  (let [url (rt/get-current-href)]
+    (->> (rp/cmd! :check-nitrate-sso {:team-id team-id :url url})
+         (rx/mapcat (fn [{:keys [authorized redirect-uri]}]
+                      (if authorized
+                        (rx/empty)
+                        (if redirect-uri
+                          (rx/of (rt/nav-raw :uri (str redirect-uri)))
+                          (rx/empty))))))))
+
+(defn handle-change-team-organization
+  "Handle :team-organization-change websocket messages on dashboard and workspace.
+  Updates local team organization data and redirects to SSO when required."
+  [{:keys [team notification]}]
+  (ptk/reify ::handle-change-team-organization
+    ptk/WatchEvent
+    (watch [_ state _]
+      (let [current-team-id (:current-team-id state)
+            organization    (:organization team)
+            current-team?   (= (:id team) current-team-id)]
+        (when (and (contains? cf/flags :admin-console)
+                   current-team?)
+          (rx/concat
+           (when notification
+             (rx/of (ntf/show {:content (tr notification (:name organization))
+                               :type :toast
+                               :level :info
+                               :timeout nil})))
+           (when (:id organization)
+             (check-team-sso current-team-id))))))
+    ptk/UpdateEvent
+    (update [_ state]
+      (if (contains? cf/flags :admin-console)
+        (let [team-id      (:id team)
+              team-name    (:name team)
+              organization (:organization team)]
+          (d/update-in-when state [:teams team-id]
+                            (fn [team]
+                              (cond-> (cto/apply-organization team organization)
+                                team-name (assoc :name team-name)))))
+        state))))
+
+(defn handle-organization-change-sso
+  "Handle :organization-change-sso websocket messages on dashboard and workspace.
+  Redirects to the organization SSO login when the current team belongs to that organization."
+  [{:keys [organization-id]}]
+  (ptk/reify ::handle-organization-change-sso
+    ptk/WatchEvent
+    (watch [_ state _]
+      (when (contains? cf/flags :admin-console)
+        (let [team-id (:current-team-id state)
+              team    (dm/get-in state [:teams team-id])
+              team-organization-id (dm/get-in team [:organization :id])]
+          (when (= organization-id team-organization-id)
+            (check-team-sso team-id)))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; PROGRESS EVENTS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def noop-fn
+  (constantly nil))
+
+(def ^:private schema:progress-params
+  [:map {:title "Progress"}
+   [:key {:optional true} ::sm/text]
+   [:index {:optional true} ::sm/int]
+   [:total ::sm/int]
+   [:hints
+    [:map-of :keyword fn?]]
+   [:slow-progress-threshold {:optional true} ::sm/int]])
+
+(def ^:private check-progress-params
+  (sm/check-fn schema:progress-params))
+
+(defn initialize-progress
+  [& {:keys [key index total hints slow-progress-threshold] :as params}]
+
+  (assert (check-progress-params params))
+
+  (ptk/reify ::initialize-progress
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :progress
+              (fn [_]
+                (let [hint ((:normal hints noop-fn) params)]
+                  {:threshold (or slow-progress-threshold 5000)
+                   :key key
+                   :last-update (ct/now)
+                   :healthy true
+                   :visible true
+                   :hints hints
+                   :progress (d/nilv index 0)
+                   :total total
+                   :hint hint}))))))
+
+(defn update-progress
+  [{:keys [index total] :as params}]
+
+  (assert (check-progress-params params))
+
+  (ptk/reify ::update-progress
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :progress
+              (fn [state]
+                (let [last-update (get state :last-update)
+                      hints       (get state :hints)
+                      threshold   (get state :slow-progress-threshold)
+
+                      time-diff   (ct/diff-ms last-update (ct/now))
+                      healthy?    (< time-diff threshold)
+
+                      hint        (if healthy?
+                                    ((:normal hints noop-fn) params)
+                                    ((:slow hints noop-fn) params))]
+
+                  (-> state
+                      (assoc :progress index)
+                      (assoc :total total)
+                      (assoc :last-update (ct/now))
+                      (assoc :healthy healthy?)
+                      (assoc :hint hint))))))))
+
+(defn toggle-progress-visibility
+  []
+  (ptk/reify ::toggle-progress-visibility
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :progress
+              (fn [state]
+                (update state :visible not))))))
+
+(defn clear-progress
+  []
+  (ptk/reify ::clear-progress
+    ptk/UpdateEvent
+    (update [_ state]
+      (dissoc state :progress))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; NAVEGATION EVENTS
@@ -391,6 +520,17 @@
       (let [page-id (or page-id (:current-page-id state))
             file-id (or file-id (:current-file-id state))
             section (or section :interactions)
+            selected (get-in state [:workspace-local :selected])
+            objects  (dsh/lookup-page-objects state file-id page-id)
+            frame-id (or frame-id
+                         (reduce
+                          (fn [_ id]
+                            (let [obj (get objects id)]
+                              (when (and obj
+                                         (= :frame (:type obj)))
+                                (reduced (:id obj)))))
+                          nil
+                          selected))
             params  {:file-id file-id
                      :page-id page-id
                      :section section
@@ -404,3 +544,21 @@
         (rx/of ::dps/force-persist
                (rt/nav :viewer params options))))))
 
+(defn go-to-dashboard-deleted
+  [& {:keys [team-id] :as options}]
+  (ptk/reify ::go-to-dashboard-deleted
+    ptk/WatchEvent
+    (watch [_ state _]
+      (let [profile (get state :profile)
+            team-id (cond
+                      (= :default team-id)
+                      (:default-team-id profile)
+
+                      (uuid? team-id)
+                      team-id
+
+                      :else
+                      (:current-team-id state))
+            params  {:team-id team-id}]
+        (rx/of (modal/hide)
+               (rt/nav :dashboard-deleted params options))))))

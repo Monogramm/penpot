@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.binfile.v1
   "A custom, perfromance and efficiency focused binfile format impl"
   (:refer-clojure :exclude [assert])
   (:require
    [app.binfile.common :as bfc]
+   [app.binfile.migrations :as bfm]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
@@ -16,6 +17,7 @@
    [app.common.fressian :as fres]
    [app.common.logging :as l]
    [app.common.spec :as us]
+   [app.common.time :as ct]
    [app.common.types.file :as ctf]
    [app.common.uuid :as uuid]
    [app.config :as cf]
@@ -29,7 +31,6 @@
    [app.storage.tmp :as tmp]
    [app.tasks.file-gc]
    [app.util.events :as events]
-   [app.util.time :as dt]
    [app.worker :as-alias wrk]
    [clojure.java.io :as jio]
    [clojure.set :as set]
@@ -39,8 +40,8 @@
    [promesa.util :as pu]
    [yetti.adapter :as yt])
   (:import
-   com.github.luben.zstd.ZstdIOException
    com.github.luben.zstd.ZstdInputStream
+   com.github.luben.zstd.ZstdIOException
    com.github.luben.zstd.ZstdOutputStream
    java.io.DataInputStream
    java.io.DataOutputStream
@@ -173,6 +174,10 @@
     (assert-mark m :obj)
     (let [size (read-long! input)]
       (assert (pos? size) "incorrect header size found on reading header")
+      (when (> size bfc/max-object-size)
+        (ex/raise :type :validation
+                  :code :max-file-size-reached
+                  :hint (dm/str "unable to import object with size " size " bytes")))
       (let [buff (byte-array size)]
         (read-bytes! input buff)
         (fres/decode buff)))))
@@ -345,7 +350,7 @@
           thumbnails (->> (bfc/get-file-object-thumbnails cfg file-id)
                           (mapv #(dissoc % :file-id)))
 
-          file       (cond-> (bfc/get-file cfg file-id)
+          file       (cond-> (bfc/get-file cfg file-id :realize? true)
                        detach?
                        (-> (ctf/detach-external-references file-id)
                            (dissoc :libraries))
@@ -424,22 +429,16 @@
 (s/def ::bfc/profile-id ::us/uuid)
 (s/def ::bfc/project-id ::us/uuid)
 (s/def ::bfc/input io/input-stream?)
-(s/def ::overwrite? (s/nilable ::us/boolean))
 (s/def ::ignore-index-errors? (s/nilable ::us/boolean))
 
-;; FIXME: replace with schema
 (s/def ::read-import-options
   (s/keys :req [::db/pool ::sto/storage ::bfc/project-id ::bfc/profile-id ::bfc/input]
-          :opt [::overwrite? ::ignore-index-errors?]))
+          :opt [::ignore-index-errors?]))
 
 (defn read-import!
   "Do the importation of the specified resource in penpot custom binary
-  format. There are some options for customize the importation
-  behavior:
-
-  `::bfc/overwrite`: if true, instead of creating new files and remapping id references,
-  it reuses all ids and updates existing objects; defaults to `false`."
-  [{:keys [::bfc/input ::bfc/timestamp] :or {timestamp (dt/now)} :as options}]
+  format."
+  [{:keys [::bfc/input ::bfc/timestamp] :or {timestamp (ct/now)} :as options}]
 
   (dm/assert!
    "expected input stream"
@@ -447,7 +446,7 @@
 
   (dm/assert!
    "expected valid instant"
-   (dt/instant? timestamp))
+   (ct/inst? timestamp))
 
   (let [version (read-header! input)]
     (read-import (assoc options ::version version ::bfc/timestamp timestamp))))
@@ -479,7 +478,7 @@
                     (read-section options))))
               [:v1/metadata :v1/files :v1/rels :v1/sobjects])
 
-        (bfc/apply-pending-migrations! cfg)
+        (bfm/apply-pending-migrations! cfg)
 
         ;; Knowing that the ids of the created files are in index,
         ;; just lookup them and return it as a set
@@ -509,8 +508,7 @@
         thumbnails))
 
 (defmethod read-section :v1/files
-  [{:keys [::db/conn ::bfc/input ::bfc/project-id ::bfc/overwrite ::bfc/name] :as system}]
-
+  [{:keys [::bfc/input ::bfc/project-id ::bfc/name] :as system}]
   (doseq [[idx expected-file-id] (d/enumerate (-> bfc/*state* deref :files))]
     (let [file       (read-obj! input)
           media      (read-obj! input)
@@ -557,8 +555,8 @@
                      (cond-> (and (= idx 0) (some? name))
                        (assoc :name name))
                      (assoc :project-id project-id)
-                     (dissoc :thumbnails)
-                     (bfc/process-file))]
+                     (dissoc :thumbnails))
+            file  (bfc/process-file system file)]
 
         ;; All features that are enabled and requires explicit migration are
         ;; added to the state for a posterior migration step.
@@ -568,10 +566,7 @@
           (vswap! bfc/*state* update :pending-to-migrate (fnil conj []) [feature file-id']))
 
         (l/dbg :hint "create file" :id (str file-id') ::l/sync? true)
-        (bfc/persist-file! system file)
-
-        (when overwrite
-          (db/delete! conn :file-thumbnail {:file-id file-id'}))
+        (bfc/save-file! system file ::db/return-keys false)
 
         file-id'))))
 
@@ -582,7 +577,6 @@
     ;; Insert all file relations
     (doseq [{:keys [library-file-id] :as rel} rels]
       (let [rel (-> rel
-                    (assoc :synced-at timestamp)
                     (update :file-id bfc/lookup-index)
                     (update :library-file-id bfc/lookup-index))]
 
@@ -592,7 +586,12 @@
                    :file-id (:file-id rel)
                    :lib-id (:library-file-id rel)
                    ::l/sync? true)
-            (db/insert! conn :file-library-rel rel))
+            (let [rel-params (dissoc rel :synced-at)]
+              (db/insert! conn :file-library-rel rel-params)
+              (bfc/upsert-file-library-sync! conn {:file-id (:file-id rel-params)
+                                                   :library-file-id (:library-file-id rel-params)
+                                                   :synced-at (or (:synced-at rel)
+                                                                  timestamp)})))
 
           (l/warn :hint "ignoring file library link"
                   :file-id (:file-id rel)
@@ -600,7 +599,7 @@
                   ::l/sync? true))))))
 
 (defmethod read-section :v1/sobjects
-  [{:keys [::db/conn ::bfc/input ::bfc/overwrite ::bfc/timestamp] :as cfg}]
+  [{:keys [::db/conn ::bfc/input ::bfc/timestamp] :as cfg}]
   (let [storage (sto/resolve cfg)
         ids     (read-obj! input)
         thumb?  (into #{} (map :media-id) (:thumbnails @bfc/*state*))]
@@ -653,8 +652,7 @@
                       (-> item
                           (assoc :file-id file-id)
                           (d/update-when :media-id bfc/lookup-index)
-                          (d/update-when :thumbnail-id bfc/lookup-index))
-                      {::db/on-conflict-do-nothing? overwrite}))))
+                          (d/update-when :thumbnail-id bfc/lookup-index))))))
 
     (doseq [item (:thumbnails @bfc/*state*)]
       (let [item (update item :media-id bfc/lookup-index)]
@@ -663,8 +661,7 @@
                :media-id (str (:media-id item))
                :object-id (:object-id item)
                ::l/sync? true)
-        (db/insert! conn :file-tagged-object-thumbnail item
-                    {::db/on-conflict-do-nothing? overwrite})))))
+        (db/insert! conn :file-tagged-object-thumbnail item)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; HIGH LEVEL API
@@ -693,7 +690,7 @@
    (io/coercible? output))
 
   (let [id (uuid/next)
-        tp (dt/tpoint)
+        tp (ct/tpoint)
         ab (volatile! false)
         cs (volatile! nil)]
     (try
@@ -731,7 +728,7 @@
    (satisfies? jio/IOFactory input))
 
   (let [id (uuid/next)
-        tp (dt/tpoint)
+        tp (ct/tpoint)
         cs (volatile! nil)]
 
     (l/info :hint "import: started" :id (str id))
@@ -753,6 +750,6 @@
       (finally
         (l/info :hint "import: terminated"
                 :id (str id)
-                :elapsed (dt/format-duration (tp))
+                :elapsed (ct/format-duration (tp))
                 :error? (some? @cs))))))
 

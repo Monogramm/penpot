@@ -15,6 +15,8 @@ import pLimit from "p-limit";
 import ppt from "pretty-time";
 import wpool from "workerpool";
 
+import { buildFontsPreviewSprite } from "./build-fonts-preview.js";
+
 function getCoreCount() {
   return os.cpus().length;
 }
@@ -27,7 +29,11 @@ export function startWorker() {
   });
 }
 
-export const isDebug = process.env.NODE_ENV !== "production";
+export const IS_DEBUG = process.env.NODE_ENV !== "production";
+export const BUILD_DATE = process.env.BUILD_DATE || new Date().toString();
+export const BUILD_TS = process.env.BUILD_TS || Date.now();
+export const VERSION = process.env.VERSION || "develop";
+export const VERSION_TAG = process.env.VERSION_TAG || VERSION;
 
 async function findFiles(basePath, predicate, options = {}) {
   predicate =
@@ -44,8 +50,9 @@ async function findFiles(basePath, predicate, options = {}) {
   return files;
 }
 
-function syncDirs(originPath, destPath) {
-  const command = `rsync -ar --delete ${originPath} ${destPath}`;
+function syncDirs(originPath, destPath, excludes = []) {
+  const excludeArgs = excludes.map((p) => `--exclude=${p}`).join(" ");
+  const command = `rsync -ar --delete ${excludeArgs} ${originPath} ${destPath}`;
 
   return new Promise((resolve, reject) => {
     proc.exec(command, (cause, stdout) => {
@@ -73,7 +80,7 @@ export function isJsFile(path) {
 export async function compileSass(worker, path, options) {
   path = ph.resolve(path);
 
-  log.info("compile:", path);
+  // log.info("compile:", path);
   return worker.exec("compileSass", [path, options]);
 }
 
@@ -171,6 +178,7 @@ export async function watch(baseDir, predicate, callback) {
   const watcher = new Watcher(baseDir, {
     persistent: true,
     recursive: true,
+    debounce: 500,
   });
 
   watcher.on("change", (path) => {
@@ -178,79 +186,100 @@ export async function watch(baseDir, predicate, callback) {
       callback(path);
     }
   });
+
+  watcher.on("error", (cause) => {
+    console.log("WATCHER ERROR", cause);
+  });
 }
 
-async function readManifestFile(path) {
-  const manifestPath = "resources/public/js/manifest.json";
+export async function ensureDirectories() {
+  await fs.mkdir("./resources/public/js/worker/", { recursive: true });
+  await fs.mkdir("./resources/public/css/", { recursive: true });
+}
+
+async function readManifestFile(resource) {
+  const manifestPath = "resources/public/" + resource;
   let content = await fs.readFile(manifestPath, { encoding: "utf8" });
   return JSON.parse(content);
 }
 
-async function readShadowManifest() {
-  const ts = Date.now();
-  try {
-    const content1 = await readManifestFile(
-      "resources/public/js/manifest.json",
-    );
-    const content2 = await readManifestFile(
-      "resources/public/js/worker/manifest.json",
-    );
+async function generateManifest() {
+  const index = {
+    app_main: "./js/main.js",
+    render_main: "./js/render.js",
+    rasterizer_main: "./js/rasterizer.js",
 
-    const index = {
-      ts: ts,
-      config: "js/config.js?ts=" + ts,
-      polyfills: "js/polyfills.js?ts=" + ts,
-    };
+    config: "./js/config.js?version=" + VERSION_TAG,
+    config_render: "./js/config-render.js?version=" + VERSION_TAG,
+    polyfills: "./js/polyfills.js?version=" + VERSION_TAG,
+    libs: "./js/libs.js?version=" + VERSION_TAG,
+    default_translations: "./js/translation.en.js?version=" + VERSION_TAG,
 
-    for (let item of content1) {
-      index[item.name] = "js/" + item["output-name"];
-    }
+    importmap: JSON.stringify({
+      imports: {
+        "./js/shared.js": "./js/shared.js?version=" + VERSION_TAG,
+        "./js/main.js": "./js/main.js?version=" + VERSION_TAG,
+        "./js/render.js": "./js/render.js?version=" + VERSION_TAG,
+        "./js/render-wasm.js": "./js/render-wasm.js?version=" + VERSION_TAG,
+        "./js/rasterizer.js": "./js/rasterizer.js?version=" + VERSION_TAG,
+        "./js/main-dashboard.js":
+          "./js/main-dashboard.js?version=" + VERSION_TAG,
+        "./js/main-auth.js": "./js/main-auth.js?version=" + VERSION_TAG,
+        "./js/main-viewer.js": "./js/main-viewer.js?version=" + VERSION_TAG,
+        "./js/main-settings.js": "./js/main-settings.js?version=" + VERSION_TAG,
+        "./js/main-workspace.js":
+          "./js/main-workspace.js?version=" + VERSION_TAG,
+        "./js/util-highlight.js":
+          "./js/util-highlight.js?version=" + VERSION_TAG,
+      },
+    }),
+  };
 
-    for (let item of content2) {
-      index["worker_" + item.name] = "js/worker/" + item["output-name"];
-    }
-
-    return index;
-  } catch (cause) {
-    return {
-      ts: ts,
-      config: "js/config.js?ts=" + ts,
-      polyfills: "js/polyfills.js?ts=" + ts,
-      main: "js/main.js?ts=" + ts,
-      shared: "js/shared.js?ts=" + ts,
-      worker_main: "js/worker/main.js?ts=" + ts,
-      rasterizer: "js/rasterizer.js?ts=" + ts,
-    };
-  }
+  return index;
 }
 
 async function renderTemplate(path, context = {}, partials = {}) {
   const content = await fs.readFile(path, { encoding: "utf-8" });
 
-  const ts = Math.floor(new Date());
-
   context = Object.assign({}, context, {
-    ts: ts,
-    isDebug,
+    isDebug: IS_DEBUG,
+    version: VERSION,
+    version_tag: VERSION_TAG,
+    build_date: BUILD_DATE,
+    build_ts: BUILD_TS,
   });
 
   return mustache.render(content, context, partials);
 }
 
-const extension = {
-  useNewRenderer: true,
+const markedOptions = {
   renderer: {
     link(token) {
-      const href = token.href;
-      const text = token.text;
-      return `<a href="${href}" target="_blank">${text}</a>`;
+      if (token.href === "mailto") {
+        return `<a href="mailto:${token.text}">${token.text}</a>`;
+      } else {
+        let target = "_blank";
+
+        if (token.text.endsWith("|target:self")) {
+          const index = token.text.indexOf("|target:self");
+          token.text = token.text.substring(0, index);
+          target = "_self";
+        }
+
+        const href = token.href;
+        const text = token.text;
+        return `<a href="${href}" target="${target}">${text}</a>`;
+      }
     },
   },
 };
 
-marked.use(extension);
+marked.use(markedOptions);
 
-async function readTranslations() {
+export async function compileTranslations() {
+  const outputDir = "resources/public/js/";
+  await fs.mkdir(outputDir, { recursive: true });
+
   const langs = [
     "ar",
     "ca",
@@ -262,7 +291,9 @@ async function readTranslations() {
     "es",
     "fa",
     "fr",
+    "fr_CA",
     "he",
+    "sr",
     "nb_NO",
     "pl",
     "pt_BR",
@@ -270,6 +301,7 @@ async function readTranslations() {
     "id",
     "ru",
     "tr",
+    "hi",
     "zh_CN",
     "zh_Hant",
     "hr",
@@ -286,9 +318,10 @@ async function readTranslations() {
     ["uk", "ukr_UA"],
     "ha",
   ];
-  const result = {};
 
   for (let lang of langs) {
+    const result = {};
+
     let filename = `${lang}.po`;
     if (l.isArray(lang)) {
       filename = `${lang[1]}.po`;
@@ -307,11 +340,6 @@ async function readTranslations() {
     for (let key of Object.keys(trdata)) {
       if (key === "") continue;
       const comments = trdata[key].comments || {};
-
-      if (l.isNil(result[key])) {
-        result[key] = {};
-      }
-
       const isMarkdown = l.includes(comments.flag, "markdown");
 
       const msgs = trdata[key].msgstr;
@@ -321,9 +349,9 @@ async function readTranslations() {
           message = marked.parseInline(message);
         }
 
-        result[key][lang] = message;
+        result[key] = message;
       } else {
-        result[key][lang] = msgs.map((item) => {
+        result[key] = msgs.map((item) => {
           if (isMarkdown) {
             return marked.parseInline(item);
           } else {
@@ -332,22 +360,11 @@ async function readTranslations() {
         });
       }
     }
+
+    const esm = `export default ${JSON.stringify(result, null, 0)};\n`;
+    const outputFile = ph.join(outputDir, "translation." + lang + ".js");
+    await fs.writeFile(outputFile, esm);
   }
-
-  return result;
-}
-
-function filterTranslations(translations, langs = [], keyFilter) {
-  const filteredEntries = Object.entries(translations)
-    .filter(([translationKey, _]) => keyFilter(translationKey))
-    .map(([translationKey, value]) => {
-      const langEntries = Object.entries(value).filter(([lang, _]) =>
-        langs.includes(lang),
-      );
-      return [translationKey, Object.fromEntries(langEntries)];
-    });
-
-  return Object.fromEntries(filteredEntries);
 }
 
 async function generateSvgSprite(files, prefix) {
@@ -396,18 +413,9 @@ async function generateSvgSprites() {
 }
 
 async function generateTemplates() {
-  const isDebug = process.env.NODE_ENV !== "production";
   await fs.mkdir("./resources/public/", { recursive: true });
 
-  let translations = await readTranslations();
-  const storybookTranslations = JSON.stringify(
-    filterTranslations(translations, ["en"], (key) =>
-      key.startsWith("labels."),
-    ),
-  );
-  translations = JSON.stringify(translations);
-
-  const manifest = await readShadowManifest();
+  const manifest = await generateManifest();
   let content;
 
   const iconsSprite = await fs.readFile(
@@ -428,19 +436,13 @@ async function generateTemplates() {
     "../public/images/sprites/assets.svg": assetsSprite,
   };
 
-  const pluginRuntimeUri =
-    process.env.PENPOT_PLUGIN_DEV === "true"
-      ? "http://localhost:4200/index.js?ts=" + manifest.ts
-      : "plugins-runtime/index.js?ts=" + manifest.ts;
+  const context = {
+    manifest: manifest,
+  };
 
   content = await renderTemplate(
     "resources/templates/index.mustache",
-    {
-      manifest: manifest,
-      translations: JSON.stringify(translations),
-      pluginRuntimeUri,
-      isDebug,
-    },
+    context,
     partials,
   );
 
@@ -448,41 +450,36 @@ async function generateTemplates() {
 
   content = await renderTemplate(
     "resources/templates/challenge.mustache",
-    {},
+    context,
     partials,
   );
   await fs.writeFile("./resources/public/challenge.html", content);
 
   content = await renderTemplate(
     "resources/templates/preview-body.mustache",
-    {
-      manifest: manifest,
-    },
+    context,
     partials,
   );
   await fs.writeFile("./.storybook/preview-body.html", content);
 
   content = await renderTemplate(
     "resources/templates/preview-head.mustache",
-    {
-      manifest: manifest,
-      translations: JSON.stringify(storybookTranslations),
-    },
+    context,
     partials,
   );
   await fs.writeFile("./.storybook/preview-head.html", content);
 
-  content = await renderTemplate("resources/templates/render.mustache", {
-    manifest: manifest,
-    translations: JSON.stringify(translations),
-  });
+  content = await renderTemplate(
+    "resources/templates/render.mustache",
+    context,
+  );
 
   await fs.writeFile("./resources/public/render.html", content);
 
-  content = await renderTemplate("resources/templates/rasterizer.mustache", {
-    manifest: manifest,
-    translations: JSON.stringify(translations),
-  });
+  content = await renderTemplate(
+    "resources/templates/rasterizer.mustache",
+    context,
+  );
 
   await fs.writeFile("./resources/public/rasterizer.html", content);
 }
@@ -515,7 +512,7 @@ export async function compileStyles() {
   await fs.mkdir("./resources/public/css", { recursive: true });
   await fs.writeFile("./resources/public/css/main.css", result);
 
-  if (isDebug) {
+  if (IS_DEBUG) {
     let debugCSS = await compileSassDebug(worker);
     await fs.writeFile("./resources/public/css/debug.css", debugCSS);
   }
@@ -528,17 +525,73 @@ export async function compileStyles() {
 export async function compileSvgSprites() {
   const start = process.hrtime();
   log.info("init: compile svgsprite");
-  await generateSvgSprites();
+  let error = false;
+
+  try {
+    await generateSvgSprites();
+  } catch (cause) {
+    error = cause;
+  }
+
   const end = process.hrtime(start);
-  log.info("done: compile svgsprite", `(${ppt(end)})`);
+
+  if (error) {
+    log.error("error: compile svgsprite", `(${ppt(end)})`);
+    console.error(error);
+  } else {
+    log.info("done: compile svgsprite", `(${ppt(end)})`);
+  }
+}
+
+export async function compileFontsPreviewSprite() {
+  const start = process.hrtime();
+  log.info("init: compile fonts preview sprite");
+  let error = false;
+  let result;
+
+  try {
+    result = await buildFontsPreviewSprite();
+  } catch (cause) {
+    error = cause;
+  }
+
+  const end = process.hrtime(start);
+
+  if (error) {
+    log.error("error: compile fonts preview sprite", `(${ppt(end)})`);
+    console.error(error);
+  } else if (result.skipped) {
+    log.info(
+      "done: compile fonts preview sprite (up-to-date, skipped)",
+      `(${ppt(end)})`,
+    );
+  } else {
+    log.info(
+      `done: compile fonts preview sprite (${result.ok} ok, ${result.failed} fallback)`,
+      `(${ppt(end)})`,
+    );
+  }
 }
 
 export async function compileTemplates() {
   const start = process.hrtime();
+  let error = false;
   log.info("init: compile templates");
-  await generateTemplates();
+
+  try {
+    await generateTemplates();
+  } catch (cause) {
+    error = cause;
+  }
+
   const end = process.hrtime(start);
-  log.info("done: compile templates", `(${ppt(end)})`);
+
+  if (error) {
+    log.error("error: compile templates", `(${ppt(end)})`);
+    console.error(error);
+  } else {
+    log.info("done: compile templates", `(${ppt(end)})`);
+  }
 }
 
 export async function compilePolyfills() {
@@ -564,12 +617,25 @@ export async function copyAssets() {
   log.info("init: copy assets");
 
   await syncDirs("resources/images/", "resources/public/images/");
-  await syncDirs("resources/fonts/", "resources/public/fonts/");
-  await syncDirs(
-    "resources/plugins-runtime/",
-    "resources/public/plugins-runtime/",
-  );
+  // The font preview sprite is generated into public/fonts/ (not committed), so
+  // exclude it from --delete to keep it across builds (see compileFontsPreviewSprite).
+  await syncDirs("resources/fonts/", "resources/public/fonts/", [
+    "fonts-preview-sprite.svg",
+  ]);
 
   const end = process.hrtime(start);
   log.info("done: copy assets", `(${ppt(end)})`);
+}
+
+export async function copyWasmPlayground() {
+  const start = process.hrtime();
+  log.info("init: copy wasm playground");
+
+  await syncDirs(
+    "resources/wasm-playground/",
+    "resources/public/wasm-playground/",
+  );
+
+  const end = process.hrtime(start);
+  log.info("done: copy wasm playground", `(${ppt(end)})`);
 }

@@ -2,35 +2,33 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.media
   (:require
    [app.common.data :as d]
    [app.common.exceptions :as ex]
-   [app.common.media :as cm]
+   [app.common.logging :as l]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
-   [app.http.client :as http]
    [app.loggers.audit :as-alias audit]
    [app.media :as media]
+   [app.media.svg :as svg]
+   [app.media.validation :as media.v]
    [app.rpc :as-alias rpc]
    [app.rpc.climit :as climit]
    [app.rpc.commands.files :as files]
    [app.rpc.doc :as-alias doc]
+   [app.rpc.quotes :as quotes]
    [app.storage :as sto]
    [app.storage.tmp :as tmp]
    [app.util.services :as sv]
-   [app.util.time :as dt]
-   [app.worker :as-alias wrk]
-   [cuerdas.core :as str]
-   [datoteka.io :as io]
-   [promesa.exec :as px]))
-
-(def default-max-file-size
-  (* 1024 1024 10)) ; 10 MiB
+   [datoteka.io :as io])
+  (:import
+   java.io.OutputStream))
 
 (def thumbnail-options
   {:width 100
@@ -42,13 +40,19 @@
 
 (declare create-file-media-object)
 
+(def ^:private sql:get-team-id-for-file
+  "SELECT p.team_id
+     FROM file AS f
+     JOIN project AS p ON (p.id = f.project_id)
+    WHERE f.id = ?")
+
 (def ^:private schema:upload-file-media-object
   [:map {:title "upload-file-media-object"}
    [:id {:optional true} ::sm/uuid]
    [:file-id ::sm/uuid]
    [:is-local ::sm/boolean]
    [:name [:string {:max 250}]]
-   [:content ::media/upload]])
+   [:content media.v/schema:upload]])
 
 (sv/defmethod ::upload-file-media-object
   {::doc/added "1.17"
@@ -57,17 +61,23 @@
                 [:process-image/global]]}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id content] :as params}]
   (files/check-edition-permissions! pool profile-id file-id)
-  (media/validate-media-type! content)
-  (media/validate-media-size! content)
+  (media.v/validate-media-type! content)
+  (media.v/validate-media-size! content)
+
+  (let [team-id (:team-id (db/exec-one! pool [sql:get-team-id-for-file file-id]))]
+    (quotes/check! cfg {::quotes/id        ::quotes/media-storage-bytes-per-team
+                        ::quotes/profile-id profile-id
+                        ::quotes/team-id    team-id
+                        ::quotes/incr       (:size content)}))
 
   (db/run! cfg (fn [{:keys [::db/conn] :as cfg}]
                  ;; We get the minimal file for proper checking if
                  ;; file is not already deleted
-                 (let [_     (files/get-minimal-file conn file-id)
-                       mobj  (create-file-media-object cfg params)]
+                 (let [_      (files/get-minimal-file conn file-id)
+                       mobj   (create-file-media-object cfg params)]
 
                    (db/update! conn :file
-                               {:modified-at (dt/now)
+                               {:modified-at (ct/now)
                                 :has-media-trimmed false}
                                {:id file-id}
                                {::db/return-keys false})
@@ -117,21 +127,29 @@
 
 (defn- process-main-image
   [info]
-  (let [hash (sto/calculate-hash (:path info))
-        data (-> (sto/content (:path info))
-                 (sto/wrap-with-hash hash))]
+  (let [path  (:path info)
+        mtype (:mtype info)
+        path  (if (= mtype "image/svg+xml")
+                (let [content   (slurp path)
+                      sanitized (svg/sanitize-svg content)
+                      temp-path (tmp/tempfile :prefix "penpot-svg-" :suffix ".svg" :min-age "5m")]
+                  (spit (str temp-path) sanitized)
+                  temp-path)
+                path)
+        hash  (sto/calculate-hash path)
+        data  (-> (sto/content path)
+                  (sto/wrap-with-hash hash))]
     {::sto/content data
      ::sto/deduplicate? true
      ::sto/touched-at (:ts info)
-     :content-type (:mtype info)
+     :content-type mtype
      :bucket "file-media-object"}))
 
 (defn- process-thumb-image
-  [info]
-  (let [thumb (-> thumbnail-options
-                  (assoc :cmd :generic-thumbnail)
-                  (assoc :input info)
-                  (media/run))
+  [cfg info]
+  (let [thumb (media/run cfg (assoc thumbnail-options
+                                    :cmd :generic-thumbnail
+                                    :input info))
         hash  (sto/calculate-hash (:data thumb))
         data  (-> (sto/content (:data thumb) (:size thumb))
                   (sto/wrap-with-hash hash))]
@@ -142,32 +160,61 @@
      :bucket "file-media-object"}))
 
 (defn- process-image
-  [content]
-  (let [info (media/run {:cmd :info :input content})]
+  [cfg content]
+  (let [info (media/run cfg {:cmd :info :input content})]
     (cond-> info
       (and (not (svg-image? info))
            (big-enough-for-thumbnail? info))
-      (assoc ::thumb (process-thumb-image info))
+      (assoc ::thumb (process-thumb-image cfg info))
 
       :always
       (assoc ::image (process-main-image info)))))
 
 (defn- create-file-media-object
-  [{:keys [::sto/storage ::db/conn ::wrk/executor] :as cfg}
-   {:keys [id file-id is-local name content]}]
-  (let [result (px/invoke! executor (partial process-image content))
-        image  (sto/put-object! storage (::image result))
-        thumb  (when-let [params (::thumb result)]
-                 (sto/put-object! storage params))]
+  [{:keys [::sto/storage ::db/conn] :as cfg}
+   {:keys [id file-id is-local name content from-url? from-chunks?]}]
 
-    (db/exec-one! conn [sql:create-file-media-object
-                        (or id (uuid/next))
-                        file-id is-local name
-                        (:id image)
-                        (:id thumb)
-                        (:width result)
-                        (:height result)
-                        (:mtype result)])))
+  (let [tpoint (ct/tpoint)
+        id     (or id (uuid/next))
+        origin (cond
+                 from-url?
+                 "url"
+                 from-chunks?
+                 "chunks"
+                 :else
+                 "direct")]
+
+    (l/dbg :hint "create file-media-object"
+           :step "init"
+           :id (str id)
+           :mtype (:mtype content)
+           :size (:size content)
+           :path (str (:path content))
+           :origin origin)
+
+    (let [result  (process-image cfg content)
+          image   (sto/put-object! storage (::image result))
+          thumb   (when-let [params (::thumb result)]
+                    (sto/put-object! storage params))
+          elapsed (tpoint)]
+
+      (l/dbg :hint "create file-media-object"
+             :step "end"
+             :id (str id)
+             :mtype (:mtype content)
+             :size (:size content)
+             :path (str (:path content))
+             :origin origin
+             :elapsed (ct/format-duration elapsed))
+
+      (db/exec-one! conn [sql:create-file-media-object
+                          id
+                          file-id is-local name
+                          (:id image)
+                          (:id thumb)
+                          (:width result)
+                          (:height result)
+                          (:mtype result)]))))
 
 ;; --- Create File Media Object (from URL)
 
@@ -192,63 +239,20 @@
         mobj (create-file-media-object-from-url cfg (assoc params :profile-id profile-id))]
 
     (db/update! pool :file
-                {:modified-at (dt/now)
+                {:modified-at (ct/now)
                  :has-media-trimmed false}
                 {:id file-id}
                 {::db/return-keys false})
 
     mobj))
 
-(defn download-image
-  [{:keys [::http/client]} uri]
-  (letfn [(parse-and-validate [{:keys [headers] :as response}]
-            (let [size     (some-> (get headers "content-length") d/parse-integer)
-                  mtype    (get headers "content-type")
-                  format   (cm/mtype->format mtype)
-                  max-size (cf/get :media-max-file-size default-max-file-size)]
-
-              (when-not size
-                (ex/raise :type :validation
-                          :code :unknown-size
-                          :hint "seems like the url points to resource with unknown size"))
-
-              (when (> size max-size)
-                (ex/raise :type :validation
-                          :code :file-too-large
-                          :hint (str/ffmt "the file size % is greater than the maximum %"
-                                          size
-                                          default-max-file-size)))
-
-              (when (nil? format)
-                (ex/raise :type :validation
-                          :code :media-type-not-allowed
-                          :hint "seems like the url points to an invalid media object"))
-
-              {:size size :mtype mtype :format format}))]
-
-    (let [{:keys [body] :as response} (http/req! client
-                                                 {:method :get :uri uri}
-                                                 {:response-type :input-stream :sync? true})
-          {:keys [size mtype]} (parse-and-validate response)
-          path    (tmp/tempfile :prefix "penpot.media.download.")
-          written (io/write* path body :size size)]
-
-      (when (not= written size)
-        (ex/raise :type :internal
-                  :code :mismatch-write-size
-                  :hint "unexpected state: unable to write to file"))
-
-      {:filename "tempfile"
-       :size size
-       :path path
-       :mtype mtype})))
-
 (defn- create-file-media-object-from-url
   [cfg {:keys [url name] :as params}]
-  (let [content (download-image cfg url)
+  (let [content (media/download-image cfg url)
         params  (-> params
+                    (assoc :from-url? true)
                     (assoc :content content)
-                    (assoc :name (or name (:filename content))))]
+                    (assoc :name (d/nilv name "unknown")))]
 
     ;; NOTE: we use the climit here in a dynamic invocation because we
     ;; don't want saturate the process-image limit with IO (download
@@ -273,16 +277,20 @@
 
 (sv/defmethod ::clone-file-media-object
   {::doc/added "1.17"
-   ::sm/params schema:clone-file-media-object}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (files/check-edition-permissions! conn profile-id file-id)
-    (-> (assoc cfg :conn conn)
-        (clone-file-media-object params))))
+   ::sm/params schema:clone-file-media-object
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
+  (files/check-edition-permissions! conn profile-id file-id)
+  (clone-file-media-object cfg params))
 
 (defn clone-file-media-object
-  [{:keys [conn]} {:keys [id file-id is-local]}]
+  [{:keys [::db/conn] :as cfg} {:keys [id file-id is-local] :as params}]
   (let [mobj (db/get-by-id conn :file-media-object id)]
+    (when-not mobj
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "source media object not found"))
+    (files/check-read-permissions! conn (::rpc/profile-id params) (:file-id mobj))
     (db/insert! conn :file-media-object
                 {:id (uuid/next)
                  :file-id file-id
@@ -293,3 +301,229 @@
                  :width  (:width mobj)
                  :height (:height mobj)
                  :mtype  (:mtype mobj)})))
+
+;; --- Chunked Upload: Create an upload session
+
+(def ^:private schema:create-upload-session
+  [:map {:title "create-upload-session"}
+   [:total-chunks [::sm/int {:min 1}]]])
+
+(def ^:private schema:create-upload-session-result
+  [:map {:title "create-upload-session-result"}
+   [:session-id ::sm/uuid]])
+
+(sv/defmethod ::create-upload-session
+  {::doc/added "2.17"
+   ::sm/params schema:create-upload-session
+   ::sm/result schema:create-upload-session-result}
+  [{:keys [::db/pool] :as cfg}
+   {:keys [::rpc/profile-id total-chunks]}]
+
+  (let [max-chunks (cf/get :quotes-upload-chunks-per-session)]
+    (when (> total-chunks max-chunks)
+      (ex/raise :type :restriction
+                :code :max-quote-reached
+                :target "upload-chunks-per-session"
+                :quote max-chunks
+                :count total-chunks)))
+
+  (quotes/check! cfg {::quotes/id ::quotes/upload-sessions-per-profile
+                      ::quotes/profile-id profile-id})
+
+  (let [session-id (uuid/next)]
+    (db/insert! pool :upload-session
+                {:id           session-id
+                 :profile-id   profile-id
+                 :total-chunks total-chunks})
+    {:session-id session-id}))
+
+;; --- Chunked Upload: Upload a single chunk
+
+(declare ^:private get-upload-chunk)
+(declare ^:private check-upload-chunk-slot)
+
+(def ^:private schema:upload-chunk
+  [:map {:title "upload-chunk"}
+   [:session-id ::sm/uuid]
+   [:index      ::sm/int]
+   [:content    media.v/schema:upload]])
+
+(def ^:private schema:upload-chunk-result
+  [:map {:title "upload-chunk-result"}
+   [:session-id ::sm/uuid]
+   [:index      ::sm/int]])
+
+(sv/defmethod ::upload-chunk
+  {::doc/added "2.17"
+   ::sm/params schema:upload-chunk
+   ::sm/result schema:upload-chunk-result}
+  [cfg {:keys [::rpc/profile-id session-id index content]}]
+  (let [session (db/tx-run! cfg check-upload-chunk-slot session-id profile-id index content)]
+    (l/trc :hint "upload-chunk"
+           :session-id session-id
+           :chunk (str index "/" (:total-chunks session))
+           :size (:size content)
+           :path (:path content))
+
+    (let [storage (sto/resolve cfg)
+          data    (sto/content (:path content))]
+      (sto/put-object! storage
+                       {::sto/content      data
+                        ::sto/deduplicate? false
+                        ::sto/touch        true
+                        :content-type      (:mtype content)
+                        :bucket            sto/tempfile-bucket
+                        :upload-id         (str session-id)
+                        :chunk-index       index}))
+
+    {:session-id session-id
+     :index      index}))
+
+(defn- check-upload-chunk-slot
+  [{:keys [::db/conn]} session-id profile-id index content]
+  (let [session (db/get conn :upload-session {:id session-id :profile-id profile-id} {::db/for-update true})]
+    (when (or (neg? index) (>= index (:total-chunks session)))
+      (ex/raise :type :validation
+                :code :invalid-chunk-index
+                :hint "chunk index is out of range for this session"
+                :session-id session-id
+                :total-chunks (:total-chunks session)
+                :index index))
+
+    (when (> (:size content) (cf/get :upload-max-chunk-size))
+      (ex/raise :type :validation
+                :code :chunk-too-large
+                :hint "chunk size exceeds the maximum allowed"
+                :session-id session-id
+                :index index
+                :size (:size content)
+                :max-size (cf/get :upload-max-chunk-size)))
+
+    (when (get-upload-chunk conn session-id index)
+      (ex/raise :type :validation
+                :code :duplicate-chunk-index
+                :hint "chunk index already uploaded for this session"
+                :session-id session-id
+                :index index))
+
+    session))
+
+;; --- Chunked Upload: shared helpers
+
+(def ^:private sql:get-upload-chunks
+  "SELECT id, size, (metadata->>'~:chunk-index')::integer AS chunk_index
+     FROM storage_object
+    WHERE (metadata->>'~:upload-id') = ?::text
+      AND deleted_at IS NULL
+      AND status = 'valid'
+    ORDER BY (metadata->>'~:chunk-index')::integer ASC")
+
+(defn- get-upload-chunks
+  [conn session-id]
+  (db/exec! conn [sql:get-upload-chunks (str session-id)]))
+
+(def ^:private sql:get-upload-chunk
+  "SELECT id
+     FROM storage_object
+    WHERE (metadata->>'~:upload-id') = ?::text
+      AND (metadata->>'~:chunk-index')::integer = ?
+      AND deleted_at IS NULL
+    LIMIT 1")
+
+(defn- get-upload-chunk
+  [conn session-id index]
+  (db/exec-one! conn [sql:get-upload-chunk (str session-id) index]))
+
+(defn- concat-chunks
+  "Reads all chunk storage objects in order and writes them to a single
+  temporary file on the local filesystem. Returns a path to that file."
+  [storage chunks]
+  (let [tmp (tmp/tempfile :prefix "penpot.chunked-upload.")]
+    (with-open [^OutputStream out (io/output-stream tmp)]
+      (doseq [{:keys [id]} chunks]
+        (let [sobj  (sto/get-object storage id)
+              bytes (sto/get-object-bytes storage sobj)]
+          (.write out ^bytes bytes))))
+    tmp))
+
+(defn assemble-chunks
+  "Validates that all expected chunks are present for `session-id` and
+  concatenates them into a single temporary file.  Returns a map
+  conforming to `media.v/schema:upload` with `:filename`, `:path` and
+  `:size`.
+
+  Raises a :validation/:missing-chunks error when the stored chunk
+  indices do not form exactly the `0..total-chunks` range recorded in
+  the session row (wrong count, gaps or duplicates).
+  Raises :not-found when the session does not belong to `profile-id`.
+  Deletes the session row from `upload_session` on success."
+  [{:keys [::db/conn] :as cfg} profile-id session-id]
+  (let [session (db/get conn :upload-session {:id session-id :profile-id profile-id})
+        chunks  (get-upload-chunks conn session-id)
+        indices (sort (map :chunk-index chunks))]
+
+    (when (or (not= (count chunks) (:total-chunks session))
+              (not= indices (range (:total-chunks session))))
+      (ex/raise :type :validation
+                :code :missing-chunks
+                :hint "stored chunks do not match expected total"
+                :session-id session-id
+                :expected   (:total-chunks session)
+                :found      (count chunks)))
+
+    (let [storage (sto/resolve cfg ::db/reuse-conn true)
+          path    (concat-chunks storage chunks)
+          size    (reduce #(+ %1 (:size %2)) 0 chunks)]
+
+      (db/delete! conn :upload-session {:id session-id})
+
+      {:filename "upload"
+       :path     path
+       :size     size})))
+
+;; --- Chunked Upload: Assemble all chunks into a final media object
+
+(def ^:private schema:assemble-file-media-object
+  [:map {:title "assemble-file-media-object"}
+   [:session-id ::sm/uuid]
+   [:file-id    ::sm/uuid]
+   [:is-local   ::sm/boolean]
+   [:name       [:string {:max 250}]]
+   [:mtype      :string]
+   [:id         {:optional true} ::sm/uuid]])
+
+(sv/defmethod ::assemble-file-media-object
+  {::doc/added "2.17"
+   ::sm/params schema:assemble-file-media-object
+   ::climit/id [[:process-image/by-profile ::rpc/profile-id]
+                [:process-image/global]]}
+  [{:keys [::db/pool] :as cfg}
+   {:keys [::rpc/profile-id session-id file-id is-local name mtype id] :as params}]
+  (files/check-edition-permissions! pool profile-id file-id)
+
+  (db/tx-run! cfg
+              (fn [{:keys [::db/conn] :as cfg}]
+                (let [content (assemble-chunks cfg profile-id session-id)
+                      content (-> content
+                                  (assoc :filename (str "upload:" name))
+                                  (assoc :mtype mtype)
+                                  (media.v/validate-media-type!)
+                                  (media.v/validate-media-size!))
+                      mobj    (create-file-media-object cfg (assoc params
+                                                                   :id id
+                                                                   :from-chunks? true
+                                                                   :content content))]
+
+                  (db/update! conn :file
+                              {:modified-at      (ct/now)
+                               :has-media-trimmed false}
+                              {:id file-id}
+                              {::db/return-keys false})
+
+                  (with-meta mobj
+                    {::audit/replace-props
+                     {:name      name
+                      :file-id   file-id
+                      :is-local  is-local
+                      :mtype     mtype}})))))
+

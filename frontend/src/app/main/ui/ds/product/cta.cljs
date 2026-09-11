@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.ds.product.cta
   (:require-macros
@@ -19,8 +19,7 @@
    [:title :string]])
 
 (mf/defc cta*
-  {::mf/props :obj
-   ::mf/schema schema:cta}
+  {::mf/schema schema:cta}
   [{:keys [class title children] :rest props}]
 
   (let [class (d/append-class class (stl/css :cta))

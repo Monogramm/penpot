@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.util.array
   "A collection of helpers for work with javascript arrays."
-  (:refer-clojure :exclude [conj! conj filter map reduce find])
+  (:refer-clojure :exclude [conj! conj filter map reduce find sort])
   (:require
-   [cljs.core :as c]))
+   [cljs.core :as c]
+   [goog.array :as garray]))
 
 (defn conj
   "A conj like function for js arrays."
@@ -67,3 +68,9 @@
 (defn find
   [f v]
   (.find ^js/Array v f))
+
+(defn sort!
+  [a]
+  (garray/sort a compare)
+  a)
+

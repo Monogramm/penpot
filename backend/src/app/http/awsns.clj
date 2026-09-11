@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.http.awsns
   "AWS SNS webhook handler for bounces."
@@ -17,11 +17,9 @@
    [app.main :as-alias main]
    [app.setup :as-alias setup]
    [app.tokens :as tokens]
-   [app.worker :as-alias wrk]
    [clojure.data.json :as j]
    [cuerdas.core :as str]
    [integrant.core :as ig]
-   [promesa.exec :as px]
    [yetti.request :as yreq]
    [yetti.response :as-alias yres]))
 
@@ -40,8 +38,8 @@
   [_ cfg]
   (letfn [(handler [request]
             (let [data (-> request yreq/body slurp)]
-              (px/run! :vthread (partial handle-request cfg data)))
-            {::yres/status 200})]
+              (handle-request cfg data)
+              {::yres/status 200}))]
     ["/sns" {:handler handler
              :allowed-methods #{:post}}]))
 
@@ -55,7 +53,7 @@
         (let [surl   (get body "SubscribeURL")
               stopic (get body "TopicArn")]
           (l/info :action "subscription received" :topic stopic :url surl)
-          (http/req! cfg {:uri surl :method :post :timeout 10000} {:sync? true}))
+          (http/req cfg {:uri surl :method :post :timeout 10000} {:sync? true}))
 
         (= mtype "Notification")
         (when-let [message (parse-json (get body "Message"))]
@@ -109,7 +107,7 @@
   [cfg headers]
   (let [tdata (get headers "x-penpot-data")]
     (when-not (str/empty? tdata)
-      (let [result (tokens/verify (::setup/props cfg) {:token tdata :iss :profile-identity})]
+      (let [result (tokens/verify cfg {:token tdata :iss :profile-identity})]
         (:profile-id result)))))
 
 (defn- parse-notification

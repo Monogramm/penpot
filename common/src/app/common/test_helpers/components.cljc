@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.test-helpers.components
   (:require
@@ -12,6 +12,7 @@
    [app.common.files.helpers :as cfh]
    [app.common.geom.point :as gpt]
    [app.common.logic.libraries :as cll]
+   [app.common.path-names :as cpn]
    [app.common.test-helpers.files :as thf]
    [app.common.test-helpers.ids-map :as thi]
    [app.common.test-helpers.shapes :as ths]
@@ -31,12 +32,12 @@
      "Need that root is already a frame"
      (cfh/frame-shape? root))
 
-    (let [[_new-root _new-shapes updated-shapes]
+    (let [[_new-root updated-shapes]
           (ctn/convert-shape-in-component root (:objects page) (:id file))
 
           updated-root (first updated-shapes) ; Can't use new-root because it has a new id
 
-          [path name] (cfh/parse-path-name (:name updated-root))]
+          [path name] (cpn/split-group-name (:name updated-root))]
       (thi/set-id! label (:component-id updated-root))
 
       (ctf/update-file-data
@@ -54,8 +55,15 @@
                                         :name name
                                         :path path
                                         :main-instance-id (:id updated-root)
-                                        :main-instance-page (:id page)
-                                        :shapes updated-shapes))))))))
+                                        :main-instance-page (:id page)))))))))
+
+(defn update-component
+  [file component-label & {:keys [] :as params}]
+  (let [component-id  (thi/id component-label)]
+    (ctf/update-file-data
+     file
+     (fn [file-data]
+       (ctkl/update-component file-data component-id #(merge % params))))))
 
 (defn get-component
   [file label & {:keys [include-deleted?] :or {include-deleted? false}}]
@@ -64,6 +72,10 @@
 (defn get-component-by-id
   [file id]
   (ctkl/get-component (:data file) id))
+
+(defn get-components
+  [file]
+  (ctkl/components (:data file)))
 
 (defn- set-children-labels!
   [file shape-label children-labels]
@@ -90,7 +102,6 @@
                                      component
                                      (:data library)
                                      (gpt/point 100 100)
-                                     true
                                      {:force-id (thi/new-id! copy-root-label)
                                       :force-frame-id frame-id})
 
@@ -150,7 +161,7 @@
 
         [new_shape _ changes]
         (-> (pcb/empty-changes nil (:id page))
-            (cll/generate-component-swap objects shape (:data file) page libraries id-new-component 0 nil keep-props-values))
+            (cll/generate-component-swap objects shape (:data file) page libraries id-new-component 0 nil keep-props-values false))
 
         file' (thf/apply-changes file changes)]
 

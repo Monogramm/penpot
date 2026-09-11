@@ -2,14 +2,17 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.component
   (:require
    [app.common.data :as d]
+   [app.common.exceptions :as ex]
    [app.common.schema :as sm]
+   [app.common.time :as-alias ct]
    [app.common.types.page :as ctp]
    [app.common.types.plugins :as ctpg]
+   [app.common.types.variant :as ctv]
    [cuerdas.core :as str]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -17,19 +20,19 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def schema:component
-  [:map
-   [:id ::sm/uuid]
-   [:name :string]
-   [:path {:optional true} [:maybe :string]]
-   [:modified-at {:optional true} ::sm/inst]
-   [:objects {:gen/max 10 :optional true} ::ctp/objects]
-   [:main-instance-id ::sm/uuid]
-   [:main-instance-page ::sm/uuid]
-   [:plugin-data {:optional true} ::ctpg/plugin-data]])
+  [:merge
+   [:map
+    [:id ::sm/uuid]
+    [:name :string]
+    [:path :string]
+    [:modified-at {:optional true} ::ct/inst]
+    [:objects {:gen/max 10 :optional true} ctp/schema:objects]
+    [:main-instance-id ::sm/uuid]
+    [:main-instance-page ::sm/uuid]
+    [:plugin-data {:optional true} ctpg/schema:plugin-data]]
+   ctv/schema:variant-component])
 
-(sm/register! ::component schema:component)
-
-(def check-component!
+(def check-component
   (sm/check-fn schema:component))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -37,15 +40,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Attributes that may be synced in components, and the group they belong to.
-;; When one attribute is modified in a shape inside a component, the corresponding
-;; group is marked as :touched. Then, if the shape is synced with the remote shape
-;; in the main component, none of the attributes of the same group is changed.
+;; When one attribute is modified in a shape inside a component, the
+;; corresponding group is marked as :touched. Then, if the shape is synced with
+;; the remote shape in the main component, none of the attributes of the same
+;; group is changed.
 
 (def sync-attrs
   {:name                    :name-group
    :fills                   :fill-group
    :hide-fill-on-export     :fill-group
-   :content                 :content-group
+   :content                 {:path :geometry-group
+                             :text :content-group}
    :position-data           :content-group
    :hidden                  :visibility-group
    :blocked                 :modifiable-group
@@ -86,14 +91,17 @@
    :blend-mode              :layer-effects-group
    :shadow                  :shadow-group
    :blur                    :blur-group
+   :background-blur         :blur-group
    :masked-group            :mask-group
    :constraints-h           :constraints-group
    :constraints-v           :constraints-group
    :fixed-scroll            :constraints-group
-   :bool-type               :bool-group
-   :bool-content            :bool-group
+   :bool-type               :content-group
+   :bool-content            :content-group
    :exports                 :exports-group
    :grids                   :grids-group
+
+   :show-content            :show-content
 
    :layout                  :layout-container
 
@@ -136,15 +144,35 @@
     :layout-item-min-w
     :layout-item-absolute
     :layout-item-z-index
-    :layout-item-align-self})
+    :layout-item-align-self
+    :interactions})
+
+(defn resolve-sync-group
+  "Makes a by type resolution of the sync group. This is necessary
+  because we have several properties that has different group
+  depending on the shape type. Per example the attr `:content` is used
+  by path and text shapes and the sync groups are different for each
+  shape type."
+  [type attr]
+  (when-let [group (get sync-attrs attr)]
+    (if (map? group)
+      (get group type)
+      group)))
 
 (defn component-attr?
-  "Check if some attribute is one that is involved in component syncrhonization.
+  "Check if some attribute is one that is involved in component synchronization.
    Note that design tokens also are involved, although they go by an alternate
-   route and thus they are not part of :sync-attrs."
+   route and thus they are not part of :sync-attrs.
+   Also when detaching a nested copy it also needs to trigger a synchronization,
+   even though :shape-ref, :component-id or :component-file are not synced
+   attributes per se."
   [attr]
-  (or (get sync-attrs attr)
-      (= :applied-tokens attr)))
+  (or (contains? sync-attrs attr)
+      (= :shape-ref attr)
+      (= :applied-tokens attr)
+      (= :component-id attr)
+      (= :component-file attr)
+      (= :component-root attr)))
 
 (defn instance-root?
   "Check if this shape is the head of a top instance."
@@ -179,10 +207,8 @@
        (= (:component-file shape) file-id)))
 
 (defn is-main-of?
-  [shape-main shape-inst components-v2]
-  (or (= (:shape-ref shape-inst) (:id shape-main))
-      (and (= (:shape-ref shape-inst) (:shape-ref shape-main))
-           (not components-v2))))
+  [shape-main shape-inst]
+  (= (:shape-ref shape-inst) (:id shape-main)))
 
 (defn main-instance?
   "Check if this shape is the root of the main instance of some
@@ -215,6 +241,16 @@
   (and (= shape-id (:main-instance-id component))
        (= page-id (:main-instance-page component))))
 
+(defn is-variant?
+  "Check if this shape or component is a variant component"
+  [item]
+  (some? (:variant-id item)))
+
+(defn is-variant-container?
+  "Check if this shape is a variant container"
+  [shape]
+  (boolean (:is-variant-container shape)))
+
 (defn set-touched-group
   [touched group]
   (when group
@@ -234,14 +270,23 @@
   [group]
   (str/starts-with? (name group) "swap-slot-"))
 
+(def ^:private xf:normal-touched
+  "Transducer that removes swap-slot touched groups."
+  (remove swap-slot?))
+
 (defn normal-touched-groups
-  "Gets all touched groups that are not swap slots."
+  "Gets all touched groups that are not swap slots.
+  Returns an empty set immediately when `:touched` is nil or empty,
+  avoiding an unnecessary `into #{}` allocation for the common case."
   [shape]
-  (into #{} (remove swap-slot? (:touched shape))))
+  (let [touched (:touched shape)]
+    (if (empty? touched)
+      #{}
+      (into #{} xf:normal-touched touched))))
 
 (defn group->swap-slot
   [group]
-  (parse-uuid (subs (name group) 10)))
+  (parse-uuid (subs (name group) 10)))  ;; 10 is the length of "swap-slot-"
 
 (defn get-swap-slot
   "If the shape has a :touched group in the form :swap-slot-<uuid>, get the id."
@@ -271,9 +316,9 @@
           (fn [touched]
             (into #{} (remove #(str/starts-with? (name %) "swap-slot-") touched)))))
 
-(defn get-component-root
+(defn get-deleted-component-root
   [component]
-  (if (true? (:main-instance-id component))
+  (if (some? (:main-instance-id component))
     (get-in component [:objects (:main-instance-id component)])
     (get-in component [:objects (:id component)])))
 
@@ -294,6 +339,22 @@
           :remote-synced
           :shape-ref
           :touched))
+
+(defn unhead-shape
+  "Make the shape not be a component head, but keep its :shape-ref and :touched if it was a nested copy"
+  [shape]
+  (dissoc shape
+          :component-root
+          :component-file
+          :component-id
+          :main-instance))
+
+(defn rehead-shape
+  "Make the shape a component head, by adding component info"
+  [shape component-file component-id]
+  (assoc shape
+         :component-file component-file
+         :component-id component-id))
 
 (defn- extract-ids [shape]
   (if (map? shape)
@@ -324,15 +385,17 @@
          (or (not (instance-head? shape))
              (not (in-component-copy? parent))))))
 
-(defn all-touched-groups
-  []
-  (into #{} (vals sync-attrs)))
+(def ^:private all-touched-groups
+  (reduce-kv (fn [acc _ v]
+               (if (map? v)
+                 (into acc (vals v))
+                 (conj acc v)))
+             #{}
+             sync-attrs))
 
 (defn valid-touched-group?
   [group]
-  (try
-    (or (contains? (all-touched-groups) group)
-        (and (swap-slot? group)
-             (some? (group->swap-slot group))))
-    (catch #?(:clj Throwable :cljs :default) _
-      false)))
+  (ex/ignoring
+   (or (contains? all-touched-groups group)
+       (and (swap-slot? group)
+            (some? (group->swap-slot group))))))

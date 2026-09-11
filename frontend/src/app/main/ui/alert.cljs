@@ -2,14 +2,18 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.alert
   (:require-macros [app.main.style :as stl])
   (:require
    [app.main.data.modal :as modal]
    [app.main.store :as st]
-   [app.main.ui.icons :as i]
+   [app.main.ui.components.link :as lk]
+   [app.main.ui.ds.buttons.button :refer [button*]]
+   [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.foundations.typography.heading :refer [heading*]]
+   [app.main.ui.ds.notifications.context-notification :refer [context-notification*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as k]
@@ -21,9 +25,11 @@
    ::mf/register-as :alert}
   [{:keys [message
            scd-message
+           link-message
            title
            on-accept
            hint
+           hide-actions?
            accept-label
            accept-style] :as props}]
 
@@ -52,23 +58,33 @@
     [:div {:class (stl/css :modal-overlay)}
      [:div {:class (stl/css :modal-container)}
       [:div {:class (stl/css :modal-header)}
-       [:h2 {:class (stl/css :modal-title)} title]
-       [:button {:class (stl/css :modal-close-btn)
-                 :on-click accept-fn} i/close]]
+       [:> heading* {:level 2 :typography "headline-medium" :class (stl/css :modal-title)} title]
+       [:> icon-button* {:icon "close"
+                         :aria-label (tr "labels.close")
+                         :variant "ghost"
+                         :class (stl/css :modal-close-btn)
+                         :on-click accept-fn}]]
 
       [:div {:class (stl/css :modal-content)}
        (when (and (string? message) (not= message ""))
-         [:h3 {:class (stl/css :modal-msg)} message])
+         [:> heading* {:level 3 :typography "body-large" :class (stl/css :modal-msg)} message])
+       (when (seq link-message)
+         [:> heading* {:level 3 :typography "body-large" :class (stl/css :modal-msg)}
+          [:span (:before link-message)]
+          [:> lk/link* {:action (:on-click link-message)
+                        :class (stl/css :link)}
+           (:text link-message)]
+          [:span (:after link-message)]])
        (when (and (string? scd-message) (not= scd-message ""))
-         [:h3 {:class (stl/css :modal-scd-msg)} scd-message])
-       (when (string? hint)
-         [:p {:class (stl/css :modal-hint)} hint])]
+         [:> heading* {:level 3 :typography "body-large" :class (stl/css :modal-scd-msg)} scd-message])
 
-      [:div {:class (stl/css :modal-footer)}
-       [:div {:class (stl/css :action-buttons)}
-        [:input {:class (stl/css-case :accept-btn true
-                                      :danger (= accept-style :danger)
-                                      :primary (= accept-style :primary))
-                 :type "button"
-                 :value accept-label
-                 :on-click accept-fn}]]]]]))
+       (when (string? hint)
+         [:> context-notification* {:level :info
+                                    :appearance :ghost}
+          hint])]
+
+      (when-not hide-actions?
+        [:div {:class (stl/css :modal-footer)}
+         [:> button* {:variant (if (= accept-style :danger) "destructive" "primary")
+                      :on-click accept-fn}
+          accept-label]])]]))

@@ -2,16 +2,17 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.helpers
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.files.helpers :as cfh]
+   [app.common.geom.matrix :as gmt]
    [app.common.geom.point :as gpt]
    [app.common.geom.shapes :as gsh]
-   [app.common.svg.path.command :as upc]))
+   [app.common.types.path :as path]))
 
 (defn lookup-profile
   ([state]
@@ -64,19 +65,40 @@
    (-> (lookup-page state file-id page-id)
        (get :objects))))
 
-(defn process-selected-shapes
+(defn process-selected
   ([objects selected]
-   (process-selected-shapes objects selected nil))
+   (process-selected objects selected nil))
 
   ([objects selected {:keys [omit-blocked?] :or {omit-blocked? false}}]
-   (letfn [(selectable? [id]
-             (and (contains? objects id)
-                  (or (not omit-blocked?)
-                      (not (get-in objects [id :blocked] false)))))]
-     (let [selected (->> selected (cfh/clean-loops objects))]
-       (into (d/ordered-set)
-             (filter selectable?)
-             selected)))))
+   (let [selectable?
+         (fn [id]
+           (and (contains? objects id)
+                (or (not omit-blocked?)
+                    (not (dm/get-in objects [id :blocked] false)))))
+
+         selected
+         (cfh/clean-loops objects selected)]
+
+     (into (d/ordered-set)
+           (filter selectable?)
+           selected))))
+
+(defn split-text-shapes
+  "Split text shapes from non-text shapes"
+  [objects ids]
+  (loop [ids (seq ids)
+         text-ids []
+         shape-ids []]
+    (if-let [id (first ids)]
+      (let [shape (get objects id)]
+        (if (cfh/text-shape? shape)
+          (recur (rest ids)
+                 (conj text-ids id)
+                 shape-ids)
+          (recur (rest ids)
+                 text-ids
+                 (conj shape-ids id))))
+      [text-ids shape-ids])))
 
 ;; DEPRECATED
 (defn lookup-selected-raw
@@ -95,7 +117,7 @@
   ([state page-id options]
    (let [objects  (lookup-page-objects state page-id)
          selected (dm/get-in state [:workspace-local :selected])]
-     (process-selected-shapes objects selected options))))
+     (process-selected objects selected options))))
 
 (defn lookup-shape
   ([state id]
@@ -157,7 +179,7 @@
                                   shape)
                       modifiers (dm/get-in content-modifiers [id :content-modifiers])
                       shape     (if (some? modifiers)
-                                  (update shape :content upc/apply-content-modifiers modifiers)
+                                  (update shape :content path/apply-content-modifiers modifiers)
                                   shape)]
                   (assoc result id shape))
                 result))
@@ -168,3 +190,44 @@
   [state]
   (when-let [{:keys [x y width height]} (get-in state [:workspace-local :vbox])]
     (gpt/point (+ x (/ width 2)) (+ y (/ height 2)))))
+
+(defn lookup-team-files
+  ([state]
+   (lookup-team-files state (:current-team-id state)))
+  ([state team-id]
+   (->> state
+        :files
+        (filter #(= team-id (:team-id (val %))))
+        (into {}))))
+
+(defn lookup-team-projects
+  ([state]
+   (lookup-team-projects (:current-team-id state)))
+  ([state team-id]
+   (->> state
+        :projects
+        (filter #(= team-id (:team-id (val %))))
+        (into {}))))
+
+(defn lookup-team
+  "The team identified by `team-id`, looked up first in the membership
+  `:teams` map and falling back to the directly-opened `:current-team`.
+  The fallback covers organization-owner access to teams the profile is not a
+  member of, which are kept out of `:teams` so they don't leak into the
+  teams listing."
+  ([state]
+   (lookup-team state (:current-team-id state)))
+  ([state team-id]
+   (or (dm/get-in state [:teams team-id])
+       (let [current (:current-team state)]
+         (when (= team-id (:id current))
+           current)))))
+
+(defn get-selrect
+  [selrect-transform shape]
+  (if (some? selrect-transform)
+    (let [{:keys [center width height transform]} selrect-transform]
+      [(gsh/center->rect center width height)
+       (gmt/transform-in center transform)])
+    [(dm/get-prop shape :selrect)
+     (gsh/transform-matrix shape)]))

@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 
-export JAVA_OPTS=${JAVA_OPTS:-"-Xmx1000m -Xms200m"};
-export PATH=/usr/lib/jvm/openjdk/bin:/usr/local/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
-EMSDK_QUIET=1 . /usr/local/emsdk/emsdk_env.sh;
-source /usr/local/cargo/env
+EMSDK_QUIET=1 . /opt/emsdk/emsdk_env.sh;
+
+export JAVA_OPTS="-Djava.net.preferIPv4Stack=true"
+export PATH="/home/penpot/.cargo/bin:/opt/jdk/bin:/opt/gh/bin:/opt/utils/bin:/opt/clojure/bin:/opt/node/bin:/opt/imagick/bin:/opt/cargo/bin:$PATH"
+export CARGO_HOME="/home/penpot/.cargo"
+
+export PENPOT_MCP_PLUGIN_SERVER_HOST=0.0.0.0
+export PENPOT_MCP_SERVER_HOST=0.0.0.0
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 
 alias l='ls --color -GFlh'
-alias rm='rm -r'
+alias ll='ls --color -GFlh'
+alias rm='rm -rf'
 alias ls='ls --color -F'
 alias lsd='ls -d *(/)'
 alias lsf='ls -h *(.)'
@@ -15,3 +23,11 @@ alias lsf='ls -h *(.)'
 if [ -f "$HOME/.bashrc.local" ]; then
     . "$HOME/.bashrc.local"
 fi
+
+# pnpm
+export PNPM_HOME="/home/penpot/.local/share/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME:"*) ;;
+  *) export PATH="$PNPM_HOME:$PATH" ;;
+esac
+# pnpm end

@@ -2,16 +2,12 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.geom.point
-  (:refer-clojure :exclude [divide min max abs])
+  (:refer-clojure :exclude [divide min max abs zero?])
   (:require
    #?(:clj [app.common.fressian :as fres])
-   #?(:cljs [cljs.core :as c]
-      :clj [clojure.core :as c])
-   #?(:cljs [cljs.pprint :as pp]
-      :clj  [clojure.pprint :as pp])
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
@@ -20,9 +16,9 @@
    [app.common.schema :as sm]
    [app.common.schema.generators :as sg]
    [app.common.schema.openapi :as-alias oapi]
-   [app.common.spec :as us]
    [app.common.transit :as t]
-   [clojure.spec.alpha :as s]
+   [clojure.core :as c]
+   [clojure.pprint :as pp]
    [cuerdas.core :as str])
   #?(:clj
      (:import
@@ -32,24 +28,10 @@
 
 (cr/defrecord Point [x y])
 
-(defn s
-  [pt]
-  (dm/str "(" (dm/get-prop pt :x) "," (dm/get-prop pt :y) ")"))
-
 (defn point?
   "Return true if `v` is Point instance."
   [v]
   (instance? Point v))
-
-;; FIXME: deprecated
-(s/def ::x ::us/safe-number)
-(s/def ::y ::us/safe-number)
-
-(s/def ::point-attrs
-  (s/keys :req-un [::x ::y]))
-
-(s/def ::point
-  (s/and ::point-attrs point?))
 
 (def ^:private schema:point-attrs
   [:map {:title "PointAttrs"}
@@ -85,24 +67,22 @@
     (into {} p)
     p))
 
-;; FIXME: make like matrix
 (def schema:point
-  {:type ::point
-   :pred valid-point?
-   :type-properties
-   {:title "point"
-    :description "Point"
-    :error/message "expected a valid point"
-    :gen/gen (->> (sg/tuple (sg/small-int) (sg/small-int))
-                  (sg/fmap #(apply pos->Point %)))
-    ::oapi/type "string"
-    ::oapi/format "point"
-    :decode/json decode-point
-    :decode/string decode-point
-    :encode/json point->json
-    :encode/string point->str}})
-
-(sm/register! schema:point)
+  (sm/register!
+   {:type ::point
+    :pred valid-point?
+    :type-properties
+    {:title "point"
+     :description "Point"
+     :error/message "expected a valid point"
+     :gen/gen (->> (sg/tuple (sg/small-int) (sg/small-int))
+                   (sg/fmap #(apply pos->Point %)))
+     ::oapi/type "string"
+     ::oapi/format "point"
+     :decode/json decode-point
+     :decode/string decode-point
+     :encode/json point->json
+     :encode/string point->str}}))
 
 (defn point-like?
   [{:keys [x y] :as v}]
@@ -171,7 +151,7 @@
                  (dm/get-prop p2 :y))))
 
 (defn multiply
-  "Returns the subtraction of the supplied value to both
+  "Returns the multiplication of the supplied value to both
   coordinates of the point as a new point."
   [p1 p2]
   (assert (and (point? p1)
@@ -470,6 +450,13 @@
   (and ^boolean (mth/almost-zero? (dm/get-prop p :x))
        ^boolean (mth/almost-zero? (dm/get-prop p :y))))
 
+(defn zero?
+  [p]
+  (let [x (dm/get-prop p :x)
+        y (dm/get-prop p :y)]
+    (and ^boolean (== 0 x)
+         ^boolean (== 0 y))))
+
 (defn lerp
   "Calculates a linear interpolation between two points given a tvalue"
   [p1 p2 t]
@@ -522,16 +509,26 @@
   (let [old-length (length vector)]
     (scale vector (/ new-length old-length))))
 
-;; FIXME: perfromance
 (defn abs
   [point]
-  (-> point
-      (update :x mth/abs)
-      (update :y mth/abs)))
+  (pos->Point (mth/abs (dm/get-prop point :x))
+              (mth/abs (dm/get-prop point :y))))
 
 ;; --- Debug
 
-(defmethod pp/simple-dispatch Point [obj] (pr obj))
+#?(:clj
+   (defmethod print-method Point
+     [o w]
+     (print-dup o w)))
+
+#?(:clj
+   (defmethod print-dup Point
+     [^Point pt ^java.io.Writer writer]
+     (.write writer (str "#penpot/point \"" (dm/get-prop pt :x) "," (dm/get-prop pt :y) "\""))))
+
+(defmethod pp/simple-dispatch Point
+  [obj]
+  (pr obj))
 
 #?(:clj
    (fres/add-handlers!

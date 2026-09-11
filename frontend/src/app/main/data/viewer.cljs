@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.viewer
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.features :as cfeat]
+   [app.common.files.changes :as cpc]
    [app.common.files.helpers :as cfh]
    [app.common.geom.point :as gpt]
    [app.common.schema :as sm]
@@ -16,13 +17,16 @@
    [app.common.types.shape-tree :as ctt]
    [app.common.types.shape.interactions :as ctsi]
    [app.common.uuid :as uuid]
+   [app.config :as cf]
    [app.main.data.comments :as dcmt]
    [app.main.data.common :as dcm]
    [app.main.data.event :as ev]
    [app.main.data.fonts :as df]
+   [app.main.data.helpers :as dsh]
    [app.main.features :as features]
    [app.main.repo :as rp]
    [app.main.router :as rt]
+   [app.render-wasm.api :as wasm.api]
    [app.util.globals :as ug]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
@@ -73,15 +77,17 @@
                     (if (nil? lstate)
                       default-local-state
                       lstate)))
-          (assoc-in [:viewer-local :share-id] share-id)))
+          (assoc-in [:viewer-local :share-id] share-id)
+          (update :comments-local dcmt/merge-persisted-filters)))
 
     ptk/WatchEvent
     (watch [_ state _]
       (rx/of (fetch-bundle (d/without-nils params))
              ;; Only fetch threads for logged-in users
              (when (some? (:profile state))
-               (fetch-comment-threads params))))
-
+               (fetch-comment-threads params))
+             (when (:share-id params)
+               (rx/of (ev/event {::ev/name "shared-prototipe-visited"})))))
     ptk/EffectEvent
     (effect [_ _ _]
       ;; Set the window name, the window name is used on inter-tab
@@ -90,14 +96,21 @@
       ;; browser just focus the opened tab instead of creating new
       ;; tab.
       (let [name (str "viewer-" file-id)]
-        (unchecked-set ug/global "name" name)))))
+        (unchecked-set ug/global "name" name))
+      ;; Make every `cf/resolve-file-media` call (inspector, code panel,
+      ;; image previews, ...) share-link aware for the lifetime of this
+      ;; viewer. Cleared by `finalize` below.
+      (cf/set-current-share-id! share-id))))
 
 (defn finalize
   [_]
   (ptk/reify ::finalize
     ptk/UpdateEvent
     (update [_ state]
-      (dissoc state :viewer))))
+      (dissoc state :viewer))
+    ptk/EffectEvent
+    (effect [_ _ _]
+      (cf/set-current-share-id! nil))))
 
 ;; --- Data Fetching
 
@@ -170,8 +183,95 @@
 (declare go-to-frame-by-index)
 (declare go-to-frame-auto)
 
+;; Applies to the viewer the changes passed as parameters
+;; will not save the data but just modify the data localy
+(defn- apply-changes-viewer
+  [changes]
+  (ptk/reify ::apply-changes-viewer
+    ptk/UpdateEvent
+    (update [_ state]
+      (let [file (-> (dm/get-in state [:viewer :file])
+                     (update :data cpc/process-changes changes false))
+
+            pages
+            (->> (dm/get-in file [:data :pages])
+                 (map (fn [page-id]
+                        (let [data (get-in file [:data :pages-index page-id])]
+                          [page-id (assoc data
+                                          :frames (ctt/get-viewer-frames (:objects data))
+                                          :all-frames (ctt/get-viewer-frames (:objects data) {:all-frames? true}))])))
+                 (into {}))]
+
+        (-> state
+            (assoc-in [:viewer :file] file)
+            (assoc-in [:viewer :pages] pages))))))
+
+(defn- generate-update-position-data-changes
+  [shapes page-id]
+  (reduce
+   (fn [result shape]
+     (conj result
+           {:type :mod-obj
+            :id (:id shape)
+            :page-id page-id
+            :operations
+            [{:type :set
+              :attr :position-data
+              :val (wasm.api/calculate-position-data shape)
+              :ignore-touched true
+              :ignore-geometry true}]}))
+   []
+   shapes))
+
+(defn update-page-position-data
+  [file-id page-id]
+  (ptk/reify ::update-page-position-data
+    ptk/WatchEvent
+    (watch [_ state _]
+      (if (and (features/active-feature? state "render-wasm/v1")
+               (contains? cf/flags :available-viewer-wasm))
+        ;; Fallback matches the viewer UI when the URL omits page-id.
+        (let [page-id (or page-id
+                          (-> (dsh/lookup-file-data state file-id)
+                              :pages
+                              first))
+              objects (dsh/lookup-page-objects state file-id page-id)
+
+              shapes
+              (reduce-kv
+               (fn [result _ shape]
+                 (cond-> result
+                   (and (cfh/text-shape? shape) (nil? (:position-data shape)))
+                   (conj shape)))
+               []
+               objects)
+
+              ;; Positive size required: OffscreenCanvas(0, 0) crashes
+              ;; `_set_render_options` on some browsers.
+              set-objects-stream
+              (rx/create
+               (fn [subs]
+                 (wasm.api/init-canvas-context (js/OffscreenCanvas. 64 64))
+                 (wasm.api/set-objects-callback shapes #(rx/push! subs :done))
+                 nil))]
+
+          (if (d/not-empty? shapes)
+            (->> (rx/from @wasm.api/module)
+                 (rx/mapcat (constantly set-objects-stream))
+                 (rx/mapcat
+                  (fn []
+                    (let [changes (generate-update-position-data-changes shapes page-id)
+                          _ (wasm.api/clear-canvas)]
+                      (if (d/not-empty? changes)
+                        (rx/of (apply-changes-viewer changes))
+                        (rx/empty))))))
+            (rx/empty)))
+
+        ;; Render wasm disabled, we do nothing
+        (rx/empty)))))
+
 (defn bundle-fetched
-  [{:keys [project file share-links libraries users permissions thumbnails] :as bundle}]
+  [{:keys [project file team share-links libraries users permissions thumbnails] :as bundle}]
   (let [pages (->> (dm/get-in file [:data :pages])
                    (map (fn [page-id]
                           (let [data (get-in file [:data :pages-index page-id])]
@@ -183,30 +283,40 @@
     (ptk/reify ::bundle-fetched
       ptk/UpdateEvent
       (update [_ state]
-        (-> state
-            (assoc :share-links share-links)
-            (assoc :viewer {:libraries (d/index-by :id libraries)
-                            :users (d/index-by :id users)
-                            :permissions permissions
-                            :project project
-                            :pages pages
-                            :thumbnails thumbnails
-                            :file file})))
+        (let [team-id (:id team)
+              team    (assoc team :members users)]
+          (-> state
+              (assoc :share-links share-links)
+              (assoc :current-team-id team-id)
+              (assoc :teams {team-id team})
+              (assoc :files (-> (d/index-by :id libraries)
+                                (assoc (:id file) file)))
+              (assoc :viewer {:libraries (d/index-by :id libraries)
+                              :users (d/index-by :id users)
+                              :permissions permissions
+                              :project project
+                              :pages pages
+                              :thumbnails thumbnails
+                              :file file}))))
 
       ptk/WatchEvent
       (watch [_ state _]
         (let [route    (:route state)
               qparams  (:query-params route)
-              index    (:index qparams)
-              frame-id (:frame-id qparams)]
+              index    (some-> (rt/get-query-param qparams :index) parse-long)
+              frame-id (some-> (:frame-id qparams) uuid/parse)
+              page-id (some-> (rt/get-query-param qparams :page-id) uuid/parse)
+              file-id (some-> (rt/get-query-param qparams :file-id) uuid/parse)]
+
           (rx/merge
            (rx/of (case (:zoom qparams)
                     "fit" zoom-to-fit
                     "fill" zoom-to-fill
                     nil))
            (rx/of
+            (update-page-position-data file-id page-id)
             (cond
-              (some? frame-id) (go-to-frame (uuid frame-id))
+              (some? frame-id) (go-to-frame frame-id)
               (some? index) (go-to-frame-by-index index)
               :else (go-to-frame-auto)))))))))
 
@@ -217,11 +327,12 @@
                  (filter #(= page-id (:page-id %)))
                  (d/index-by :id)
                  (assoc state :comment-threads)))
-          (on-error [{:keys [type] :as err}]
-            (if (or (= :authentication type)
-                    (= :not-found type))
-              (rx/empty)
-              (rx/throw err)))]
+          (on-error [cause]
+            (let [{:keys [type]} (ex-data cause)]
+              (if (or (= :authentication type)
+                      (= :not-found type))
+                (rx/empty)
+                (rx/throw cause))))]
 
     (ptk/reify ::fetch-comment-threads
       ptk/WatchEvent
@@ -242,7 +353,7 @@
 
 (defn fetch-comments
   [{:keys [thread-id]}]
-  (dm/assert! (uuid thread-id))
+  (assert (uuid? thread-id))
   (letfn [(fetched [comments state]
             (update state :comments assoc thread-id (d/index-by :id comments)))]
     (ptk/reify ::retrieve-comments
@@ -294,9 +405,10 @@
     (update [_ state]
       (let [params (rt/get-params state)
             page-id (some-> (:page-id params) uuid/parse)
-            index   (some-> (:index params) parse-long)
+            index   (some-> (rt/get-query-param params :index) parse-long)
 
             frames  (dm/get-in state [:viewer :pages page-id :frames])
+            index   (min (or index 0) (max 0 (dec (count frames))))
             srect   (-> (nth frames index)
                         (get :selrect))
             osize   (dm/get-in state [:viewer-local :viewport-size])
@@ -317,9 +429,10 @@
 
       (let [params (rt/get-params state)
             page-id (some-> (:page-id params) uuid/parse)
-            index   (some-> (:index params) parse-long)
+            index   (some-> (rt/get-query-param params :index) parse-long)
 
             frames  (dm/get-in state [:viewer :pages page-id :frames])
+            index   (min (or index 0) (max 0 (dec (count frames))))
             srect   (-> (nth frames index)
                         (get :selrect))
 
@@ -390,7 +503,7 @@
     ptk/WatchEvent
     (watch [_ state _]
       (let [params  (rt/get-params state)
-            index   (some-> params :index parse-long)]
+            index   (some-> (rt/get-query-param params :index) parse-long)]
         (when (pos? index)
           (rx/of
            (dcmt/close-thread)
@@ -406,8 +519,8 @@
     ptk/WatchEvent
     (watch [_ state _]
       (let [params  (rt/get-params state)
-            index   (some-> params :index parse-long)
-            page-id (some-> params :page-id parse-uuid)
+            index   (some-> (rt/get-query-param params :index) parse-long)
+            page-id (some-> params :page-id uuid/parse)
 
             total   (count (get-in state [:viewer :pages page-id :frames]))]
 
@@ -483,6 +596,13 @@
     (update [_ state]
       (d/dissoc-in state [:viewer-local :nav-scroll]))))
 
+(defn update-exports-cache
+  [shapes-key exports]
+  (ptk/reify ::update-exports-cache
+    ptk/UpdateEvent
+    (update [_ state]
+      (assoc-in state [:inspect-exports-cache shapes-key] exports))))
+
 (defn complete-animation
   []
   (ptk/reify ::complete-animation
@@ -520,8 +640,8 @@
      (update [_ state]
        (let [route   (:route state)
              qparams (:query-params route)
-             page-id (:page-id qparams)
-             index   (:index qparams)
+             page-id (some-> (:page-id qparams) uuid/parse)
+             index   (some-> (rt/get-query-param qparams :index) parse-long)
              frames  (get-in state [:viewer :pages page-id :frames])
              frame   (get frames index)]
          (cond-> state
@@ -538,7 +658,7 @@
      (watch [_ state _]
        (let [route   (:route state)
              qparams (:query-params route)
-             page-id (:page-id qparams)
+             page-id (some-> (:page-id qparams) uuid/parse)
              frames  (get-in state [:viewer :pages page-id :frames])
              index   (d/index-of-pred frames #(= (:id %) frame-id))]
          (rx/of (go-to-frame-by-index (or index 0))))))))
@@ -550,7 +670,7 @@
     (watch [_ state _]
       (let [route   (:route state)
             qparams (:query-params route)
-            page-id (:page-id qparams)
+            page-id (some-> (:page-id qparams) uuid/parse)
             flows   (get-in state [:viewer :pages page-id :options :flows])]
         (if (seq flows)
           (let [frame-id (:starting-frame (first flows))]
@@ -622,7 +742,7 @@
     (update [_ state]
       (let [route    (:route state)
             qparams  (:query-params route)
-            page-id  (:page-id qparams)
+            page-id  (some-> (:page-id qparams) uuid/parse)
             frames   (dm/get-in state [:viewer :pages page-id :all-frames])
             frame    (d/seek #(= (:id %) frame-id) frames)
             overlays (:viewer-overlays state)]
@@ -654,7 +774,7 @@
     (update [_ state]
       (let [route    (:route state)
             qparams  (:query-params route)
-            page-id  (:page-id qparams)
+            page-id  (some-> (:page-id qparams) uuid/parse)
             frames   (get-in state [:viewer :pages page-id :all-frames])
             frame    (d/seek #(= (:id %) frame-id) frames)
             overlays (:viewer-overlays state)]
@@ -718,7 +838,7 @@
     (update [_ state]
       (let [route     (:route state)
             qparams   (:query-params route)
-            page-id   (:page-id qparams)
+            page-id   (some-> (:page-id qparams) uuid/parse)
             objects   (get-in state [:viewer :pages page-id :objects])
             selection (-> state
                           (get-in [:viewer-local :selected] #{})
@@ -734,8 +854,8 @@
     (update [_ state]
       (let [route     (:route state)
             qparams   (:query-params route)
-            page-id   (:page-id qparams)
-            index     (:index qparams)
+            page-id   (some-> (:page-id qparams) uuid/parse)
+            index     (some-> (rt/get-query-param qparams :index) parse-long)
             objects   (get-in state [:viewer :pages page-id :objects])
             frame-id  (get-in state [:viewer :pages page-id :frames index :id])
 

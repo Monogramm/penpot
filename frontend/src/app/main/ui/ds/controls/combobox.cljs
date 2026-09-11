@@ -2,96 +2,112 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.ds.controls.combobox
   (:require-macros
-   [app.common.data.macros :as dm]
    [app.main.style :as stl])
   (:require
-   [app.main.ui.ds.controls.shared.options-dropdown :refer [options-dropdown*]]
-   [app.main.ui.ds.foundations.assets.icon :refer [icon* icon-list] :as i]
-   [app.util.array :as array]
+   [app.common.data :as d]
+   [app.main.constants :refer [max-input-length]]
+   [app.main.ui.ds.controls.select :refer [handle-focus-change]]
+   [app.main.ui.ds.controls.shared.options-dropdown :refer [options-dropdown* schema:option]]
+   [app.main.ui.ds.foundations.assets.icon :refer [icon*] :as i]
    [app.util.dom :as dom]
+   [app.util.globals :as globals]
    [app.util.keyboard :as kbd]
    [app.util.object :as obj]
-   [rumext.v2 :as mf]))
-
-(def listbox-id-index (atom 0))
-
-(defn- get-option
-  [options id]
-  (array/find #(= id (obj/get % "id")) options))
-
-(defn- handle-focus-change
-  [options focused* new-index options-nodes-refs]
-  (let [option (aget options new-index)
-        id     (obj/get option "id")
-        nodes  (mf/ref-val options-nodes-refs)
-        node   (obj/get nodes id)]
-    (reset! focused* id)
-    (dom/scroll-into-view-if-needed! node)))
-
-(defn- handle-selection
-  [focused* selected* open*]
-  (when-let [focused (deref focused*)]
-    (reset! selected* focused))
-  (reset! open* false)
-  (reset! focused* nil))
-
-(def ^:private schema:combobox-option
-  [:and
-   [:map {:title "option"}
-    [:id :string]
-    [:icon {:optional true}
-     [:and :string [:fn #(contains? icon-list %)]]]
-    [:label {:optional true} :string]
-    [:aria-label {:optional true} :string]]
-   [:fn {:error/message "invalid data: missing required props"}
-    (fn [option]
-      (or (and (contains? option :icon)
-               (or (contains? option :label)
-                   (contains? option :aria-label)))
-          (contains? option :label)))]])
+   [cuerdas.core :as str]
+   [goog.events :as gevents]
+   [rumext.v2 :as mf]
+   [rumext.v2.util :as mfu])
+  (:import goog.events.EventType))
 
 (def ^:private schema:combobox
   [:map
    [:id {:optional true} :string]
-   [:options [:vector schema:combobox-option]]
+   [:options [:vector schema:option]]
    [:class {:optional true} :string]
+   [:max-length {:optional true} :int]
+   [:placeholder {:optional true} :string]
    [:disabled {:optional true} :boolean]
    [:default-selected {:optional true} :string]
+   [:select-only {:optional true} :boolean]
    [:on-change {:optional true} fn?]
+   [:empty-to-end {:optional true} [:maybe :boolean]]
    [:has-error {:optional true} :boolean]])
 
 (mf/defc combobox*
-  {::mf/props :obj
-   ::mf/schema schema:combobox}
-  [{:keys [id options class disabled has-error default-selected on-change] :rest props}]
-  (let [open* (mf/use-state false)
-        open  (deref open*)
+  {::mf/schema schema:combobox}
+  [{:keys [id options class placeholder disabled has-error default-selected select-only max-length empty-to-end on-change] :rest props}]
+  (let [;; NOTE: we use mfu/bean here for transparently handle
+        ;; options provide as clojure data structures or javascript
+        ;; plain objects and lists.
+        options      (if (array? options)
+                       (mfu/bean options)
+                       options)
+        select-only  (d/nilv select-only false)
+        empty-to-end (d/nilv empty-to-end false)
 
-        selected* (mf/use-state  default-selected)
-        selected  (deref selected*)
+        is-open*     (mf/use-state false)
+        is-open      (deref is-open*)
 
-        filter-value* (mf/use-state "")
-        filter-value  (deref filter-value*)
+        selected-id* (mf/use-state default-selected)
+        selected-id  (deref selected-id*)
 
-        focused* (mf/use-state nil)
-        focused  (deref focused*)
+        filter-id*   (mf/use-state "")
+        filter-id    (deref filter-id*)
 
-        has-focus* (mf/use-state false)
-        has-focus  (deref has-focus*)
+        focused-id*  (mf/use-state nil)
+        focused-id   (deref focused-id*)
+
+        combobox-ref (mf/use-ref nil)
+        input-ref    (mf/use-ref nil)
+        nodes-ref    (mf/use-ref nil)
+        options-ref  (mf/use-ref nil)
+        listbox-id   (mf/use-id)
+        value-ref    (mf/use-ref nil)
 
         dropdown-options
-        (mf/use-memo
-         (mf/deps options filter-value)
-         (fn []
-           (->> options
-                (array/filter (fn [option]
-                                (let [lower-option (.toLowerCase (obj/get option "id"))
-                                      lower-filter (.toLowerCase filter-value)]
-                                  (.includes lower-option lower-filter)))))))
+        (mf/with-memo [options filter-id select-only]
+          (if select-only
+            (not-empty options)
+            (->> options
+                 (filterv (fn [option]
+                            (let [option (str/lower (get option :label))
+                                  filter (str/lower filter-id)]
+                              (str/includes? option filter))))
+                 (not-empty))))
+
+        set-option-ref
+        (mf/use-fn
+         (fn [node]
+           (let [state (mf/ref-val nodes-ref)
+                 state (d/nilv state #js {})
+                 id    (dom/get-data node "id")
+                 state (obj/set! state id node)]
+             (mf/set-ref-val! nodes-ref state)
+             (fn []
+               (let [state (mf/ref-val nodes-ref)
+                     state (d/nilv state #js {})
+                     id    (dom/get-data node "id")
+                     state (obj/unset! state id)]
+                 (mf/set-ref-val! nodes-ref state))))))
+
+        on-option-click
+        (mf/use-fn
+         (mf/deps on-change options)
+         (fn [event]
+           (dom/stop-propagation event)
+           (let [node  (dom/get-current-target event)
+                 id    (dom/get-data node "id")
+                 option (d/seek #(= id (get % :id)) options)]
+             (when-not (true? (:disabled option))
+               (reset! selected-id* id)
+               (reset! is-open* false)
+               (reset! focused-id* nil)
+               (when (fn? on-change)
+                 (on-change id))))))
 
         on-click
         (mf/use-fn
@@ -99,166 +115,232 @@
          (fn [event]
            (dom/stop-propagation event)
            (when-not disabled
-             (reset! has-focus* true)
-             (when-not (deref open*) (reset! filter-value* ""))
-             (if (= "INPUT" (.-tagName (.-target event)))
-               (reset! open* true)
-               (swap! open* not)))))
+             (when-not (deref is-open*)
+               (reset! filter-id* ""))
+             (swap! is-open* not))))
 
-        on-option-click
-        (mf/use-fn
-         (mf/deps on-change)
-         (fn [event]
-           (let [node  (dom/get-current-target event)
-                 id    (dom/get-data node "id")]
-             (reset! selected* id)
-             (reset! focused* nil)
-             (reset! open* false)
-             (when (fn? on-change)
-               (on-change id)))))
-
-        options-nodes-refs  (mf/use-ref nil)
-        options-ref         (mf/use-ref nil)
-        listbox-id-ref      (mf/use-ref (dm/str "listbox-" (swap! listbox-id-index inc)))
-        listbox-id          (mf/ref-val listbox-id-ref)
-        combobox-ref        (mf/use-ref nil)
-
-        set-ref
-        (mf/use-fn
-         (fn [node id]
-           (let [refs (or (mf/ref-val options-nodes-refs) #js {})
-                 refs (if node
-                        (obj/set! refs id node)
-                        (obj/unset! refs id))]
-             (mf/set-ref-val! options-nodes-refs refs))))
 
         on-blur
         (mf/use-fn
+         (mf/deps on-change options selected-id select-only)
          (fn [event]
-           (let [target (.-relatedTarget event)
-                 outside? (not (.contains (mf/ref-val combobox-ref) target))]
-             (when outside?
-               (reset! focused* nil)
-               (reset! open* false)
-               (reset! has-focus* false)))))
+           (dom/stop-propagation event)
+           (let [target   (dom/get-related-target event)
+                 self-node (mf/ref-val combobox-ref)]
+             (when-not (dom/is-child? self-node target)
+               (reset! is-open* false)
+               (reset! focused-id* nil)
+               (when (fn? on-change)
+                 (when-let [input-node (mf/ref-val input-ref)]
+                   (let [input-value (dom/get-input-value input-node)
+                         selected-option (d/seek #(= selected-id (get % :id)) options)
+                         value (if select-only
+                                 selected-id
+                                 (if (some? selected-option)
+                                   selected-id
+                                   input-value))]
+                     (on-change value))))))))
 
-        on-key-down
+        on-input-click
         (mf/use-fn
-         (mf/deps open focused disabled dropdown-options)
+         (mf/deps disabled)
          (fn [event]
+           (dom/stop-propagation event)
            (when-not disabled
-             (let [options dropdown-options
-                   focused (deref focused*)
-                   len     (alength options)
-                   index   (array/find-index #(= (deref focused*) (obj/get % "id")) options)]
-               (dom/stop-propagation event)
+             (when-not (deref is-open*)
+               (reset! filter-id* ""))
+             (reset! is-open* true))))
 
-               (when (< len 0)
-                 (reset! index len))
+        on-input-focus
+        (mf/use-fn
+         (fn [event]
+           (dom/stop-propagation event)
+           (when-not disabled
+             (dom/select-text! (.-target event)))))
 
-               (cond
-                 (and (not open) (kbd/down-arrow? event))
-                 (reset! open* true)
+        on-input-key-down
+        (mf/use-fn
+         (mf/deps is-open focused-id disabled select-only)
+         (fn [event]
+           (dom/stop-propagation event)
+           (when-not disabled
+             (when (and select-only
+                        (not (kbd/down-arrow? event))
+                        (not (kbd/up-arrow? event))
+                        (not (kbd/home? event))
+                        (not (kbd/enter? event))
+                        (not (kbd/esc? event))
+                        (not (kbd/tab? event)))
+               (dom/prevent-default event))
+             (let [options (mf/ref-val options-ref)
+                   len     (count options)
+                   index   (d/index-of-pred options #(= focused-id (get % :id)))
+                   index   (d/nilv index -1)
+                   nodes   (mf/ref-val nodes-ref)]
 
-                 open
+               (if is-open
                  (cond
                    (kbd/home? event)
-                   (handle-focus-change options focused* 0 options-nodes-refs)
+                   (handle-focus-change options focused-id* 0 nodes)
 
                    (kbd/up-arrow? event)
                    (let [new-index (if (= index -1)
                                      (dec len)
                                      (mod (- index 1) len))]
-                     (handle-focus-change options focused* new-index options-nodes-refs))
+                     (handle-focus-change options focused-id* new-index nodes))
 
 
                    (kbd/down-arrow? event)
                    (let [new-index (if (= index -1)
                                      0
                                      (mod (+ index 1) len))]
-                     (handle-focus-change options focused* new-index options-nodes-refs))
+                     (handle-focus-change options focused-id* new-index nodes))
 
                    (kbd/enter? event)
-                   (when (deref open*)
-                     (dom/prevent-default event)
-                     (handle-selection focused* selected* open*)
-                     (when (fn? on-change)
-                       (on-change focused)))
+                   (let [focused-option (d/seek #(= focused-id (get % :id)) options)]
+                     (when-not (true? (:disabled focused-option))
+                       (reset! selected-id* focused-id)
+                       (reset! is-open* false)
+                       (reset! focused-id* nil)
+                       (dom/blur! (mf/ref-val input-ref))
+                       (when (and (fn? on-change)
+                                  (some? focused-id))
+                         (on-change focused-id))))
 
                    (kbd/esc? event)
-                   (do (reset! open* false)
-                       (reset! focused* nil))))))))
+                   (do (reset! is-open* false)
+                       (reset! focused-id* nil)
+                       (dom/blur! (mf/ref-val input-ref))))
+
+                 (cond
+                   (kbd/down-arrow? event)
+                   (reset! is-open* true)
+
+                   (or (kbd/esc? event) (kbd/enter? event))
+                   (dom/blur! (mf/ref-val input-ref))))))))
 
         on-input-change
         (mf/use-fn
+         (mf/deps select-only)
          (fn [event]
-           (let [value (-> event dom/get-target dom/get-value)]
-             (reset! selected* value)
-             (reset! filter-value* value)
-             (reset! focused* nil)
-             (when (fn? on-change)
-               (on-change value)))))
-        on-focus
-        (mf/use-fn
-         (fn [_] (reset! has-focus* true)))
+           (dom/stop-propagation event)
+           (when-not select-only
+             (let [value (-> event
+                             dom/get-target
+                             dom/get-value)]
+               (mf/set-ref-val! value-ref value)
+               (reset! selected-id* value)
+               (reset! filter-id* value)
+               (reset! focused-id* nil)))))
 
-        class (dm/str class " " (stl/css :combobox))
+        selected-option
+        (mf/with-memo [options selected-id]
+          (when (d/not-empty? options)
+            (d/seek #(= selected-id (get % :id)) options)))
 
-        selected-option (get-option options selected)
-        icon (obj/get selected-option "icon")]
+        icon
+        (when selected-option
+          (get selected-option :icon))
 
-    (mf/with-effect [options]
-      (mf/set-ref-val! options-ref options))
+        avatar
+        (when selected-option
+          (get selected-option :avatar))
+
+        render-avatar-fn
+        (when avatar
+          (get avatar :render-fn))]
+
+    (mf/with-effect [dropdown-options]
+      (mf/set-ref-val! options-ref dropdown-options))
+
+    (mf/use-effect
+     (mf/deps default-selected)
+     (fn []
+       (reset! selected-id* default-selected)))
+
+    ;; On componnet unmount, save the new value if needed
+    (mf/with-effect [on-change]
+      (fn []
+        (when-let [value (mf/ref-val value-ref)]
+          (mf/set-ref-val! value-ref nil)
+          (on-change value))))
+
+    (mf/with-effect [is-open]
+      (when is-open
+        (let [handler (fn [event]
+                        (let [wrapper-node (mf/ref-val combobox-ref)
+                              target       (dom/get-target event)]
+                          (when (and (some? wrapper-node)
+                                     (not (dom/child? target wrapper-node)))
+                            (reset! is-open* false))))
+              key     (gevents/listen globals/document EventType.MOUSEDOWN handler)]
+          (fn []
+            (gevents/unlistenByKey key)))))
 
     [:div {:ref combobox-ref
            :class (stl/css-case
-                   :combobox-wrapper true
-                   :focused has-focus
+                   :wrapper true
                    :has-error has-error
                    :disabled disabled)}
 
-     [:div {:class class
-            :on-click on-click
-            :on-focus on-focus
-            :on-blur on-blur}
-      [:span {:class (stl/css-case :combobox-header true
-                                   :header-icon (some? icon))}
+     [:div {:class [class (stl/css :combobox)]
+            :on-blur on-blur
+            :on-click on-click}
+
+      [:span {:class (stl/css-case :header true
+                                   :header-icon (some? icon)
+                                   :header-avatar (fn? render-avatar-fn))}
        (when icon
          [:> icon* {:icon-id icon
                     :size "s"
                     :aria-hidden true}])
+       (when (fn? render-avatar-fn)
+         [:> render-avatar-fn {:avatar avatar}])
        [:input {:id id
+                :ref input-ref
                 :type "text"
                 :role "combobox"
-                :autoComplete "off"
-                :aria-autocomplete "both"
-                :aria-expanded open
-                :aria-controls listbox-id
-                :aria-activedescendant focused
                 :class (stl/css :input)
+                :auto-complete "off"
+                :aria-autocomplete (if select-only "none" "both")
+                :aria-expanded is-open
+                :aria-controls listbox-id
+                :aria-activedescendant focused-id
                 :data-testid "combobox-input"
+                :max-length (d/nilv max-length max-input-length)
                 :disabled disabled
-                :value selected
+                :read-only select-only
+                :value (if select-only
+                         (d/nilv (:label selected-option) "")
+                         (if (str/empty? (:id selected-option))
+                           (d/nilv selected-id "")
+                           (d/nilv (:label selected-option) "")))
+                :placeholder placeholder
                 :on-change on-input-change
-                :on-key-down on-key-down}]]
+                :on-click on-input-click
+                :on-focus on-input-focus
+                :on-key-down on-input-key-down}]]
 
-      [:> :button {:type "button"
-                   :tab-index "-1"
-                   :aria-expanded open
-                   :aria-controls listbox-id
-                   :class (stl/css :button-toggle-list)
-                   :on-click on-click}
-       [:> icon* {:icon-id i/arrow
-                  :class (stl/css :arrow)
-                  :size "s"
-                  :aria-hidden true
-                  :data-testid "combobox-open-button"}]]]
+      (when (d/not-empty? options)
+        [:button {:type "button"
+                  :tab-index "-1"
+                  :aria-expanded is-open
+                  :aria-controls listbox-id
+                  :class (stl/css :button-toggle-list)
+                  :on-click on-click}
+         [:> icon* {:icon-id i/arrow-down
+                    :class (stl/css :arrow)
+                    :size "s"
+                    :aria-hidden true
+                    :data-testid "combobox-open-button"}]])]
 
-     (when (and open (seq dropdown-options))
+     (when (and ^boolean is-open
+                ^boolean dropdown-options)
        [:> options-dropdown* {:on-click on-option-click
                               :options dropdown-options
-                              :selected selected
-                              :focused focused
-                              :set-ref set-ref
+                              :selected selected-id
+                              :focused focused-id
+                              :ref set-option-ref
                               :id listbox-id
+                              :empty-to-end empty-to-end
                               :data-testid "combobox-options"}])]))

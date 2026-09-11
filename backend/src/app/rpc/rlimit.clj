@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.rlimit
   "Rate limit strategies implementation for RPC services.
@@ -46,11 +46,15 @@
    [app.common.data :as d]
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
+   [app.common.math :as mth]
    [app.common.schema :as sm]
+   [app.common.time :as ct]
    [app.common.uri :as uri]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.http :as-alias http]
+   [app.loggers.database :as loggers.db]
+   [app.loggers.mattermost :as loggers.mm]
    [app.redis :as rds]
    [app.redis.script :as-alias rscript]
    [app.rpc :as-alias rpc]
@@ -58,20 +62,12 @@
    [app.rpc.rlimit.result :as-alias lresult]
    [app.util.inet :as inet]
    [app.util.services :as-alias sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]
    [clojure.edn :as edn]
    [cuerdas.core :as str]
    [datoteka.fs :as fs]
    [integrant.core :as ig]
    [promesa.exec :as px]))
-
-(def ^:private default-timeout
-  (dt/duration 400))
-
-(def ^:private default-options
-  {:codec rds/string-codec
-   :timeout default-timeout})
 
 (def ^:private bucket-rate-limit-script
   {::rscript/name ::bucket-rate-limit
@@ -94,6 +90,10 @@
 (defmulti parse-limit   (fn [[_ strategy _]] strategy))
 (defmulti process-limit (fn [_ _ _ o] (::strategy o)))
 
+(defn- ->seconds
+  [d]
+  (-> d inst-ms (/ 1000) int))
+
 (sm/register!
  {:type ::rpc/rlimit
   :pred #(instance? clojure.lang.Agent %)})
@@ -107,28 +107,29 @@
 (def ^:private schema:limit
   [:and
    [:map
-    [::name :any]
+    [::name :keyword]
     [::strategy schema:strategy]
     [::key :string]
-    [::opts :string]]
-   [:or
-    [:map
-     [::capacity ::sm/int]
-     [::rate ::sm/int]
-     [::internal ::dt/duration]
-     [::params [::sm/vec :any]]]
-    [:map
-     [::nreq ::sm/int]
-     [::unit [:enum :days :hours :minutes :seconds :weeks]]]]])
+    [::opts :string]
+    [::capacity {:optional true} ::sm/int]
+    [::rate {:optional true} ::sm/int]
+    [::interval {:optional true} ::ct/duration]
+    [::params {:optional true} [::sm/vec :any]]
+    [::permits {:optional true} ::sm/int]
+    [::unit {:optional true} [:enum :days :hours :minutes :seconds :weeks]]]
+   [:fn (fn [attrs]
+          (let [contains-fn (partial contains? attrs)]
+            (or (every? contains-fn [::capacity ::rate ::interval])
+                (every? contains-fn [::permits ::unit]))))]])
 
 (def ^:private schema:limits
   [:map-of :keyword [::sm/vec schema:limit]])
 
 (def ^:private valid-limit-tuple?
-  (sm/lazy-validator schema:limit-tuple))
+  (sm/validator schema:limit-tuple))
 
 (def ^:private valid-rlimit-instance?
-  (sm/lazy-validator ::rpc/rlimit))
+  (sm/validator ::rpc/rlimit))
 
 (defmethod parse-limit :window
   [[name strategy opts :as vlimit]]
@@ -137,16 +138,16 @@
   (merge
    {::name name
     ::strategy strategy}
-   (if-let [[_ nreq unit] (re-find window-opts-re opts)]
-     (let [nreq (parse-long nreq)]
-       {::nreq nreq
+   (if-let [[_ permits unit] (re-find window-opts-re opts)]
+     (let [permits (parse-long permits)]
+       {::permits permits
         ::unit (case unit
                  "d" :days
                  "h" :hours
                  "m" :minutes
                  "s" :seconds
                  "w" :weeks)
-        ::key  (str "ratelimit.window." (d/name name))
+        ::key  (str "penpot.rlimit." (cf/get :tenant) ".window." (d/name name))
         ::opts opts})
      (ex/raise :type :validation
                :code :invalid-window-limit-opts
@@ -157,7 +158,7 @@
   (assert (valid-limit-tuple? vlimit) "expected valid limit tuple")
 
   (if-let [[_ capacity rate interval] (re-find bucket-opts-re opts)]
-    (let [interval (dt/duration interval)
+    (let [interval (ct/duration interval)
           rate     (parse-long rate)
           capacity (parse-long capacity)]
       {::name name
@@ -166,74 +167,88 @@
        ::rate     rate
        ::interval interval
        ::opts     opts
-       ::params   [(dt/->seconds interval) rate capacity]
-       ::key      (str "ratelimit.bucket." (d/name name))})
+       ::params   [(->seconds interval) rate capacity]
+       ::key      (str "penpot.rlimit." (cf/get :tenant) ".bucket." (d/name name))})
     (ex/raise :type :validation
               :code :invalid-bucket-limit-opts
               :hint (str/ffmt "looks like '%' does not have a valid format" opts))))
 
 (defmethod process-limit :bucket
-  [redis user-id now {:keys [::key ::params ::service ::capacity ::interval ::rate] :as limit}]
+  [rconn profile-id now {:keys [::key ::params ::method ::capacity ::interval ::rate] :as limit}]
   (let [script    (-> bucket-rate-limit-script
-                      (assoc ::rscript/keys [(str key "." service "." user-id)])
-                      (assoc ::rscript/vals (conj params (dt/->seconds now))))
-        result    (rds/eval redis script)
+                      (assoc ::rscript/keys [(str key "." method "." profile-id)])
+                      (assoc ::rscript/vals (conj params (->seconds now))))
+        result    (rds/eval rconn script)
         allowed?  (boolean (nth result 0))
         remaining (nth result 1)
-        reset     (* (/ (inst-ms interval) rate)
-                     (- capacity remaining))]
+        reset     (long (mth/ceil (double (* (/ (inst-ms interval) rate)
+                                             (- capacity remaining)))))]
     (l/trace :hint "limit processed"
-             :service service
+             :method method
              :limit (name (::name limit))
              :strategy (name (::strategy limit))
              :opts (::opts limit)
              :allowed allowed?
              :remaining remaining)
     (-> limit
+        (assoc ::lresult/now now)
         (assoc ::lresult/allowed allowed?)
-        (assoc ::lresult/reset (dt/plus now reset))
+        (assoc ::lresult/reset (ct/plus now reset))
         (assoc ::lresult/remaining remaining))))
 
 (defmethod process-limit :window
-  [redis user-id now {:keys [::nreq ::unit ::key ::service] :as limit}]
-  (let [ts        (dt/truncate now unit)
-        ttl       (dt/diff now (dt/plus ts {unit 1}))
+  [rconn uid now {:keys [::permits ::unit ::key ::method] :as limit}]
+  (let [ts        (ct/truncate now unit)
+        ttl       (ct/diff now (ct/plus ts {unit 1}))
         script    (-> window-rate-limit-script
-                      (assoc ::rscript/keys [(str key "." service "." user-id "." (dt/format-instant ts))])
-                      (assoc ::rscript/vals [nreq (dt/->seconds ttl)]))
-        result    (rds/eval redis script)
+                      (assoc ::rscript/keys [(str key "." method "." uid "." (ct/format-inst ts))])
+                      (assoc ::rscript/vals [permits (->seconds ttl)]))
+        result    (rds/eval rconn script)
         allowed?  (boolean (nth result 0))
         remaining (nth result 1)]
     (l/trace :hint "limit processed"
-             :service service
-             :limit (name (::name limit))
+             :method method
+             :name (name (::name limit))
              :strategy (name (::strategy limit))
              :opts (::opts limit)
              :allowed allowed?
              :remaining remaining)
     (-> limit
+        (assoc ::lresult/now now)
         (assoc ::lresult/allowed allowed?)
+        (assoc ::lresult/timestamp ts)
         (assoc ::lresult/remaining remaining)
-        (assoc ::lresult/reset (dt/plus ts {unit 1})))))
+        (assoc ::lresult/reset (ct/plus ts {unit 1})))))
 
-(defn- process-limits!
-  [redis user-id limits now]
-  (let [results   (into [] (map (partial process-limit redis user-id now)) limits)
+(defn- process-limits
+  [{:keys [::rds/conn] :as cfg} uid limits now]
+  (let [results   (into [] (map (partial process-limit conn uid now)) limits)
         remaining (->> results
                        (d/index-by ::name ::lresult/remaining)
                        (uri/map->query-string))
         reset     (->> results
-                       (d/index-by ::name (comp dt/->seconds ::lresult/reset))
+                       (d/index-by ::name (comp ->seconds ::lresult/reset))
                        (uri/map->query-string))
 
         rejected  (d/seek (complement ::lresult/allowed) results)]
 
     (when rejected
-      (l/warn :hint "rejected rate limit"
-              :user-id (str user-id)
-              :limit-service (-> rejected ::service name)
-              :limit-name (-> rejected ::name name)
-              :limit-strategy (-> rejected ::strategy name)))
+      (let [event {::id (uuid/next)
+                   ::uid uid
+                   ::method (-> rejected ::method name)
+                   ::name (-> rejected ::name name)
+                   ::strategy (-> rejected ::strategy name)
+                   ::results results}]
+
+        (l/warn :hint "rejected rate limit"
+                :method (-> rejected ::method name)
+                :name (-> rejected ::name name)
+                :strategy (-> rejected ::strategy name)
+                :uid (str uid)
+                :report-id (:id event))
+
+        (loggers.mm/emit cfg event)
+        (loggers.db/emit cfg event)))
 
     {::enabled true
      ::allowed (not (some? rejected))
@@ -246,7 +261,7 @@
   [state skey sname]
   (when-let [limits (or (get-in @state [::limits skey])
                         (get-in @state [::limits :default]))]
-    (into [] (map #(assoc % ::service sname)) limits)))
+    (into [] (map #(assoc % ::method sname)) limits)))
 
 (defn- get-uid
   [{:keys [::rpc/profile-id] :as params}]
@@ -255,46 +270,37 @@
         (some-> request inet/parse-request)
         uuid/zero)))
 
-(defn process-request!
-  [{:keys [::rpc/rlimit ::rds/redis ::skey ::sname] :as cfg} params]
-  (when-let [limits (get-limits rlimit skey sname)]
-    (let [redis  (rds/get-or-connect redis ::rpc/rlimit default-options)
-          uid    (get-uid params)
-          ;; FIXME: why not clasic try/catch?
-          result (ex/try! (process-limits! redis uid limits (dt/now)))]
-
-      (l/trc :hint "process-limits"
-             :service sname
-             :remaining (::remaingin result)
-             :reset (::reset result))
-
-      (cond
-        (ex/exception? result)
-        (do
-          (l/error :hint "error on processing rate-limit" :cause result)
-          {::enabled false})
-
-        (contains? cf/flags :soft-rpc-rlimit)
+(defn- process-request'
+  [cfg limits params]
+  (try
+    (let [uid    (get-uid params)
+          result (process-limits cfg uid limits (ct/now))]
+      (if (contains? cf/flags :soft-rpc-rlimit)
         {::enabled false}
+        result))
+    (catch Throwable cause
+      (l/error :hint "error on processing rate-limit" :cause cause)
+      {::enabled false})))
 
-        :else
-        result))))
+(defn- process-request
+  [{:keys [::rpc/rlimit ::skey ::sname] :as cfg} params]
+  (when-let [limits (get-limits rlimit skey sname)]
+    (rds/run! cfg process-request' limits params)))
 
 (defn wrap
-  [{:keys [::rpc/rlimit ::rds/redis] :as cfg} f mdata]
-  (assert (rds/redis? redis) "expected a valid redis instance")
+  [{:keys [::rpc/rlimit] :as cfg} f mdata]
   (assert (or (nil? rlimit) (valid-rlimit-instance? rlimit)) "expected a valid rlimit instance")
 
   (if rlimit
-    (let [skey  (keyword (::rpc/type cfg) (->> mdata ::sv/spec name))
-          sname (str (::rpc/type cfg) "." (->> mdata ::sv/spec name))
+    (let [skey  (keyword (::rpc/module cfg) (->> mdata ::sv/spec name))
+          sname (str (::rpc/module cfg) "." (->> mdata ::sv/spec name))
           cfg   (-> cfg
                     (assoc ::skey skey)
                     (assoc ::sname sname))]
 
       (fn [hcfg params]
         (if @enabled
-          (let [result (process-request! cfg params)]
+          (let [result (process-request cfg params)]
             (if (::enabled result)
               (if (::allowed result)
                 (-> (f hcfg params)
@@ -321,7 +327,7 @@
   (sm/check-fn schema:config))
 
 (def ^:private check-refresh
-  (sm/check-fn ::dt/duration))
+  (sm/check-fn ::ct/duration))
 
 (def ^:private check-limits
   (sm/check-fn schema:limits))
@@ -351,7 +357,7 @@
                          config)))]
 
     (when-let [config (some->> path slurp edn/read-string check-config)]
-      (let [refresh (->> config meta :refresh dt/duration check-refresh)
+      (let [refresh (->> config meta :refresh ct/duration check-refresh)
             limits  (->> config compile-pass-1 compile-pass-2 check-limits)]
 
         {::refresh refresh
@@ -383,19 +389,16 @@
 (defn- on-refresh-error
   [_ cause]
   (when-not (instance? java.util.concurrent.RejectedExecutionException cause)
-    (if-let [explain (-> cause ex-data ex/explain)]
-      (l/warn ::l/raw (str "unable to refresh config, invalid format:\n" explain)
-              ::l/sync? true)
-      (l/warn :hint "unexpected exception on loading config"
-              :cause cause
-              ::l/sync? true))))
+    (l/warn :hint "unexpected exception on loading config"
+            :cause cause
+            ::l/sync? true)))
 
 (defn- get-config-path
   []
   (when-let [path (cf/get :rpc-rlimit-config)]
     (and (fs/exists? path) (fs/regular-file? path) path)))
 
-(defmethod ig/assert-key :app.rpc/rlimit
+(defmethod ig/assert-key ::rpc/rlimit
   [_ {:keys [::wrk/executor]}]
   (assert (sm/valid? ::wrk/executor executor) "expect valid executor"))
 
@@ -410,7 +413,7 @@
         (l/info :hint "initializing rlimit config reader" :path (str path))
 
         ;; Initialize the state with initial refresh value
-        (send-via executor state (constantly {::refresh (dt/duration "5s")}))
+        (send-via executor state (constantly {::refresh (ct/duration "5s")}))
 
         ;; Force a refresh
         (refresh-config (assoc cfg ::path path ::state state)))

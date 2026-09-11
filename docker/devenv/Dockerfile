@@ -1,154 +1,83 @@
-FROM debian:bookworm
-LABEL maintainer="Penpot <docker@penpot.app>"
+FROM dhi.io/debian-base:trixie-debian13-dev AS base
 
-ARG DEBIAN_FRONTEND=noninteractive
-
-ENV NODE_VERSION=v20.11.1 \
-    CLOJURE_VERSION=1.11.1.1435 \
-    CLJKONDO_VERSION=2024.03.13 \
-    BABASHKA_VERSION=1.3.189 \
-    CLJFMT_VERSION=0.12.0 \
-    RUSTUP_VERSION=1.27.1 \
-    RUST_VERSION=1.82.0 \
-    LANG=en_US.UTF-8 \
-    LC_ALL=en_US.UTF-8
+ENV LANG='C.UTF-8' \
+    LC_ALL='C.UTF-8' \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN set -ex; \
-    mkdir -p /etc/resolvconf/resolv.conf.d; \
-    echo "nameserver 8.8.8.8" > /etc/resolvconf/resolv.conf.d/tail; \
     apt-get -qq update; \
-    apt-get -qqy install --no-install-recommends \
-        build-essential \
-        openssh-client \
-        redis-tools \
-        locales \
-        gnupg2 \
-        ca-certificates \
+    apt-get -qq dist-upgrade; \
+    apt-get -qqy --no-install-recommends install \
+        python3 \
+        unzip \
+        rsync \
         wget \
         sudo \
+        libpam-modules \
+        libpam-runtime \
         tmux \
         vim \
         curl \
         bash \
         git \
-        rlwrap \
-        unzip \
-        rsync \
-        fakeroot \
-        file \
-        less \
-        jq \
-        nginx \
+        ripgrep \
+        \
+        curl \
+        ca-certificates \
+        \
+        binutils \
+        build-essential autoconf libtool pkg-config \
     ; \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen; \
-    locale-gen; \
-    rm -rf /var/lib/apt/lists/*;
+    mkdir -p /usr/lib/pam.d; \
+    printf '%s\n' \
+        '#%PAM-1.0' \
+        'auth       required   pam_unix.so nullok' \
+        'account    required   pam_unix.so' \
+        'password   required   pam_unix.so' \
+        'session    required   pam_unix.so' \
+        'session    required   pam_limits.so' \
+        | tee /etc/pam.d/sudo /usr/lib/pam.d/sudo > /dev/null; \
+    printf '%s\n' \
+        '#%PAM-1.0' \
+        'auth       required   pam_deny.so' \
+        'account    required   pam_deny.so' \
+        'password   required   pam_deny.so' \
+        'session    required   pam_deny.so' \
+        | tee /etc/pam.d/other /usr/lib/pam.d/other > /dev/null; \
+    if [ ! -s /etc/nsswitch.conf ]; then \
+        printf '%s\n' \
+            'passwd:         files' \
+            'group:          files' \
+            'shadow:         files' \
+            'gshadow:        files' \
+            'hosts:          files dns' \
+            'networks:       files' \
+            'protocols:      files' \
+            'services:       files' \
+            'ethers:         files' \
+            'rpc:            files' \
+            'netgroup:       files' \
+            > /etc/nsswitch.conf; \
+    fi
 
-RUN set -ex; \
-    useradd -m -g users -s /bin/bash penpot; \
-    passwd penpot -d; \
-    echo "penpot ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+################################################################################
+## NODE SETUP
+################################################################################
 
-RUN set -ex; \
-    apt-get -qq update; \
-    apt-get -qqy install --no-install-recommends \
-        python3 \
-        python3-tabulate \
-        imagemagick \
-        ghostscript \
-        netpbm \
-        poppler-utils \
-        potrace \
-        webp \
-        woff-tools \
-        woff2 \
-        fontforge \
-        gconf-service \
-        libasound2 \
-        libatk1.0-0 \
-        libatk-bridge2.0-0 \
-        libcairo2 \
-        libcups2 \
-        libdbus-1-3 \
-        libexpat1 \
-        libfontconfig1 \
-        libgcc1 \
-        libgconf-2-4 \
-        libgdk-pixbuf2.0-0 \
-        libglib2.0-0 \
-        libgtk-3-0 \
-        libnspr4 \
-        libpango-1.0-0 \
-        libpangocairo-1.0-0 \
-        libx11-6 \
-        libx11-xcb1 \
-        libxcb1 \
-        libxcomposite1 \
-        libxcursor1 \
-        libxdamage1 \
-        libxext6 \
-        libxfixes3 \
-        libxi6 \
-        libxrandr2 \
-        libxrender1 \
-        libxshmfence1 \
-        libxss1 \
-        libxtst6 \
-        fonts-liberation \
-        libappindicator1 \
-        libnss3 \
-        libgbm1 \
-        xvfb \
-        libfontconfig-dev \
-    ; \
-    rm -rf /var/lib/apt/lists/*;
+FROM base AS setup-node
+
+ENV NODE_VERSION=v24.20.0 \
+    PATH=/opt/node/bin:$PATH
 
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
     case "${ARCH}" in \
        aarch64|arm64) \
-         ESUM='7d3ab0e8eba95bd682cfda8041c6cb6fa21e09d0d9131316fd7c96c78969de31'; \
-         BINARY_URL='https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.3%2B9/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.3_9.tar.gz'; \
-         ;; \
-       amd64|x86_64) \
-         ESUM='fffa52c22d797b715a962e6c8d11ec7d79b90dd819b5bc51d62137ea4b22a340'; \
-         BINARY_URL='https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.3%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.3_9.tar.gz'; \
-         ;; \
-       *) \
-         echo "Unsupported arch: ${ARCH}"; \
-         exit 1; \
-         ;; \
-    esac; \
-    curl -LfsSo /tmp/openjdk.tar.gz ${BINARY_URL}; \
-    echo "${ESUM} */tmp/openjdk.tar.gz" | sha256sum -c -; \
-    mkdir -p /usr/lib/jvm/openjdk; \
-    cd /usr/lib/jvm/openjdk; \
-    tar -xf /tmp/openjdk.tar.gz --strip-components=1; \
-    rm -rf /tmp/openjdk.tar.gz;
-
-ENV PATH="/usr/lib/jvm/openjdk/bin:/usr/local/nodejs/bin:$PATH" JAVA_HOME=/usr/lib/jvm/openjdk
-
-RUN set -ex; \
-    curl -LfsSo /tmp/clojure.sh https://download.clojure.org/install/linux-install-$CLOJURE_VERSION.sh; \
-    chmod +x /tmp/clojure.sh; \
-    /tmp/clojure.sh; \
-    rm -rf /tmp/clojure.sh;
-
-RUN set -ex; \
-    install -d /usr/share/postgresql-common/pgdg; \
-    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
-    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" >> /etc/apt/sources.list.d/postgresql.list; \
-    apt-get -qq update; \
-    apt-get -qqy install postgresql-client-16; \
-    rm -rf /var/lib/apt/lists/*;
-
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    case "${ARCH}" in \
-       aarch64|arm64) \
+         OPENSSL_ARCH='linux-aarch64'; \
          BINARY_URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-arm64.tar.gz"; \
          ;; \
        amd64|x86_64) \
+         OPENSSL_ARCH='linux-x86_64'; \
          BINARY_URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.gz"; \
          ;; \
        *) \
@@ -157,14 +86,172 @@ RUN set -eux; \
          ;; \
     esac; \
     curl -LfsSo /tmp/nodejs.tar.gz ${BINARY_URL}; \
-    mkdir -p /usr/local/nodejs; \
-    cd /usr/local/nodejs; \
+    mkdir -p /opt/node; \
+    cd /opt/node; \
     tar -xf /tmp/nodejs.tar.gz --strip-components=1; \
-    chown -R root /usr/local/nodejs; \
+    chown -R root /opt/node; \
+    find /opt/node/include/node/openssl/archs -mindepth 1 -maxdepth 1 ! -name "$OPENSSL_ARCH" -exec rm -rf {} \; ; \
     corepack enable; \
-    corepack install -g yarn@4.2.2; \
-    npx playwright install --with-deps chromium; \
     rm -rf /tmp/nodejs.tar.gz;
+
+################################################################################
+## OPENCODE SETUP
+################################################################################
+
+FROM base AS setup-opencode
+
+ENV OPENCODE_VERSION=1.18.25
+
+RUN set -ex; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         BINARY_URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-arm64.tar.gz"; \
+         ;; \
+       amd64|x86_64) \
+         BINARY_URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; exit 1; \
+         ;; \
+    esac; \
+    curl -fsSL ${BINARY_URL} -o /tmp/opencode.tar.gz; \
+    mkdir -p /tmp/opencode; \
+    tar -xzf /tmp/opencode.tar.gz -C /tmp/opencode; \
+    chmod +x /tmp/opencode/opencode; \
+    rm -f /tmp/opencode.tar.gz;
+
+
+################################################################################
+## CADDYSERVER SETUP
+################################################################################
+
+FROM base AS setup-caddy
+
+ENV CADDY_VERSION=2.11.4
+
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         BINARY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_arm64.tar.gz"; \
+         ;; \
+       amd64|x86_64) \
+         BINARY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; \
+         exit 1; \
+         ;; \
+    esac; \
+    curl -LfsSo /tmp/caddy.tar.gz ${BINARY_URL}; \
+    mkdir -p /tmp/caddy; \
+    cd /tmp/caddy; \
+    tar -xf /tmp/caddy.tar.gz; \
+    chown -R root /tmp/caddy; \
+    mv /tmp/caddy/caddy /usr/bin/; \
+    rm -rf /tmp/caddy.tar.gz; \
+    rm -rf /tmp/caddy;
+
+################################################################################
+## JVM SETUP
+################################################################################
+
+FROM base AS setup-jvm
+
+# https://clojure.org/releases/tools
+ENV CLOJURE_VERSION=1.12.5.1664
+
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         ESUM='5b222fce0b7076a10ac7ae3b1009a6c2caf4f35bc4e81de72010af6750c5e146'; \
+         BINARY_URL='https://cdn.azul.com/zulu/bin/zulu26.32.13-ca-jdk26.0.2-linux_aarch64.tar.gz'; \
+         ;; \
+       amd64|x86_64) \
+         ESUM='4b7c114917aebd0fc6284fc7111245d7747a4d9603bd12d86b384b1abc9d575d'; \
+         BINARY_URL='https://cdn.azul.com/zulu/bin/zulu26.32.13-ca-jdk26.0.2-linux_x64.tar.gz'; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; \
+         exit 1; \
+         ;; \
+    esac; \
+    curl -LfsSo /tmp/openjdk.tar.gz ${BINARY_URL}; \
+    echo "${ESUM} */tmp/openjdk.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/jdk; \
+    cd /opt/jdk; \
+    tar -xf /tmp/openjdk.tar.gz --strip-components=1; \
+    rm -rf /tmp/openjdk.tar.gz;
+
+RUN set -ex; \
+    curl -LfsSo /tmp/clojure.sh https://download.clojure.org/install/linux-install-$CLOJURE_VERSION.sh; \
+    chmod +x /tmp/clojure.sh; \
+    mkdir -p /opt/clojure; \
+    /tmp/clojure.sh --prefix /opt/clojure; \
+    rm -rf /tmp/clojure.sh;
+
+################################################################################
+## RUST SETUP
+################################################################################
+
+FROM base AS setup-rust
+
+# Install Rust toolchain
+ENV PATH=/opt/cargo/bin:$PATH \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    RUSTUP_VERSION=1.28.2 \
+    RUST_VERSION=1.91.0 \
+    EMSCRIPTEN_VERSION=4.0.6
+
+WORKDIR /opt
+
+RUN set -eux; \
+    # Same steps as in Rust official Docker image https://github.com/rust-lang/docker-rust/blob/9f287282d513a84cb7c7f38f197838f15d37b6a9/1.81.0/bookworm/Dockerfile
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        'amd64') \
+            rustArch='x86_64-unknown-linux-gnu'; \
+            rustupSha256='20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c'; \
+            ;; \
+        'arm64') \
+            rustArch='aarch64-unknown-linux-gnu'; \
+            rustupSha256='e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c'; \
+            ;; \
+    *) echo >&2 "unsupported architecture: ${dpkgArch}"; exit 1 ;; \
+    esac; \
+    wget "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustArch}/rustup-init"; \
+    echo "${rustupSha256} *rustup-init" | sha256sum -c -; \
+    chmod +x rustup-init; \
+    ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host ${rustArch}; \
+    rm rustup-init; \
+    rustup component add rustfmt; \
+    rustup component add clippy; \
+    git clone https://github.com/emscripten-core/emsdk.git; \
+    cd emsdk; \
+    ./emsdk install $EMSCRIPTEN_VERSION; \
+    ./emsdk activate $EMSCRIPTEN_VERSION; \
+    rustup target add wasm32-unknown-emscripten; \
+    cargo install cargo-watch;
+
+################################################################################
+## UTILS SETUP
+################################################################################
+
+FROM base AS setup-utils
+
+ENV CLJKONDO_VERSION=2026.07.24 \
+    BABASHKA_VERSION=1.13.219 \
+    CLJFMT_VERSION=0.16.5 \
+    PIXI_VERSION=0.75.0 \
+    GITHUB_CLI_VERSION=2.97.0 \
+    UV_VERSION=0.12.1 \
+    UV_TOOL_DIR=/opt/uv/tools \
+    UV_TOOL_BIN_DIR=/opt/utils/bin \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    SERENA_VERSION=1.6.1
 
 RUN set -ex; \
     ARCH="$(dpkg --print-architecture)"; \
@@ -182,7 +269,8 @@ RUN set -ex; \
     esac; \
     cd /tmp; \
     curl -LfsSo /tmp/clj-kondo.zip ${BINARY_URL}; \
-    cd /usr/local/bin; \
+    mkdir -p /opt/utils/bin; \
+    cd /opt/utils/bin; \
     unzip /tmp/clj-kondo.zip; \
     rm -rf /tmp/clj-kondo.zip;
 
@@ -202,9 +290,29 @@ RUN set -ex; \
     esac; \
     cd /tmp; \
     curl -LfsSo /tmp/babashka.tar.gz ${BINARY_URL}; \
-    cd /usr/local/bin; \
+    cd /opt/utils/bin; \
     tar -xf /tmp/babashka.tar.gz; \
     rm -rf /tmp/babashka.tar.gz;
+
+RUN set -ex; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         BINARY_URL="https://github.com/prefix-dev/pixi/releases/download/v$PIXI_VERSION/pixi-aarch64-unknown-linux-musl.tar.gz"; \
+         ;; \
+       amd64|x86_64) \
+         BINARY_URL="https://github.com/prefix-dev/pixi/releases/download/v$PIXI_VERSION/pixi-x86_64-unknown-linux-musl.tar.gz"; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; \
+         exit 1; \
+         ;; \
+    esac; \
+    cd /tmp; \
+    curl -LfsSo /tmp/pixi.tar.gz ${BINARY_URL}; \
+    cd /opt/utils/bin; \
+    tar -xf /tmp/pixi.tar.gz; \
+    rm -rf /tmp/pixi.tar.gz;
 
 RUN set -ex; \
     ARCH="$(dpkg --print-architecture)"; \
@@ -222,9 +330,31 @@ RUN set -ex; \
     esac; \
     cd /tmp; \
     curl -LfsSo /tmp/cljfmt.tar.gz ${BINARY_URL}; \
-    cd /usr/local/bin; \
+    cd /opt/utils/bin; \
     tar -xf /tmp/cljfmt.tar.gz; \
     rm -rf /tmp/cljfmt.tar.gz;
+
+
+RUN set -ex; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         BINARY_URL="https://github.com/cli/cli/releases/download/v${GITHUB_CLI_VERSION}/gh_${GITHUB_CLI_VERSION}_linux_arm64.tar.gz"; \
+         ;; \
+       amd64|x86_64) \
+         BINARY_URL="https://github.com/cli/cli/releases/download/v${GITHUB_CLI_VERSION}/gh_${GITHUB_CLI_VERSION}_linux_amd64.tar.gz"; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; \
+         exit 1; \
+         ;; \
+    esac; \
+    cd /tmp; \
+    curl -LfsSo /tmp/gh.tar.gz ${BINARY_URL}; \
+    mkdir /opt/gh; \
+    cd /opt/gh; \
+    tar -xv --strip-components=1 -f /tmp/gh.tar.gz; \
+    rm -rf /tmp/gh.tar.gz;
 
 # Install minio client
 RUN set -ex; \
@@ -242,42 +372,174 @@ RUN set -ex; \
          ;; \
     esac; \
     wget -O /tmp/mc ${BINARY_URL}; \
-    mv /tmp/mc /usr/local/bin/; \
-    chmod +x /usr/local/bin/mc;
+    mv /tmp/mc /opt/utils/bin/; \
+    chmod +x /opt/utils/bin/mc;
 
-# Install Rust toolchain
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH;
-
-RUN set -eux; \
-    # Same steps as in Rust official Docker image https://github.com/rust-lang/docker-rust/blob/9f287282d513a84cb7c7f38f197838f15d37b6a9/1.81.0/bookworm/Dockerfile
-    dpkgArch="$(dpkg --print-architecture)"; \
-    case "${dpkgArch##*-}" in \
-        amd64) rustArch='x86_64-unknown-linux-gnu'; rustupSha256='6aeece6993e902708983b209d04c0d1dbb14ebb405ddb87def578d41f920f56d' ;; \
-        arm64) rustArch='aarch64-unknown-linux-gnu'; rustupSha256='1cffbf51e63e634c746f741de50649bbbcbd9dbe1de363c9ecef64e278dba2b2' ;; \
-    *) echo >&2 "unsupported architecture: ${dpkgArch}"; exit 1 ;; \
+# Install uv
+RUN set -ex; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+       aarch64|arm64) \
+         BINARY_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-aarch64-unknown-linux-musl.tar.gz"; \
+         ;; \
+       amd64|x86_64) \
+         BINARY_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-musl.tar.gz"; \
+         ;; \
+       *) \
+         echo "Unsupported arch: ${ARCH}"; \
+         exit 1; \
+         ;; \
     esac; \
-    url="https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustArch}/rustup-init"; \
-    wget "$url"; \
-    echo "${rustupSha256} *rustup-init" | sha256sum -c -; \
-    chmod +x rustup-init; \
-    ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host ${rustArch}; \
-    rm rustup-init; \
-    chmod -R a+w $RUSTUP_HOME $CARGO_HOME; \
-    rustup component add rustfmt;
+    curl -LfsSo /tmp/uv.tar.gz ${BINARY_URL}; \
+    cd /opt/utils/bin; \
+    tar -xf /tmp/uv.tar.gz --strip-components=1; \
+    rm -rf /tmp/uv.tar.gz;
 
-WORKDIR /usr/local
+# Install uv-managed tools
+RUN set -ex; \
+    /opt/utils/bin/uv tool install -p 3.13 \
+        "serena-agent@${SERENA_VERSION}" \
+        --prerelease=allow;
 
-# Install emscripten SDK and activate it
-RUN set -eux; \
-  git clone https://github.com/emscripten-core/emsdk.git; \
-  cd emsdk; \
-  ./emsdk install latest; \
-  ./emsdk activate latest; \
-  rustup target add wasm32-unknown-emscripten;
+################################################################################
+## DEVENV BASE
+################################################################################
 
-WORKDIR /home
+FROM base AS devenv-base
+
+RUN set -ex; \
+    apt-get -qq update; \
+    apt-get -qqy --no-install-recommends install passwd; \
+    groupadd -f users; \
+    useradd -u 1000 -m -d /home/penpot -G users -s /bin/bash penpot; \
+    passwd penpot -d; \
+    echo "penpot ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN set -ex; \
+    apt-get -qq update; \
+    apt-get -qq dist-upgrade; \
+    apt-get -qqy --no-install-recommends install init-system-helpers; \
+    apt-get -qqy install --no-install-recommends \
+      redis-tools \
+      gnupg2 \
+      rlwrap \
+      file \
+      less \
+      jq \
+      nginx \
+      fd-find \
+      bat \
+      \
+      fontconfig \
+      woff-tools \
+      woff2 \
+      python3-tabulate \
+      fontforge \
+      \
+      xvfb \
+      fonts-noto-color-emoji \
+      fonts-unifont \
+      libfontconfig1 \
+      libfontconfig-dev \
+      libfreetype6 \
+      libfreetype-dev \
+      xfonts-cyrillic \
+      xfonts-scalable \
+      fonts-liberation \
+      fonts-ipafont-gothic \
+      fonts-wqy-zenhei \
+      fonts-tlwg-loma-otf \
+      fonts-freefont-ttf \
+      poppler-utils \
+      \
+      libasound2 \
+      libatk-bridge2.0-0 \
+      libatk1.0-0 \
+      libatspi2.0-0 \
+      libcairo2 \
+      libcups2 \
+      libdbus-1-3 \
+      libdrm2 \
+      libgbm1 \
+      libglib2.0-0 \
+      libnspr4 \
+      libnss3 \
+      libpango-1.0-0 \
+      libx11-6 \
+      libxcb1 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxext6 \
+      libxfixes3 \
+      libxkbcommon0 \
+      libxrandr2 \
+      \
+      libpng16-16 \
+      libjpeg62-turbo \
+      libtiff6 \
+      libwebp7 \
+      libopenexr-3-1-30 \
+      libfreetype6 \
+      libfontconfig1 \
+      libglib2.0-0 \
+      libxml2 \
+      liblcms2-2 \
+      libheif1 \
+      libopenjp2-7 \
+      libzstd1 \
+      librsvg2-2 \
+      libgomp1 \
+      libwebpmux3 \
+      libwebpdemux2 \
+      libzip5 \
+    ; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /usr/local/bin; \
+    ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
+    ln -sf /usr/bin/batcat /usr/local/bin/bat;
+
+RUN set -ex; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" >> /etc/apt/sources.list.d/postgresql.list; \
+    apt-get -qq update; \
+    apt-get -qqy install postgresql-client-16; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*;
+
+
+################################################################################
+## DEVENV
+################################################################################
+
+FROM devenv-base AS devenv
+LABEL maintainer="Penpot <docker@penpot.app>"
+
+ENV LANG='C.UTF-8' \
+    LC_ALL='C.UTF-8' \
+    DEBIAN_FRONTEND="noninteractive" \
+    JAVA_HOME="/opt/jdk" \
+    CARGO_HOME="/opt/cargo" \
+    RUSTUP_HOME="/opt/rustup" \
+    UV_TOOL_DIR="/opt/uv/tools" \
+    UV_TOOL_BIN_DIR="/opt/utils/bin" \
+    UV_PYTHON_INSTALL_DIR="/opt/uv/python" \
+    SERENA_HOME="/home/penpot/.serena" \
+    SERENA_CONTEXT="claude-code" \
+    PATH="/opt/jdk/bin:/opt/gh/bin:/opt/utils/bin:/opt/clojure/bin:/opt/node/bin:/opt/imagick/bin:/opt/cargo/bin:$PATH"
+
+COPY --from=penpotapp/imagemagick:7.1.2-27 /opt/imagick /opt/imagick
+COPY --from=setup-jvm /opt/jdk /opt/jdk
+COPY --from=setup-jvm /opt/clojure /opt/clojure
+COPY --from=setup-node /opt/node /opt/node
+COPY --from=setup-utils /opt/utils /opt/utils
+COPY --from=setup-utils /opt/gh /opt/gh
+COPY --from=setup-utils /opt/uv /opt/uv
+COPY --from=setup-rust /opt/cargo /opt/cargo
+COPY --from=setup-rust /opt/rustup /opt/rustup
+COPY --from=setup-rust /opt/emsdk /opt/emsdk
+COPY --from=setup-caddy /usr/bin/caddy /usr/bin/caddy
+COPY --from=setup-opencode /tmp/opencode/opencode /opt/utils/bin/opencode
 
 COPY files/nginx.conf /etc/nginx/nginx.conf
 COPY files/nginx-mime.types /etc/nginx/mime.types
@@ -288,10 +550,14 @@ COPY files/vimrc          /root/.vimrc
 COPY files/tmux.conf      /root/.tmux.conf
 COPY files/sudoers        /etc/sudoers
 
+COPY files/Caddyfile           /home/
+COPY files/serena_config.yml   /home/serena_config.yml
+COPY files/selfsigned.crt      /home/
+COPY files/selfsigned.key      /home/
 COPY files/start-tmux.sh       /home/start-tmux.sh
-COPY files/start-tmux-back.sh  /home/start-tmux-back.sh
 COPY files/entrypoint.sh       /home/entrypoint.sh
 COPY files/init.sh             /home/init.sh
 
 ENTRYPOINT ["/home/entrypoint.sh"]
 CMD ["/home/init.sh"]
+

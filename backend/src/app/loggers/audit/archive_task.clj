@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.loggers.audit.archive-task
   (:require
@@ -10,15 +10,11 @@
    [app.common.logging :as l]
    [app.common.schema :as sm]
    [app.common.transit :as t]
-   [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
    [app.http.client :as http]
    [app.setup :as-alias setup]
-   [app.tokens :as tokens]
-   [app.util.time :as dt]
    [integrant.core :as ig]
-   [lambdaisland.uri :as u]
    [promesa.exec :as px]))
 
 ;; This is a task responsible to send the accumulated events to
@@ -53,20 +49,18 @@
 
 (defn- send!
   [{:keys [::uri] :as cfg} events]
-  (let [token   (tokens/generate (::setup/props cfg)
-                                 {:iss "authentication"
-                                  :iat (dt/now)
-                                  :uid uuid/zero})
+  (let [skey    (-> cfg ::setup/shared-keys :nexus)
         body    (t/encode {:events events})
         headers {"content-type" "application/transit+json"
-                 "origin" (cf/get :public-uri)
-                 "cookie" (u/map->query-string {:auth-token token})}
+                 "origin" (str (cf/get :public-uri))
+                 "x-shared-key" (str "nexus " skey)}
         params  {:uri uri
                  :timeout 12000
                  :method :post
                  :headers headers
                  :body body}
-        resp    (http/req! cfg params)]
+        resp    (http/req cfg params {:skip-ssrf-check? true})]
+
     (if (= (:status resp) 204)
       true
       (do
@@ -87,7 +81,7 @@
 (def ^:private sql:get-audit-log-chunk
   "SELECT *
      FROM audit_log
-    WHERE archived_at is null
+    WHERE archived_at IS NULL
     ORDER BY created_at ASC
     LIMIT 128
       FOR UPDATE
@@ -111,7 +105,7 @@
 (def ^:private schema:handler-params
   [:map
    ::db/pool
-   ::setup/props
+   ::setup/shared-keys
    ::http/client])
 
 (defmethod ig/assert-key ::handler

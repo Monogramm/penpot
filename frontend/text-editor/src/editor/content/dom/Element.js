@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright (c) KALEIDOS INC
+ * Copyright (c) KALEIDOS SUBSIDIARY SL
  */
 
 import { setStyles } from "./Style.js";
@@ -37,12 +37,12 @@ export function createElement(tag, options) {
   const element = document.createElement(tag);
   if (options?.attributes) {
     Object.entries(options.attributes).forEach(([name, value]) =>
-      element.setAttribute(name, value)
+      element.setAttribute(name, value),
     );
   }
   if (options?.data) {
     Object.entries(options.data).forEach(
-      ([name, value]) => (element.dataset[name] = value)
+      ([name, value]) => (element.dataset[name] = value),
     );
   }
   if (options?.styles && options?.allowedStyles) {

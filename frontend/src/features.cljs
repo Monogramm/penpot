@@ -2,31 +2,27 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 ;; This namespace is only to export the functions for toggle features
 (ns features
   (:require
-   [app.main.features :as features]
+   [app.main.features :as feat]
    [app.main.store :as st]
    [app.plugins :as plugins]
    [app.util.timers :as tm]))
 
-(defn ^:export is-components-v2 []
-  (features/active-feature? @st/state "components/v2"))
-
 (defn ^:export grid []
-  (tm/schedule-on-idle #(st/emit! (features/toggle-feature "layout/grid")))
+  (tm/schedule-on-idle #(st/emit! (feat/toggle-feature "layout/grid")))
   nil)
 
 (defn ^:export get-enabled []
-  (clj->js (features/get-enabled-features @st/state)))
+  (clj->js feat/global-enabled-features))
 
 (defn ^:export get-team-enabled []
-  (clj->js (features/get-team-enabled-features @st/state)))
+  (clj->js (get @st/state :features)))
 
 (defn ^:export plugins []
-  (st/emit! (features/enable-feature "plugins/runtime"))
-  (plugins/init-plugins-runtime!)
+  (st/emit! (feat/enable-feature "plugins/runtime"))
+  (plugins/init-plugins-runtime)
   nil)
-

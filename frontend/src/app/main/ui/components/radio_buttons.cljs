@@ -2,13 +2,14 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.components.radio-buttons
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.main.ui.ds.foundations.assets.icon :refer [icon*]]
    [app.main.ui.formats :as fmt]
    [app.util.dom :as dom]
    [rumext.v2 :as mf]))
@@ -38,6 +39,7 @@
 
 
     [:label {:html-for id
+             :data-testid id
              :title title
              :class (stl/css-case
                      :radio-icon true
@@ -45,7 +47,7 @@
                      :disabled disabled)}
 
      (if (some? icon)
-       [:span {:class icon-class} icon]
+       [:> icon* {:icon-id icon :class icon-class :aria-hidden true}]
        [:span {:class (stl/css :title-name)} value])
 
      [:input {:id id
@@ -62,15 +64,15 @@
   (let [encode-fn (d/nilv encode-fn identity)
         decode-fn (d/nilv decode-fn identity)
         nitems    (if (array? children)
-                    (alength children)
+                    (count (keep identity children))
                     1)
-
+        ;; FIXME: we should handle this with CSS
         width     (mf/with-memo [nitems]
                     (if (= wide true)
                       "unset"
                       (fmt/format-pixels
                        (+ (* 4 (- nitems 1))
-                          (* 28 nitems)))))
+                          (* 32 nitems)))))
 
         on-change'
         (mf/use-fn
@@ -100,6 +102,6 @@
 
     [:& (mf/provider context) {:value context-value}
      [:div {:class (dm/str class " " (stl/css :radio-btn-wrapper))
-            :style {:width width}
+            :style {:width  width}
             :key (dm/str name "-" selected)}
       children]]))

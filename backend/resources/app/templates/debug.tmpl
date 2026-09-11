@@ -12,43 +12,62 @@ Debug Main Page
 </nav>
 <main class="dashboard">
   <section class="widget">
+
     <fieldset>
-      <legend>Error reports</legend>
+      <legend>CURRENT PROFILE</legend>
+      <desc>
+        <p>
+          Name: <b>{{profile.fullname}}</b> <br />
+          Email: <b>{{profile.email}}</b>
+        </p>
+      </desc>
+    </fieldset>
+
+    <fieldset>
+      <legend>VIRTUAL CLOCK</legend>
+
+      <desc>
+        <p><b>IMPORTANT:</b> The virtual clock is profile based and only affects the currently logged-in profile.</p>
+        <p>
+          CURRENT CLOCK: <b>{{current-clock}}</b>
+          <br />
+          CURRENT OFFSET: <b>{{current-offset}}</b>
+          <br />
+          CURRENT TIME: <b>{{current-time}}</b>
+        </p>
+
+        <p>Examples: 3h, -7h, 24h (allowed suffixes: h, s)</p>
+      </desc>
+
+      <form method="post" action="/dbg/actions/set-virtual-clock">
+        <div class="row">
+          <input type="text" name="offset" placeholder="3h" value="" />
+        </div>
+
+        <div class="row">
+          <label for="force-verify">Are you sure?</label>
+          <input id="force-verify" type="checkbox" name="force" />
+          <br />
+          <small>
+            This is a just a security double check for prevent non intentional submits.
+          </small>
+        </div>
+
+        <div class="row">
+          <input type="submit" name="submit" value="Submit" />
+          <input type="submit" name="reset" value="Reset" />
+        </div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>ERROR REPORTS</legend>
       <desc><a href="/dbg/error">CLICK HERE TO SEE THE ERROR REPORTS</a> </desc>
     </fieldset>
+  </section>
 
-    <fieldset>
-      <legend>Download file data:</legend>
-      <desc>Given an FILE-ID, downloads the file data as file. The file data is encoded using transit.</desc>
-      <form method="get" action="/dbg/file/data">
-        <div class="row">
-          <input type="text" style="width:300px" name="file-id" placeholder="file-id" />
-        </div>
-        <div class="row">
-          <input type="submit" name="download" value="Download" />
-          <input type="submit" name="clone" value="Clone" />
-        </div>
-      </form>
-    </fieldset>
 
-    <fieldset>
-      <legend>Upload File Data:</legend>
-      <desc>Create a new file on your draft projects using the file downloaded from the previous section.</desc>
-      <form method="post" enctype="multipart/form-data" action="/dbg/file/data">
-        <div class="row">
-          <input type="file" name="file" value="" />
-        </div>
-        <div class="row">
-          <label>Import with same id?</label>
-          <input type="checkbox" name="reuseid" />
-        </div>
-
-        <div class="row">
-          <input type="submit" value="Upload" />
-        </div>
-      </form>
-    </fieldset>
-
+  <section class="widget">
     <fieldset>
       <legend>Profile Management</legend>
       <form method="post" action="/dbg/actions/resend-email-verification">
@@ -76,11 +95,116 @@ Debug Main Page
         </div>
       </form>
     </fieldset>
+    
 
+    <fieldset>
+      <legend>Feature Flags for Team</legend>
+      <desc>Add a feature flag to a team</desc>
+      <form method="post" action="/dbg/actions/handle-team-features">
+        <div class="row">
+          <input type="text" style="width:300px" name="team-id" placeholder="team-id" />
+        </div>
+        <div class="row">
+          <select type="text" style="width:100px" name="feature">
+            {% for feature in supported-features %}
+              <option value="{{feature}}">{{feature}}</option>
+            {% endfor %}
+          </select>
+        </div>
 
+        <div class="row">
+          <select style="width:100px" name="action">
+            <option value="">Action...</option>
+            <option value="show">Show</option>
+            <option value="enable">Enable</option>
+            <option value="disable">Disable</option>
+          </select>
+        </div>
 
+        <div class="row">
+          <label for="check-feature">Skip feature check</label>
+          <input id="check-feature" type="checkbox" name="skip-check" />
+          <br />
+          <small>
+            Do not check if the feature is supported
+          </small>
+        </div>
+
+        <div class="row">
+          <label for="force-version">Are you sure?</label>
+          <input id="force-version" type="checkbox" name="force" />
+          <br />
+          <small>
+            This is a just a security double check for prevent non intentional submits.
+          </small>
+        </div>
+
+        <div class="row">
+          <input type="submit" value="Submit" />
+        </div>
+      </form>
+    </fieldset>
   </section>
 
+
+  <section class="widget">
+
+    <fieldset>
+      <legend>Download RAW file data:</legend>
+      <desc>Given an FILE-ID, downloads the file AS-IS (no validation
+        checks, just exports the file data and related objects in raw)
+
+        <br/>
+        <br/>
+        <b>WARNING: this operation does not performs any checks</b>
+      </desc>
+      <form method="get" action="/dbg/actions/file-raw-export-import">
+        <div class="row">
+          <input type="text" style="width:300px" name="file-id" placeholder="file-id" />
+        </div>
+        <div class="row">
+          <input type="submit" name="download" value="Download" />
+          <input type="submit" name="clone" value="Clone" />
+        </div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Upload File Data:</legend>
+      <desc>Create a new file on your draft projects using the file downloaded from the previous section.
+        <br/>
+        <br/>
+        <b>WARNING: this operation does not performs any checks</b>
+      </desc>
+      <form method="post" enctype="multipart/form-data" action="/dbg/actions/file-raw-export-import">
+        <div class="row">
+          <input type="file" name="file" value="" />
+        </div>
+        <div class="row">
+          <label>Import with same id?</label>
+          <input type="checkbox" name="reuseid" />
+        </div>
+
+        <div class="row">
+          <input type="submit" value="Upload" />
+        </div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Validate file:</legend>
+      <desc>Given an FILE-ID, check the referential integrity.</desc>
+      <form method="get" action="/dbg/actions/file-validate">
+        <div class="row">
+          <input type="text" style="width:300px" name="file-id" placeholder="file-id" />
+        </div>
+        <div class="row">
+          <input type="submit" name="validate" value="Validate" />
+        </div>
+      </form>
+    </fieldset>
+
+  </section>
   <section class="widget">
     <fieldset>
       <legend>Export binfile:</legend>
@@ -88,7 +212,7 @@ Debug Main Page
       the related libraries in a single custom formatted binary
       file.</desc>
 
-      <form method="get" action="/dbg/file/export">
+      <form method="get" action="/dbg/actions/file-export">
         <div class="row set-of-inputs">
           <input type="text" style="width:300px" name="file-ids" placeholder="file-id" />
           <input type="text" style="width:300px" name="file-ids" placeholder="file-id" />
@@ -112,11 +236,28 @@ Debug Main Page
         </div>
       </form>
     </fieldset>
+    {% if graph-enabled %}
+    <fieldset>
+      <legend>Export graph (Ladybug):</legend>
+      <desc>Given a FILE-ID, builds the graph projection and downloads
+      the `.lbug` database file.</desc>
+
+      <form method="get" action="/dbg/actions/graph-export">
+        <div class="row">
+          <input type="text" style="width:300px" name="file-id" placeholder="file-id" />
+        </div>
+        <div class="row">
+          <input type="submit" value="Download .lbug" />
+          <a href="/dbg/graph">Open graph console</a>
+        </div>
+      </form>
+    </fieldset>
+    {% endif %}
     <fieldset>
       <legend>Import binfile:</legend>
       <desc>Import penpot file in binary format.</desc>
 
-      <form method="post" enctype="multipart/form-data" action="/dbg/file/import">
+      <form method="post" enctype="multipart/form-data" action="/dbg/actions/file-import">
         <div class="row">
           <input type="file" name="file" value="" />
         </div>
@@ -126,35 +267,88 @@ Debug Main Page
         </div>
       </form>
     </fieldset>
-  </section>
 
-  <section class="widget">
     <fieldset>
-      <legend>Reset file version</legend>
-      <desc>Allows reset file data version to a specific number/</desc>
-
-      <form method="post" action="/dbg/actions/reset-file-version">
+      <legend>Repair file:</legend>
+      <desc>Given an FILE-ID, repair the referential integrity errors.
+        <br/>
+        <br/>
+        <b>WARNING: the reparation is not guaranteed and may cause loss of data!</b>
+        <br/>
+        <br/>
+        You may need to give several repair rounds until all errors are cleared.
+      </desc>
+      <form method="get" action="/dbg/actions/file-repair">
         <div class="row">
           <input type="text" style="width:300px" name="file-id" placeholder="file-id" />
         </div>
         <div class="row">
-          <input type="number" style="width:100px" name="version" placeholder="version" value="32" />
-        </div>
-
-        <div class="row">
-          <label for="force-version">Are you sure?</label>
-          <input id="force-version" type="checkbox" name="force" />
+          <label for="check-snapshot">Skip snapshot</label>
+          <input id="check-snapshot" type="checkbox" name="skip-snapshot" />
           <br />
           <small>
-            This is a just a security double check for prevent non intentional submits.
+            A snapshot is made just before the validation, unless skipped. 
           </small>
         </div>
-
-
         <div class="row">
-          <input type="submit" value="Submit" />
+          <input type="submit" name="repair" value="Repair" />
         </div>
       </form>
+    </fieldset>
+  </section>
+
+</main>
+
+<main class="dashboard wide">
+  <section class="widget wide">
+    <fieldset>
+      <legend>Export jobs:</legend>
+      <desc>
+        Export jobs as the exporter left them in redis. Records expire an hour
+        after the export settles, so this is a live view, not a history.
+      </desc>
+
+      <form method="get" action="/dbg">
+        <div class="row">
+          <input type="text" style="width:300px" name="job-id"
+                 placeholder="filter by job id" value="{{export-job-filter}}" />
+          <input type="submit" value="Filter" />
+          <a href="/dbg">clear</a>
+        </div>
+      </form>
+
+      <div class="scroll-box">
+        <table>
+          <thead>
+            <tr>
+              <th>JOB ID</th>
+              <th>STATE</th>
+              <th>PROGRESS</th>
+              <th>CMD</th>
+              <th>BACKEND</th>
+              <th>NAME</th>
+              <th>CREATED</th>
+              <th>ENDED</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in export-jobs %}
+            <tr>
+              <td><tt>{{job.id}}</tt></td>
+              <td>{{job.state}}{% if job.interrupted %} (interrupted){% endif %}</td>
+              <td>{{job.done}} / {{job.total}}</td>
+              <td>{{job.cmd}}</td>
+              <td>{{job.backend}}</td>
+              <td>{{job.name}}</td>
+              <td>{{job.created-at}}</td>
+              <td>{{job.ended-at}}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8">No export jobs.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </fieldset>
   </section>
 </main>

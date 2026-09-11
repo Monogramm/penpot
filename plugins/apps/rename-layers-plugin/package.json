@@ -1,0 +1,17 @@
+{
+  "name": "rename-layers-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "ng build rename-layers-plugin && pnpm run build:plugin",
+    "build:dev": "ng build rename-layers-plugin --configuration development",
+    "build:plugin": "node ../../tools/scripts/build-plugin.mjs --plugin=rename-layers-plugin",
+    "watch": "node ../../tools/scripts/build-plugin.mjs --plugin=rename-layers-plugin --watch",
+    "serve": "ng serve rename-layers-plugin",
+    "init": "concurrently --kill-others --names plugin,serve \"pnpm run watch\" \"pnpm run serve\"",
+    "lint": "eslint .",
+    "test": "vitest"
+  },
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
+}

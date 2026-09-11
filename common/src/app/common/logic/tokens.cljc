@@ -1,40 +1,78 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
+;;
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
+
 (ns app.common.logic.tokens
   (:require
    [app.common.files.changes-builder :as pcb]
    [app.common.types.tokens-lib :as ctob]))
 
-(defn generate-update-active-sets
-  "Copy the active sets from the currently active themes and move them to the hidden token theme and update the theme with `update-hidden-theme-fn`.
+(defn- generate-update-active-sets
+  "Copy the active sets from the currently active themes and move them
+  to the hidden token theme and update the theme with
+  `update-theme-fn`.
 
-  Use this for managing sets active state without having to modify a user created theme (\"no themes selected\" state in the ui)."
-  [changes tokens-lib update-hidden-theme-fn]
-  (let [prev-active-token-themes (ctob/get-active-theme-paths tokens-lib)
-        active-token-set-names   (ctob/get-active-themes-set-names tokens-lib)
+  Use this for managing sets active state without having to modify a
+  user created theme (\"no themes selected\" state in the ui)."
+  [changes tokens-lib update-theme-fn]
+  (let [active-token-set-names (ctob/get-active-themes-set-names tokens-lib)
 
-        prev-hidden-token-theme (ctob/get-hidden-theme tokens-lib)
-        hidden-token-theme      (-> (or (some-> prev-hidden-token-theme (ctob/set-sets active-token-set-names))
-                                        (ctob/make-hidden-token-theme :sets active-token-set-names))
-                                    (update-hidden-theme-fn))
+        hidden-theme  (ctob/get-hidden-theme tokens-lib)
+        hidden-theme' (-> (some-> hidden-theme
+                                  (ctob/set-sets active-token-set-names))
+                          (update-theme-fn))]
+    (-> changes
+        (pcb/set-active-token-themes #{(ctob/get-theme-path hidden-theme')})
+        (pcb/set-token-theme (ctob/get-id hidden-theme)
+                             hidden-theme'))))
 
-        changes (-> changes
-                    (pcb/update-active-token-themes #{ctob/hidden-token-theme-path} prev-active-token-themes))
-
-        changes (if prev-hidden-token-theme
-                  (pcb/update-token-theme changes hidden-token-theme prev-hidden-token-theme)
-                  (pcb/add-token-theme changes hidden-token-theme))]
-    changes))
+(defn generate-set-enabled-token-set
+  "Enable or disable a token set at `set-name` in `tokens-lib` without modifying a user theme."
+  [changes tokens-lib set-name enabled?]
+  (if enabled?
+    (generate-update-active-sets changes tokens-lib #(ctob/enable-set % set-name))
+    (generate-update-active-sets changes tokens-lib #(ctob/disable-set % set-name))))
 
 (defn generate-toggle-token-set
   "Toggle a token set at `set-name` in `tokens-lib` without modifying a user theme."
   [changes tokens-lib set-name]
   (generate-update-active-sets changes tokens-lib #(ctob/toggle-set % set-name)))
 
+(defn- generate-update-active-token-theme
+  "Change the active state of a theme in `tokens-lib`. If after the change there is
+   any active theme other than the hidden one, deactivate the hidden theme."
+  [changes tokens-lib update-fn]
+  (let [active-token-themes (some-> tokens-lib
+                                    (update-fn)
+                                    (ctob/get-active-theme-paths))
+        active-token-themes' (if (= active-token-themes #{ctob/hidden-theme-path})
+                               active-token-themes
+                               (disj active-token-themes ctob/hidden-theme-path))]
+    (pcb/set-active-token-themes changes active-token-themes')))
+
+(defn generate-set-active-token-theme
+  "Activate or deactivate a token theme in `tokens-lib`."
+  [changes tokens-lib id active?]
+  (if active?
+    (generate-update-active-token-theme changes tokens-lib
+                                        #(ctob/activate-theme % id))
+    (generate-update-active-token-theme changes tokens-lib
+                                        #(ctob/deactivate-theme % id))))
+
+(defn generate-toggle-token-theme
+  "Toggle the active state of a token theme in `tokens-lib`."
+  [changes tokens-lib id]
+  (generate-update-active-token-theme changes tokens-lib
+                                      #(ctob/toggle-theme-active % id)))
+
 (defn toggle-token-set-group
   "Toggle a token set group at `group-path` in `tokens-lib` for a `tokens-lib-theme`."
   [group-path tokens-lib tokens-lib-theme]
   (let [deactivate? (contains? #{:all :partial} (ctob/sets-at-path-all-active? tokens-lib group-path))
         sets-names  (->> (ctob/get-sets-at-path tokens-lib group-path)
-                         (map :name)
+                         (map ctob/get-name)
                          (into #{}))]
     (if deactivate?
       (ctob/disable-sets tokens-lib-theme sets-names)
@@ -48,17 +86,19 @@
 (defn vec-starts-with? [v1 v2]
   (= (subvec v1 0 (min (count v1) (count v2))) v2))
 
-(defn calculate-move-token-set-or-set-group
+(defn- calculate-move-token-set-or-set-group
   [tokens-lib {:keys [from-index to-index position collapsed-paths]
                :or {collapsed-paths #{}}}]
   (let [tree (-> (ctob/get-set-tree tokens-lib)
-                 (ctob/walk-sets-tree-seq :walk-children? #(contains? collapsed-paths %)))
+                 (ctob/walk-sets-tree-seq :skip-children-pred #(contains? collapsed-paths %)))
+
         from (nth tree from-index)
         to (nth tree to-index)
         before (case position
                  :top to
                  :bot (nth tree (inc to-index) nil)
                  :center nil)
+
         prev-before (if (:group? from)
                       (->> (drop (inc from-index) tree)
                            (filter (fn [element]
@@ -72,6 +112,7 @@
                                       (= :bot position)
                                       (:group? to)
                                       (not (get collapsed-paths (:path to)))))
+
         from-path (:path from)
         to-parent-path (if drop-as-direct-group-child?
                          (:path to)
@@ -117,15 +158,24 @@
 (defn generate-move-token-set
   "Create changes for dropping a token set or token set.
   Throws for impossible moves."
-  [changes tokens-lib drop-opts]
-  (if-let [drop-opts' (calculate-move-token-set-or-set-group tokens-lib drop-opts)]
-    (pcb/move-token-set-before changes drop-opts')
+  [changes tokens-lib params]
+  (if-let [params (calculate-move-token-set-or-set-group tokens-lib params)]
+    (pcb/move-token-set changes params)
     changes))
 
 (defn generate-move-token-set-group
   "Create changes for dropping a token set or token set group.
   Throws for impossible moves"
-  [changes tokens-lib drop-opts]
-  (if-let [drop-opts' (calculate-move-token-set-or-set-group tokens-lib drop-opts)]
-    (pcb/move-token-set-group-before changes drop-opts')
+  [changes tokens-lib params]
+  (if-let [params (calculate-move-token-set-or-set-group tokens-lib params)]
+    (pcb/move-token-set-group changes params)
     changes))
+
+(defn generate-delete-token-set-group
+  "Create changes for deleting a token set group."
+  [changes tokens-lib path]
+  (let [sets (ctob/get-sets-at-path tokens-lib path)]
+    (reduce (fn [changes set]
+              (pcb/set-token-set changes (ctob/get-id set) nil))
+            changes
+            sets)))

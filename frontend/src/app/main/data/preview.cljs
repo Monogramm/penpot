@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.preview
   (:require
@@ -80,8 +80,7 @@
                            (cb/format-code style-type)))
 
                       markup-code
-                      (-> (cg/generate-markup-code objects markup-type [shape])
-                          (cb/format-code markup-type))]
+                      (cg/generate-formatted-markup-code objects markup-type [shape])]
 
                   (update-preview-window
                    preview

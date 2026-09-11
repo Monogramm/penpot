@@ -2,66 +2,98 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
+
+.group-title-wrapper {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+
+  &:hover {
+    cursor: pointer;
+
+    .title-menu {
+      visibility: visible;
+    }
+  }
+}
+
+.group-title-wrapper > :first-child {
+  flex: 1 1 auto;
+}
+
+.title-menu {
+  display: flex;
+  visibility: hidden;
+}
 
 .group-title {
-  padding-left: $s-4;
+  padding-left: deprecated.$s-4;
 }
 
 .pre-path {
-  margin-left: $s-2;
+  margin-left: deprecated.$s-2;
   text-transform: initial;
   color: var(--title-foreground-color);
 }
 
 .path {
-  @include textEllipsis;
-  margin-left: $s-2;
+  @include deprecated.text-ellipsis;
+
+  margin-left: deprecated.$s-2;
   text-transform: initial;
   color: var(--title-foreground-color-hover);
 }
 
 .modal-overlay {
-  @extend .modal-overlay-base;
+  @extend %modal-overlay-base;
 }
 
 .modal-container {
-  @extend .modal-container-base;
+  @extend %modal-container-base;
 }
 
 .modal-header {
-  margin-bottom: $s-24;
+  margin-bottom: deprecated.$s-24;
 }
 
 .modal-title {
-  @include uppercaseTitleTipography;
+  @include deprecated.uppercase-title-typography;
+
   color: var(--modal-title-foreground-color);
 }
+
 .modal-close-btn {
-  @extend .modal-close-btn-base;
+  @extend %modal-close-btn-base;
 }
 
 .modal-content {
-  @include bodySmallTypography;
-  margin-bottom: $s-24;
+  @include deprecated.body-small-typography;
+
+  margin-bottom: deprecated.$s-24;
 }
+
 .input-wrapper {
-  @extend .input-with-label;
-  @include bodySmallTypography;
-  margin-bottom: $s-8;
+  @extend %input-with-label;
+  @include deprecated.body-small-typography;
+
+  margin-bottom: deprecated.$s-8;
 }
+
 .action-buttons {
-  @extend .modal-action-btns;
+  @extend %modal-action-btns;
 }
+
 .cancel-button {
-  @extend .modal-cancel-btn;
+  @extend %modal-cancel-btn;
 }
 
 .accept-btn {
-  @extend .modal-accept-btn;
+  @extend %modal-accept-btn;
+
   &.danger {
-    @extend .modal-danger-btn;
+    @extend %modal-danger-btn;
   }
 }

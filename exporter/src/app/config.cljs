@@ -2,39 +2,63 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.config
   (:refer-clojure :exclude [get])
   (:require
-   ["process" :as process]
+   ["node:buffer" :as buffer]
+   ["node:crypto" :as crypto]
+   ["node:process" :as process]
    [app.common.data :as d]
    [app.common.flags :as flags]
+   [app.common.logging :as l]
    [app.common.schema :as sm]
    [app.common.version :as v]
    [cljs.core :as c]
    [cuerdas.core :as str]))
 
+(l/set-level! :info)
+
 (def ^:private defaults
   {:public-uri "http://localhost:3449"
+   ;; :internal-uri nil ;; internal-uri cannot be nil
    :tenant "default"
    :host "localhost"
    :http-server-port 6061
    :http-server-host "0.0.0.0"
-   :tempdir "/tmp/penpot-exporter"
-   :redis-uri "redis://redis/0"})
+   :tempdir "/tmp/penpot"
+   :redis-uri "redis://redis/0"
+   :exporter-max-concurrent-jobs 4
+   :exporter-max-jobs-per-profile 2
+   :exporter-queue-max 64
+   :exporter-job-ttl 3600
+   :wasm-worker-pool-max 2
+   :wasm-worker-pool-min 1
+   :wasm-worker-idle-timeout 300
+   :wasm-worker-image-cache-size (* 128 1024 1024)})
 
-(def ^:private
-  schema:config
+(def ^:private schema:config
   [:map {:title "config"}
+   [:secret-key :string]
    [:public-uri {:optional true} ::sm/uri]
+   [:internal-uri {:optional true} ::sm/uri]
+   [:exporter-shared-key {:optional true} :string]
    [:host {:optional true} :string]
    [:tenant {:optional true} :string]
    [:flags {:optional true} [::sm/set :keyword]]
    [:redis-uri {:optional true} :string]
    [:tempdir {:optional true} :string]
    [:browser-pool-max {:optional true} ::sm/int]
-   [:browser-pool-min {:optional true} ::sm/int]])
+   [:browser-pool-min {:optional true} ::sm/int]
+   [:exporter-max-concurrent-jobs {:optional true} ::sm/int]
+   [:exporter-max-jobs-per-profile {:optional true} ::sm/int]
+   [:exporter-queue-max {:optional true} ::sm/int]
+   [:exporter-job-ttl {:optional true} ::sm/int]
+   [:wasm-worker-pool-max {:optional true} ::sm/int]
+   [:wasm-worker-pool-min {:optional true} ::sm/int]
+   [:wasm-worker-idle-timeout {:optional true} ::sm/int]
+   [:wasm-worker-image-cache-size {:optional true} ::sm/int]])
 
 (def ^:private decode-config
   (sm/decoder schema:config sm/string-transformer))
@@ -93,3 +117,18 @@
    (c/get config key))
   ([key default]
    (c/get config key default)))
+
+(defn get-internal-uri
+  "Returns internal-uri if set, otherwise falls back to public-uri."
+  []
+  (or (c/get config :internal-uri)
+      (c/get config :public-uri)))
+
+(def management-key
+  (let [key (or (c/get config :exporter-shared-key)
+                (let [secret-key  (c/get config :secret-key)
+                      derived-key (crypto/hkdfSync "blake2b512" secret-key, "exporter" "" 32)]
+                  (-> (.from buffer/Buffer derived-key)
+                      (.toString "base64url"))))]
+    (l/inf :hint "exporter key initialized" :key (d/obfuscate-string key))
+    key))

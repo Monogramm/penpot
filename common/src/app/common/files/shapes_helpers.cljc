@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.files.shapes-helpers
   (:require
@@ -14,6 +14,8 @@
    [app.common.types.shape :as cts]
    [app.common.types.shape.layout :as ctl]
    [app.common.uuid :as uuid]))
+
+;; FIXME: move to logic?
 
 (defn prepare-add-shape
   [changes shape objects]
@@ -35,18 +37,21 @@
                       (pcb/update-shapes [(:parent-id shape)] #(ctl/push-into-cell % [id] row column)))
                     (cond-> (ctl/grid-layout? objects (:parent-id shape))
                       (pcb/update-shapes [(:parent-id shape)] ctl/assign-cells {:with-objects? true})))]
+
     [shape changes]))
 
 (defn prepare-move-shapes-into-frame
-  [changes frame-id shapes objects]
+  [changes frame-id shapes objects remove-layout-data?]
   (let [parent-id  (dm/get-in objects [frame-id :parent-id])
         shapes     (remove #(= % parent-id) shapes)
         to-move    (->> shapes
                         (map (d/getf objects))
                         (not-empty))]
+
     (if to-move
       (-> changes
-          (cond-> (not (ctl/any-layout? objects frame-id))
+          (cond-> (and remove-layout-data?
+                       (not (ctl/any-layout? objects frame-id)))
             (pcb/update-shapes shapes ctl/remove-layout-item-data))
           (pcb/update-shapes shapes #(cond-> % (cfh/frame-shape? %) (assoc :hide-in-viewer true)))
           (pcb/change-parent frame-id to-move 0)
@@ -61,6 +66,10 @@
     changes id parent-id objects selected index frame-name without-fill? nil))
 
   ([changes id parent-id objects selected index frame-name without-fill? target-cell-id]
+   (prepare-create-artboard-from-selection
+    changes id parent-id objects selected index frame-name without-fill? target-cell-id nil))
+
+  ([changes id parent-id objects selected index frame-name without-fill? target-cell-id delta]
    (when-let [selected-objs (->> selected
                                  (map (d/getf objects))
                                  (not-empty))]
@@ -82,10 +91,10 @@
            parent-id    (or parent-id (get selected-obj :parent-id))
            base-parent  (get objects parent-id)
 
-           layout-props
+           layout-attrs
            (when (and (= 1 (count selected))
                       (ctl/any-layout? base-parent))
-             (select-keys selected-obj ctl/layout-item-props))
+             (select-keys selected-obj ctl/layout-child-attrs))
 
            target-cell-id
            (if (and (nil? target-cell-id)
@@ -98,10 +107,11 @@
                     :id))
              target-cell-id)
 
+
            attrs
            {:type :frame
-            :x (:x srect)
-            :y (:y srect)
+            :x (cond-> (:x srect) delta (+ (:x delta)))
+            :y (cond-> (:y srect) delta (+ (:y delta)))
             :width (:width srect)
             :height (:height srect)}
 
@@ -119,8 +129,8 @@
                      :parent-id parent-id
                      :shapes (into [] selected))
 
-              (some? layout-props)
-              (d/patch-object layout-props)
+              (some? layout-attrs)
+              (d/patch-object layout-attrs)
 
               ;; Frames from shapes will not be displayed in viewer and no clipped
               (or (not= frame-id uuid/zero) without-fill?)
@@ -133,7 +143,7 @@
            (prepare-add-shape changes shape objects)
 
            changes
-           (prepare-move-shapes-into-frame changes (:id shape) selected' objects)
+           (prepare-move-shapes-into-frame changes (:id shape) selected' objects false)
 
            changes
            (cond-> changes

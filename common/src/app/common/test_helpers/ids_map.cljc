@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.test-helpers.ids-map
   (:require
@@ -20,6 +20,10 @@
 (defn set-id!
   [label id]
   (swap! idmap assoc label id))
+
+(defn rm-id!
+  [id]
+  (swap! idmap #(into {} (remove (comp #{id} val) %))))
 
 (defn new-id!
   [label]

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.test-helpers.files
   (:require
@@ -23,39 +23,50 @@
 
 (defn sample-file
   [label & {:keys [page-label name view-only?] :as params}]
-  (binding [ffeat/*current* #{"components/v2"}]
-    (let [params (cond-> params
-                   label
-                   (assoc :id (thi/new-id! label))
+  (let [params
+        (cond-> params
+          label
+          (assoc :id (thi/new-id! label))
 
-                   page-label
-                   (assoc :page-id (thi/new-id! page-label))
+          (nil? name)
+          (assoc :name "Test file")
 
-                   (nil? name)
-                   (assoc :name "Test file"))
+          :always
+          (assoc :features ffeat/default-features))
 
-          file (-> (ctf/make-file (dissoc params :page-label))
-                   (assoc :features #{"components/v2"})
-                   (assoc :permissions {:can-edit (not (true? view-only?))}))
+        opts
+        (cond-> {}
+          page-label
+          (assoc :page-id (thi/new-id! page-label)))
 
-          page (-> file
-                   :data
-                   (ctpl/pages-seq)
-                   (first))]
+        file (-> (ctf/make-file params opts)
+                 (assoc :permissions {:can-edit (not (true? view-only?))}))
 
-      (with-meta file
-        {:current-page-id (:id page)}))))
+        page (-> file
+                 :data
+                 (ctpl/pages-seq)
+                 (first))]
+
+    (with-meta file
+      {:current-page-id (:id page)})))
 
 (defn validate-file!
   ([file] (validate-file! file {}))
   ([file libraries]
-   (cfv/validate-file-schema! file)
-   (cfv/validate-file! file libraries)))
+   (try
+     (cfv/validate-file-schema! file)
+     (cfv/validate-file! file libraries)
+     file
+     (catch #?(:clj Exception :cljs :default) e
+       (println "File validation failed: " (ex-message e))
+       (pprint (ex-data e))
+       (throw e)))))
 
 (defn apply-changes
-  [file changes]
+  [file changes & {:keys [validate?] :or {validate? true}}]
   (let [file' (ctf/update-file-data file #(cfc/process-changes % (:redo-changes changes) true))]
-    (validate-file! file')
+    (when validate?
+      (validate-file! file'))
     file'))
 
 (defn apply-undo-changes
@@ -104,7 +115,8 @@
         page      (if (some? page-label)
                     (:id (get-page file page-label))
                     (current-page-id file))
-        libraries (or libraries {})]
+        libraries (or libraries
+                      {(:id file) file})]
 
     (ctf/dump-tree file page libraries params)))
 

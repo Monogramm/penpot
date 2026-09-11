@@ -2,159 +2,140 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@use "common/refactor/common-refactor.scss" as *;
+@use "ds/_sizes.scss" as *;
+@use "ds/_borders.scss" as *;
+@use "ds/typography.scss" as *;
 
-.auth-form-wrapper {
-  width: 100%;
-  padding-block-end: 0;
-  display: grid;
-  gap: $s-12;
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: $s-12;
-    margin-top: $s-12;
-  }
-}
-
-.auth-title-wrapper {
-  width: 100%;
-  padding-block-end: 0;
-  display: grid;
-  gap: $s-8;
-}
-
-.separator {
-  border-color: var(--modal-separator-backogrund-color);
-  margin: 0;
-}
-
-.auth-title {
-  @include bigTitleTipography;
-  color: var(--title-foreground-color-hover);
-}
-
-.auth-subtitle {
-  @include smallTitleTipography;
-  color: var(--title-foreground-color);
-}
-
-.auth-tagline {
-  @include smallTitleTipography;
-  margin: 0;
-  color: var(--title-foreground-color);
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-m);
+  margin: var(--sp-m) 0;
 }
 
 .form-field {
   --input-width: 100%;
-  --input-height: #{$s-40};
+  --input-height: #{$sz-40};
   --input-min-width: 100%;
 }
 
-.buttons-stack {
-  display: grid;
-  gap: $s-8;
+.form-submit-btn {
+  --button-bg-color: var(--color-accent-primary);
+  --button-border-color: var(--color-accent-primary);
+  --button-fg-color: var(--color-background-secondary);
+
+  @include use-typography("headline-small");
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: var(--button-bg-color);
+  border: $b-1 solid var(--button-border-color);
+  color: var(--button-fg-color);
+  border-radius: $br-8;
+  min-block-size: $sz-32;
+  block-size: $sz-40;
+  inline-size: 100%;
+
+  &:hover {
+    --button-bg-color: var(--color-accent-tertiary);
+    --button-border-color: var(--color-accent-tertiary);
+    --button-fg-color: var(--color-background-secondary);
+
+    text-decoration: none;
+  }
+
+  &:disabled {
+    --button-bg-color: var(--color-background-quaternary);
+    --button-border-color: var(--color-background-quaternary);
+    --button-fg-color: var(--color-foreground-disabled);
+  }
 }
 
-.login-button,
-.login-ldap-button {
-  @extend .button-primary;
-  @include uppercaseTitleTipography;
-  height: $s-40;
-  width: 100%;
-}
-
-.go-back {
+.go-back-row {
   display: flex;
   flex-direction: column;
-  gap: $s-12;
+  gap: var(--sp-m);
   padding: 0;
   border-block-start: none;
 }
 
 .go-back-link {
-  @extend .button-secondary;
-  @include uppercaseTitleTipography;
-  height: $s-40;
+  --button-bg-color: var(--color-background-tertiary);
+  --button-border-color: var(--color-background-tertiary);
+  --button-fg-color: var(--color-foreground-secondary);
+
+  @include use-typography("headline-small");
+
+  background: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: $br-8;
+  background-color: var(--button-bg-color);
+  border: $b-1 solid var(--button-border-color);
+  color: var(--button-fg-color);
+  block-size: $sz-40;
+
+  &:hover {
+    --button-bg-color: var(--color-background-quaternary);
+    --button-border-color: var(--color-background-quaternary);
+    --button-fg-color: var(--color-accent-primary);
+
+    text-decoration: none;
+  }
+}
+
+.separator {
+  border-color: var(--color-background-quaternary);
+  margin: 0;
+}
+
+.wrapper {
+  inline-size: 100%;
+  padding-block-end: 0;
+  display: grid;
+  gap: var(--sp-m);
+}
+
+.title-wrapper {
+  inline-size: 100%;
+  padding-block-end: 0;
+  display: grid;
+  gap: var(--sp-s);
+}
+
+.title {
+  @include use-typography("title-large");
+
+  line-height: 1.2;
+  color: var(--color-foreground-primary);
+}
+
+.subtitle {
+  @include use-typography("title-small");
+
+  color: var(--color-foreground-secondary);
+}
+
+.tagline {
+  @include use-typography("title-small");
+
+  margin: 0;
+  color: var(--color-foreground-secondary);
 }
 
 .links {
   display: grid;
-  gap: $s-24;
+  gap: var(--sp-xxl);
 }
 
-.register,
-.account,
-.recovery-request,
-.demo-account {
-  display: flex;
-  justify-content: center;
-  gap: $s-8;
-  padding: 0;
-}
+.notification-email {
+  @include use-typography("title-medium");
 
-.register-text,
-.account-text,
-.recovery-text,
-.demo-account-text {
-  @include smallTitleTipography;
-  text-align: right;
-  color: var(--title-foreground-color);
-}
-
-.register-link,
-.account-link,
-.recovery-link,
-.forgot-pass-link,
-.demo-account-link {
-  @include smallTitleTipography;
-  text-align: left;
-  background-color: transparent;
-  border: none;
-  display: inline;
-  color: var(--link-foreground-color);
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.forgot-password {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.submit-btn,
-.register-btn,
-.recover-btn {
-  @extend .button-primary;
-  @include uppercaseTitleTipography;
-  height: $s-40;
-  width: 100%;
-}
-
-.login-btn {
-  @include smallTitleTipography;
-  display: flex;
-  align-items: center;
-  gap: $s-6;
-  width: 100%;
-  border-radius: $br-8;
-  background-color: var(--button-secondary-background-color-rest);
-  color: var(--button-foreground-color-focus);
-  span {
-    padding-block-start: $s-2;
-  }
-
-  &:hover {
-    color: var(--button-foreground-color-focus);
-    background-color: var(--button-secondary-background-color-hover);
-  }
-}
-
-.auth-buttons {
-  display: flex;
-  gap: $s-8;
+  line-height: 1.2;
+  color: var(--color-accent-primary);
+  margin-inline: $sz-36;
 }

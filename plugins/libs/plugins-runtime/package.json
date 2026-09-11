@@ -1,0 +1,20 @@
+{
+  "name": "@penpot/plugins-runtime",
+  "version": "1.5.0",
+  "dependencies": {
+    "@penpot/plugin-types": "workspace:^",
+    "ses": "^2.1.0",
+    "zod": "^3.25.76"
+  },
+  "module": "./dist/index.js",
+  "typings": "./dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "build:watch": "vite build --watch --mode development",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "test": "vitest"
+  },
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
+}

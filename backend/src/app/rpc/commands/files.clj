@@ -2,19 +2,23 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.files
   (:require
+   [app.binfile.common :as bfc]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
    [app.common.features :as cfeat]
    [app.common.files.helpers :as cfh]
    [app.common.files.migrations :as fmg]
+   [app.common.files.stats :as cfs]
    [app.common.logging :as l]
    [app.common.schema :as sm]
    [app.common.schema.desc-js-like :as-alias smdj]
+   [app.common.time :as ct]
+   [app.common.transit :as t]
    [app.common.types.components-list :as ctkl]
    [app.common.types.file :as ctf]
    [app.common.uri :as uri]
@@ -22,8 +26,12 @@
    [app.db :as db]
    [app.db.sql :as-alias sql]
    [app.features.fdata :as feat.fdata]
+   [app.features.logical-deletion :as ldel]
+   [app.http.sse :as sse]
    [app.loggers.audit :as-alias audit]
    [app.loggers.webhooks :as-alias webhooks]
+   [app.msgbus :as mbus]
+   [app.redis :as rds]
    [app.rpc :as-alias rpc]
    [app.rpc.commands.projects :as projects]
    [app.rpc.commands.teams :as teams]
@@ -32,12 +40,11 @@
    [app.rpc.helpers :as rph]
    [app.rpc.permissions :as perms]
    [app.util.blob :as blob]
+   [app.util.events :as events]
    [app.util.pointer-map :as pmap]
    [app.util.services :as sv]
-   [app.util.time :as dt]
    [app.worker :as wrk]
-   [cuerdas.core :as str]
-   [promesa.exec :as px]))
+   [cuerdas.core :as str]))
 
 ;; --- FEATURES
 
@@ -49,15 +56,13 @@
 ;; --- HELPERS
 
 (def long-cache-duration
-  (dt/duration {:days 7}))
+  (ct/duration {:days 7}))
 
 (defn decode-row
-  [{:keys [data changes features] :as row}]
+  [{:keys [features] :as row}]
   (when row
     (cond-> row
-      features (assoc :features (db/decode-pgarray features #{}))
-      changes  (assoc :changes (blob/decode changes))
-      data     (assoc :data (blob/decode data)))))
+      (db/pgarray? features) (assoc :features (db/decode-pgarray features #{})))))
 
 (defn check-version!
   [file]
@@ -75,80 +80,14 @@
 
 ;; --- FILE PERMISSIONS
 
-(def ^:private sql:file-permissions
-  "select fpr.is_owner,
-          fpr.is_admin,
-          fpr.can_edit
-     from file_profile_rel as fpr
-    where fpr.file_id = ?
-      and fpr.profile_id = ?
-   union all
-   select tpr.is_owner,
-          tpr.is_admin,
-          tpr.can_edit
-     from team_profile_rel as tpr
-    inner join project as p on (p.team_id = tpr.team_id)
-    inner join file as f on (p.id = f.project_id)
-    where f.id = ?
-      and tpr.profile_id = ?
-   union all
-   select ppr.is_owner,
-          ppr.is_admin,
-          ppr.can_edit
-     from project_profile_rel as ppr
-    inner join file as f on (f.project_id = ppr.project_id)
-    where f.id = ?
-      and ppr.profile_id = ?")
-
-(defn get-file-permissions
-  [conn profile-id file-id]
-  (when (and profile-id file-id)
-    (db/exec! conn [sql:file-permissions
-                    file-id profile-id
-                    file-id profile-id
-                    file-id profile-id])))
-
-(defn get-permissions
-  ([conn profile-id file-id]
-   (let [rows     (get-file-permissions conn profile-id file-id)
-         is-owner (boolean (some :is-owner rows))
-         is-admin (boolean (some :is-admin rows))
-         can-edit (boolean (some :can-edit rows))]
-     (when (seq rows)
-       {:type :membership
-        :is-owner is-owner
-        :is-admin (or is-owner is-admin)
-        :can-edit (or is-owner is-admin can-edit)
-        :can-read true
-        :is-logged (some? profile-id)})))
-
-  ([conn profile-id file-id share-id]
-   (let [perms  (get-permissions conn profile-id file-id)
-         ldata  (some-> (db/get* conn :share-link {:id share-id :file-id file-id})
-                        (dissoc :flags)
-                        (update :pages db/decode-pgarray #{}))]
-
-     ;; NOTE: in a future when share-link becomes more powerful and
-     ;; will allow us specify which parts of the app is available, we
-     ;; will probably need to tweak this function in order to expose
-     ;; this flags to the frontend.
-     (cond
-       (some? perms) perms
-       (some? ldata) {:type :share-link
-                      :can-read true
-                      :pages (:pages ldata)
-                      :is-logged (some? profile-id)
-                      :who-comment (:who-comment ldata)
-                      :who-inspect (:who-inspect ldata)}))))
-
 (def has-edit-permissions?
-  (perms/make-edition-predicate-fn get-permissions))
+  (perms/make-edition-predicate-fn bfc/get-file-permissions))
 
 (def has-read-permissions?
-  (perms/make-read-predicate-fn get-permissions))
+  (perms/make-read-predicate-fn perms/get-file-read-permissions))
 
 (def has-comment-permissions?
-  (perms/make-comment-predicate-fn get-permissions))
+  (perms/make-comment-predicate-fn perms/get-file-read-permissions))
 
 (def check-edition-permissions!
   (perms/make-check-fn has-edit-permissions?))
@@ -156,18 +95,23 @@
 (def check-read-permissions!
   (perms/make-check-fn has-read-permissions?))
 
-;; A user has comment permissions if she has read permissions, or
-;; explicit comment permissions through the share-id
+;; A user has comment permissions if:
+;; - For :membership type: they have read permissions OR explicit comment permissions
+;; - For :share-link type: they must have explicit comment permissions (who-comment=all)
+;;   This prevents share-link holders with who-comment=team from bypassing the restriction
 
 (defn check-comment-permissions!
-  [conn profile-id file-id share-id]
-  (let [perms       (get-permissions conn profile-id file-id share-id)
-        can-read    (has-read-permissions? perms)
-        can-comment (has-comment-permissions? perms)]
-    (when-not (or can-read can-comment)
+  [cfg profile-id file-id share-id]
+  (let [perms    (perms/get-file-read-permissions cfg profile-id file-id share-id)
+        allowed? (if (= :share-link (:type perms))
+                   (has-comment-permissions? perms)
+                   (or (has-read-permissions? perms)
+                       (has-comment-permissions? perms)))]
+    (when-not allowed?
       (ex/raise :type :not-found
                 :code :object-not-found
-                :hint "not found"))))
+                :hint "not found"))
+    perms))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; QUERY COMMANDS
@@ -184,15 +128,15 @@
    [:name [:string {:max 250}]]
    [:revn [::sm/int {:min 0}]]
    [:vern [::sm/int {:min 0}]]
-   [:modified-at ::dt/instant]
+   [:modified-at ::ct/inst]
    [:is-shared ::sm/boolean]
    [:project-id ::sm/uuid]
-   [:created-at ::dt/instant]
-   [:data {:optional true} :any]])
+   [:created-at ::ct/inst]
+   [:data {:optional true} ::sm/any]])
 
 (def schema:permissions-mixin
   [:map {:title "PermissionsMixin"}
-   [:permissions ::perms/permissions]])
+   [:permissions perms/schema:permissions]])
 
 (def schema:file-with-permissions
   [:merge {:title "FileWithPermissions"}
@@ -203,106 +147,38 @@
   schema:get-file
   [:map {:title "get-file"}
    [:features {:optional true} ::cfeat/features]
-   [:id ::sm/uuid]
-   [:project-id {:optional true} ::sm/uuid]])
-
-(defn- migrate-file
-  [{:keys [::db/conn] :as cfg} {:keys [id] :as file}]
-  (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)
-            pmap/*tracked* (pmap/create-tracked)]
-    (let [;; For avoid unnecesary overhead of creating multiple pointers and
-          ;; handly internally with objects map in their worst case (when
-          ;; probably all shapes and all pointers will be readed in any
-          ;; case), we just realize/resolve them before applying the
-          ;; migration to the file
-          file (-> file
-                   (update :data feat.fdata/process-pointers deref)
-                   (update :data feat.fdata/process-objects (partial into {}))
-                   (fmg/migrate-file))
-
-          ;; When file is migrated, we break the rule of no perform
-          ;; mutations on get operations and update the file with all
-          ;; migrations applied
-          ;;
-          ;; WARN: he following code will not work on read-only mode,
-          ;; it is a known issue; we keep is not implemented until we
-          ;; really need this.
-          file (if (contains? (:features file) "fdata/objects-map")
-                 (feat.fdata/enable-objects-map file)
-                 file)
-          file (if (contains? (:features file) "fdata/pointer-map")
-                 (feat.fdata/enable-pointer-map file)
-                 file)]
-
-      (db/update! conn :file
-                  {:data (blob/encode (:data file))
-                   :version (:version file)
-                   :features (db/create-array conn "text" (:features file))}
-                  {:id id})
-
-      (when (contains? (:features file) "fdata/pointer-map")
-        (feat.fdata/persist-pointers! cfg id))
-
-      file)))
-
-(defn get-file
-  [{:keys [::db/conn ::wrk/executor] :as cfg} id
-   & {:keys [project-id
-             migrate?
-             include-deleted?
-             lock-for-update?]
-      :or {include-deleted? false
-           lock-for-update? false
-           migrate? true}}]
-
-  (assert (db/connection? conn) "expected cfg with valid connection")
-
-  (let [params (merge {:id id}
-                      (when (some? project-id)
-                        {:project-id project-id}))
-        file   (->> (db/get conn :file params
-                            {::db/check-deleted (not include-deleted?)
-                             ::db/remove-deleted (not include-deleted?)
-                             ::sql/for-update lock-for-update?})
-                    (feat.fdata/resolve-file-data cfg))
-
-        ;; NOTE: we perform the file decoding in a separate thread
-        ;; because it has heavy and synchronous operations for
-        ;; decoding file body that are not very friendly with virtual
-        ;; threads.
-        file   (px/invoke! executor #(decode-row file))]
-
-    (if (and migrate? (fmg/need-migration? file))
-      (migrate-file cfg file)
-      file)))
+   [:id ::sm/uuid]])
 
 (defn get-minimal-file
   [cfg id & {:as opts}]
-  (let [opts (assoc opts ::sql/columns [:id :modified-at :deleted-at :revn :vern :data-ref-id :data-backend])]
+  (let [opts (assoc opts ::sql/columns [:id :modified-at :deleted-at :revn :vern])]
     (db/get cfg :file {:id id} opts)))
 
 (defn- get-minimal-file-with-perms
   [cfg {:keys [:id ::rpc/profile-id]}]
   (let [mfile (get-minimal-file cfg id)
-        perms (get-permissions cfg profile-id id)]
+        perms (perms/get-file-read-permissions cfg profile-id id)]
     (assoc mfile :permissions perms)))
 
 (defn get-file-etag
-  [{:keys [::rpc/profile-id]} {:keys [modified-at revn vern permissions]}]
-  (str profile-id "/" revn "/" vern "/"
-       (dt/format-instant modified-at :iso)
+  [{:keys [::rpc/profile-id]} {:keys [modified-at revn vern deleted-at permissions]}]
+  (str profile-id "/" revn "/" vern "/" (hash fmg/available-migrations) "/"
+       (ct/format-inst modified-at :iso)
        "/"
-       (uri/map->query-string permissions)))
+       (uri/map->query-string permissions)
+       "/"
+       (some-> deleted-at (ct/format-inst :iso))))
 
 (sv/defmethod ::get-file
   "Retrieve a file by its ID. Only authenticated users."
   {::doc/added "1.17"
+   ::rpc/id-type :file
    ::cond/get-object #(get-minimal-file-with-perms %1 %2)
    ::cond/key-fn get-file-etag
    ::sm/params schema:get-file
    ::sm/result schema:file-with-permissions
    ::db/transaction true}
-  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id project-id] :as params}]
+  [cfg {:keys [::rpc/profile-id id project-id] :as params}]
   ;; The COND middleware makes initial request for a file and
   ;; permissions when the incoming request comes with an
   ;; ETAG. When ETAG does not matches, the request is resolved
@@ -310,30 +186,40 @@
   ;; will be already prefetched and we just reuse them instead
   ;; of making an additional database queries.
   (let [perms (or (:permissions (::cond/object params))
-                  (get-permissions conn profile-id id))]
+                  (perms/get-file-read-permissions cfg profile-id id))]
     (check-read-permissions! perms)
 
-    (let [team (teams/get-team conn
+    (let [team (teams/get-team cfg
                                :profile-id profile-id
                                :project-id project-id
                                :file-id id)
 
-          file (-> (get-file cfg id :project-id project-id)
+          file (-> (bfc/get-file cfg id
+                                 :project-id project-id)
                    (assoc :permissions perms)
                    (check-version!))]
 
       (-> (cfeat/get-team-enabled-features cf/flags team)
           (cfeat/check-client-features! (:features params))
-          (cfeat/check-file-features! (:features file) (:features params)))
+          (cfeat/check-file-features! (:features file)))
 
-      ;; This operation is needed for backward comapatibility with frontends that
-      ;; does not support pointer-map resolution mechanism; this just resolves the
-      ;; pointers on backend and return a complete file.
-      (if (and (contains? (:features file) "fdata/pointer-map")
-               (not (contains? (:features params) "fdata/pointer-map")))
-        (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-          (update file :data feat.fdata/process-pointers deref))
-        file))))
+      (as-> file file
+        ;; This operation is needed for backward comapatibility with
+        ;; frontends that does not support pointer-map resolution
+        ;; mechanism; this just resolves the pointers on backend and
+        ;; return a complete file
+        (if (and (contains? (:features file) "fdata/pointer-map")
+                 (not (contains? (:features params) "fdata/pointer-map")))
+          (feat.fdata/realize-pointers cfg file)
+          file)
+
+        ;; This operation is needed for backward comapatibility with
+        ;; frontends that does not support objects-map mechanism; this
+        ;; just converts all objects map instaces to plain maps
+        (if (and (contains? (:features file) "fdata/objects-map")
+                 (not (contains? (:features params) "fdata/objects-map")))
+          (feat.fdata/realize-objects cfg file)
+          file)))))
 
 ;; --- COMMAND QUERY: get-file-fragment (by id)
 
@@ -341,8 +227,8 @@
   [:map {:title "FileFragment"}
    [:id ::sm/uuid]
    [:file-id ::sm/uuid]
-   [:created-at ::dt/instant]
-   [:content any?]])
+   [:created-at ::ct/inst]
+   [:content ::sm/any]])
 
 (def schema:get-file-fragment
   [:map {:title "get-file-fragment"}
@@ -352,10 +238,20 @@
 
 (defn- get-file-fragment
   [cfg file-id fragment-id]
-  (let [resolve-file-data (partial feat.fdata/resolve-file-data cfg)]
-    (some-> (db/get cfg :file-data-fragment {:file-id file-id :id fragment-id})
-            (resolve-file-data)
-            (update :data blob/decode))))
+  (some-> (db/get cfg :file-data {:file-id file-id :id fragment-id :type "fragment"})
+          (update :data blob/decode)))
+
+(defn- check-fragment-scope!
+  "Checks that the fragment is reachable from the pages authorized by
+  the share-link. Raises a :not-found exception if the fragment is not reachable."
+  [cfg file-id fragment-id pages]
+  (let [fdata (-> (bfc/get-file cfg file-id :read-only? true)
+                  (get :data)
+                  (update :pages-index select-keys pages))]
+    (when-not (contains? (feat.fdata/get-used-pointer-ids fdata) fragment-id)
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "object not found"))))
 
 (sv/defmethod ::get-file-fragment
   "Retrieve a file fragment by its ID. Only authenticated users."
@@ -365,8 +261,10 @@
    ::sm/result schema:file-fragment}
   [cfg {:keys [::rpc/profile-id file-id fragment-id share-id]}]
   (db/run! cfg (fn [cfg]
-                 (let [perms (get-permissions cfg profile-id file-id share-id)]
+                 (let [perms (perms/get-file-read-permissions cfg profile-id file-id share-id)]
                    (check-read-permissions! perms)
+                   (when (= :share-link (:type perms))
+                     (check-fragment-scope! cfg file-id fragment-id (:pages perms)))
                    (-> (get-file-fragment cfg file-id fragment-id)
                        (rph/with-http-cache long-cache-duration))))))
 
@@ -381,8 +279,10 @@
           f.revn,
           f.vern,
           f.is_shared,
-          ft.media_id AS thumbnail_id
+          ft.media_id AS thumbnail_id,
+          p.team_id
      from file as f
+     inner join project as p on (p.id = f.project_id)
      left join file_thumbnail as ft on (ft.file_id = f.id
                                         and ft.revn = f.revn
                                         and ft.deleted_at is null)
@@ -407,9 +307,8 @@
    ::sm/params schema:get-project-files
    ::sm/result schema:files}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id project-id]}]
-  (dm/with-open [conn (db/open pool)]
-    (projects/check-read-permissions! conn profile-id project-id)
-    (get-project-files conn project-id)))
+  (projects/check-read-permissions! cfg profile-id project-id)
+  (get-project-files pool project-id))
 
 ;; --- COMMAND QUERY: has-file-libraries
 
@@ -426,7 +325,7 @@
    ::sm/result ::sm/boolean}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id]}]
   (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! pool profile-id file-id)
+    (check-read-permissions! cfg profile-id file-id)
     (get-has-file-libraries conn file-id)))
 
 (def ^:private sql:has-file-libraries
@@ -441,6 +340,39 @@
   [conn file-id]
   (let [row (db/exec-one! conn [sql:has-file-libraries file-id])]
     (:has-libraries row)))
+
+
+;; --- COMMAND QUERY: get-library-usage
+
+
+(declare get-library-usage)
+
+(def schema:get-library-usage
+  [:map {:title "get-library-usage"}
+   [:file-id ::sm/uuid]])
+:sample
+(sv/defmethod ::get-library-usage
+  "Gets the number of files that use the specified library."
+  {::doc/added "2.10.0"
+   ::sm/params schema:get-library-usage
+   ::sm/result ::sm/int}
+  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id]}]
+  (dm/with-open [conn (db/open pool)]
+    (check-read-permissions! cfg profile-id file-id)
+    (get-library-usage conn file-id)))
+
+(def ^:private sql:get-library-usage
+  "SELECT COUNT(*) AS used
+     FROM file_library_rel AS flr
+     JOIN file AS fl ON (flr.library_file_id = fl.id)
+    WHERE flr.library_file_id = ?::uuid
+      AND (fl.deleted_at IS NULL OR
+           fl.deleted_at > now())")
+
+(defn- get-library-usage
+  [conn file-id]
+  (let [row (db/exec-one! conn [sql:get-library-usage file-id])]
+    {:used-in (:used row)}))
 
 
 ;; --- QUERY COMMAND: get-page
@@ -468,7 +400,7 @@
   (update page :objects update-vals #(dissoc % :thumbnail)))
 
 (defn get-page
-  [{:keys [::db/conn] :as cfg} {:keys [profile-id file-id page-id object-id] :as params}]
+  [{:keys [::db/conn] :as cfg} {:keys [profile-id file-id page-id object-id share-id] :as params}]
 
   (when (and (uuid? object-id)
              (not (uuid? page-id)))
@@ -476,22 +408,36 @@
               :code :params-validation
               :hint "page-id is required when object-id is provided"))
 
-  (let [team (teams/get-team conn
-                             :profile-id profile-id
-                             :file-id file-id)
+  (let [perms (perms/get-file-read-permissions cfg profile-id file-id share-id)
+        file  (bfc/get-file cfg file-id :read-only? true)
 
-        file (get-file cfg file-id)
+        resolved-page-id (or page-id (-> file :data :pages first))
 
-        _    (-> (cfeat/get-team-enabled-features cf/flags team)
-                 (cfeat/check-client-features! (:features params))
-                 (cfeat/check-file-features! (:features file) (:features params)))
+        _ (when (and (= :share-link (:type perms))
+                     (not (contains? (:pages perms) resolved-page-id)))
+            (ex/raise :type :not-found
+                      :code :object-not-found
+                      :hint "object not found"))
 
-        page (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg file-id)]
-               (let [page-id (or page-id (-> file :data :pages first))
-                     page    (dm/get-in file [:data :pages-index page-id])]
-                 (if (pmap/pointer-map? page)
-                   (deref page)
-                   page)))]
+        proj  (db/get conn :project {:id (:project-id file)})
+
+        team  (-> (db/get conn :team {:id (:team-id proj)})
+                  (teams/decode-row))
+
+        _     (-> (cfeat/get-team-enabled-features cf/flags team)
+                  (cfeat/check-client-features! (:features params))
+                  (cfeat/check-file-features! (:features file)))
+
+        page  (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg file-id)]
+                (let [page (dm/get-in file [:data :pages-index resolved-page-id])]
+                  (if (pmap/pointer-map? page)
+                    (deref page)
+                    page)))]
+
+    (when-not perms
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "object not found"))
 
     (cond-> (prune-thumbnails page)
       (some? object-id)
@@ -520,65 +466,145 @@
    ::sm/params schema:get-page}
   [cfg {:keys [::rpc/profile-id file-id share-id] :as params}]
   (db/tx-run! cfg
-              (fn [{:keys [::db/conn] :as cfg}]
-                (check-read-permissions! conn profile-id file-id share-id)
+              (fn [cfg]
+                (check-read-permissions! cfg profile-id file-id share-id)
                 (get-page cfg (assoc params :profile-id profile-id)))))
 
 ;; --- COMMAND QUERY: get-team-shared-files
 
+(defn- get-components-with-variants
+  "Return a set with all the variant-ids, and a list of components, but
+  with only one component by variant.
+
+  Returns a vector of unique components and a set of all variant ids"
+  [fdata]
+  (loop [variant-ids #{}
+         components' []
+         components  (ctkl/components-seq fdata)]
+    (if-let [{:keys [variant-id] :as component} (first components)]
+      (cond
+        (nil? variant-id)
+        (recur variant-ids
+               (conj components' component)
+               (rest components))
+
+        (contains? variant-ids variant-id)
+        (recur variant-ids
+               components'
+               (rest components))
+
+        :else
+        (recur (conj variant-ids variant-id)
+               (conj components' component)
+               (rest components)))
+
+      [(d/index-by :id components') variant-ids])))
+
+(defn- sample-assets
+  [assets limit]
+  (let [assets (into [] (map val) assets)]
+    {:count (count assets)
+     :sample (->> assets
+                  (sort-by #(str/lower (:name %)))
+                  (into [] (take limit)))}))
+
+(defn- calculate-library-summary
+  "Calculate the file library summary (counters and samples)"
+  [{:keys [data] :as file}]
+  (let [load-objects
+        (fn [sample]
+          (mapv #(ctf/load-component-objects data %) sample))
+
+        [components variant-ids]
+        (get-components-with-variants data)
+
+        components-sample
+        (-> (sample-assets components 4)
+            (update :sample load-objects))]
+
+    {:components components-sample
+     :variants {:count (count variant-ids)}
+     :colors (sample-assets (:colors data) 3)
+     :typographies (sample-assets (:typographies data) 3)}))
+
+(def ^:private file-summary-cache-key-ttl
+  (ct/duration {:days 30}))
+
+(defn file-summary-cache-key
+  "Build the redis cache key for the file library summary. The tenant is
+   included to prevent key collisions between tenants sharing a redis instance"
+  [id]
+  (str "penpot.library-summary." (cf/get :tenant) "." id))
+
+(defn- get-file-with-summary
+  "Get a file without data with a summary of its local library content"
+  [cfg id]
+  (let [get-from-cache
+        (fn [{:keys [::rds/conn]} cache-key]
+          (when-let [result (rds/get conn cache-key)]
+            (let [file    (bfc/get-file cfg id :load-data? false)
+                  summary (t/decode-str result)]
+              (-> (assoc file :library-summary summary)
+                  (dissoc :data)))))
+
+        calculate-from-db
+        (fn []
+          (let [file   (bfc/get-file cfg id)
+                result (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
+                         (calculate-library-summary file))]
+            (-> file
+                (assoc :library-summary result)
+                (dissoc :legacy-data)
+                (dissoc :data))))
+
+        persist-to-cache
+        (fn [{:keys [::rds/conn]} data cache-key]
+          (rds/set conn cache-key (t/encode-str data)
+                   (rds/build-set-args {:ex file-summary-cache-key-ttl})))]
+
+    (if (contains? cf/flags :redis-cache)
+      (let [cache-key (file-summary-cache-key id)]
+        (or (rds/run! cfg get-from-cache cache-key)
+            (let [file (calculate-from-db)]
+              (rds/run! cfg persist-to-cache (:library-summary file) cache-key)
+              file)))
+      (calculate-from-db))))
+
 (def ^:private sql:team-shared-files
-  "select f.id,
-          f.revn,
-          f.vern,
-          f.data,
-          f.project_id,
-          f.created_at,
-          f.modified_at,
-          f.name,
-          f.is_shared,
-          ft.media_id
-     from file as f
-    inner join project as p on (p.id = f.project_id)
-     left join file_thumbnail as ft on (ft.file_id = f.id and ft.revn = f.revn and ft.deleted_at is null)
-    where f.is_shared = true
-      and f.deleted_at is null
-      and p.deleted_at is null
-      and p.team_id = ?
-    order by f.modified_at desc")
+  "WITH file_library_agg AS (
+      SELECT flr.file_id,
+             coalesce(array_agg(flr.library_file_id) filter (WHERE flr.library_file_id IS NOT NULL), '{}') AS library_file_ids
+        FROM file_library_rel flr
+       GROUP BY flr.file_id
+   )
 
-
-(defn- get-library-summary
-  [cfg {:keys [id data] :as file}]
-  (letfn [(assets-sample [assets limit]
-            (let [sorted-assets (->> (vals assets)
-                                     (sort-by #(str/lower (:name %))))]
-              {:count (count sorted-assets)
-               :sample (into [] (take limit sorted-assets))}))]
-
-    (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-      (let [load-objects      (fn [component]
-                                (ctf/load-component-objects data component))
-            components-sample (-> (assets-sample (ctkl/components data) 4)
-                                  (update :sample #(mapv load-objects %)))]
-        {:components components-sample
-         :media (assets-sample (:media data) 3)
-         :colors (assets-sample (:colors data) 3)
-         :typographies (assets-sample (:typographies data) 3)}))))
+   SELECT f.id,
+          fla.library_file_ids,
+          ft.media_id AS thumbnail_id
+     FROM file AS f
+    INNER JOIN project AS p ON (p.id = f.project_id)
+     LEFT JOIN file_thumbnail AS ft ON (ft.file_id = f.id AND ft.revn = f.revn AND ft.deleted_at IS NULL)
+     LEFT JOIN file_library_agg AS fla ON (fla.file_id = f.id)
+    WHERE f.is_shared = true
+      AND f.deleted_at IS NULL
+      AND p.deleted_at IS NULL
+      AND p.team_id = ?
+    ORDER BY f.modified_at DESC")
 
 (defn- get-team-shared-files
   [{:keys [::db/conn] :as cfg} {:keys [team-id profile-id]}]
-  (teams/check-read-permissions! conn profile-id team-id)
-  (->> (db/exec! conn [sql:team-shared-files team-id])
-       (into #{} (comp
-                  (map decode-row)
-                  (map (fn [row]
-                         (if-let [media-id (:media-id row)]
-                           (-> row
-                               (dissoc :media-id)
-                               (assoc :thumbnail-id media-id))
-                           (dissoc row :media-id))))
-                  (map #(assoc % :library-summary (get-library-summary cfg %)))
-                  (map #(dissoc % :data))))))
+  (teams/check-read-permissions! cfg profile-id team-id)
+
+  (let [process-row
+        (fn [{:keys [id library-file-ids]}]
+          (let [file (get-file-with-summary cfg id)]
+            (assoc file :library-file-ids (db/decode-pgarray library-file-ids #{}))))
+
+        xform
+        (map process-row)]
+
+    (->> (db/plan conn [sql:team-shared-files team-id] {:fetch-size 1})
+         (transduce xform conj #{}))))
 
 (def ^:private schema:get-team-shared-files
   [:map {:title "get-team-shared-files"}
@@ -591,43 +617,101 @@
   [cfg {:keys [::rpc/profile-id] :as params}]
   (db/tx-run! cfg get-team-shared-files (assoc params :profile-id profile-id)))
 
-;; --- COMMAND QUERY: get-file-libraries
+;; --- COMMAND QUERY: get-file-summary
 
-(def ^:private sql:get-file-libraries
-  "WITH RECURSIVE libs AS (
-     SELECT fl.*, flr.synced_at
-       FROM file AS fl
-       JOIN file_library_rel AS flr ON (flr.library_file_id = fl.id)
-      WHERE flr.file_id = ?::uuid
-    UNION
-     SELECT fl.*, flr.synced_at
-       FROM file AS fl
-       JOIN file_library_rel AS flr ON (flr.library_file_id = fl.id)
-       JOIN libs AS l ON (flr.file_id = l.id)
-   )
-   SELECT l.id,
-          l.features,
-          l.project_id,
-          l.created_at,
-          l.modified_at,
-          l.deleted_at,
-          l.name,
-          l.revn,
-          l.vern,
-          l.synced_at,
-          l.is_shared
-     FROM libs AS l
-    WHERE l.deleted_at IS NULL OR l.deleted_at > now();")
+(defn- get-file-summary
+  [cfg id]
+  (let [file (get-file-with-summary cfg id)]
+    (-> (:library-summary file)
+        (assoc :name (:name file)))))
 
-(defn get-file-libraries
+(def ^:private
+  schema:get-file-summary
+  [:map {:title "get-file-summary"}
+   [:id ::sm/uuid]])
+
+(sv/defmethod ::get-file-summary
+  "Retrieve a file summary by its ID. Only authenticated users."
+  {::doc/added "1.20"
+   ::rpc/id-type :file
+   ::sm/params schema:get-file-summary}
+  [cfg {:keys [::rpc/profile-id id] :as params}]
+  (check-read-permissions! cfg profile-id id)
+  (get-file-summary cfg id))
+
+
+;; --- COMMAND QUERY: get-file-stats
+
+(def ^:private sql:file-stats-library-counts
+  "SELECT
+     (SELECT COUNT(*)
+        FROM file_library_rel AS flr
+        JOIN file AS fl ON (fl.id = flr.library_file_id)
+       WHERE flr.file_id = ?::uuid
+         AND (fl.deleted_at IS NULL OR fl.deleted_at > now())) AS library_count,
+     (SELECT COUNT(*)
+        FROM file_library_rel AS flr
+        JOIN file AS fl ON (fl.id = flr.file_id)
+       WHERE flr.library_file_id = ?::uuid
+         AND (fl.deleted_at IS NULL OR fl.deleted_at > now())) AS referenced_by_count")
+
+(defn- get-file-stats-library-counts
   [conn file-id]
-  (into []
-        (comp
-         ;; FIXME: :is-indirect set to false to all rows looks
-         ;; completly useless
-         (map #(assoc % :is-indirect false))
-         (map decode-row))
-        (db/exec! conn [sql:get-file-libraries file-id])))
+  (let [row (db/exec-one! conn [sql:file-stats-library-counts file-id file-id])]
+    {:library-count       (or (:library-count row) 0)
+     :referenced-by-count (or (:referenced-by-count row) 0)}))
+
+(defn- get-file-stats
+  [{:keys [::db/conn] :as cfg} file-id]
+  (let [file    (bfc/get-file cfg file-id)
+        base    (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg file-id)]
+                  (cfs/calc-file-stats (:data file)))
+        lib-cnt (get-file-stats-library-counts conn file-id)]
+    (-> base
+        (merge lib-cnt)
+        (assoc :file-id    file-id
+               :revn       (:revn file)
+               :updated-at (:modified-at file)))))
+
+(def ^:private schema:shape-counts
+  [:map {:title "FileStatsShapeCounts"}
+   [:total [::sm/int {:min 0}]]
+   [:by-type [:map-of :keyword [::sm/int {:min 0}]]]])
+
+(def ^:private schema:get-file-stats-result
+  [:map {:title "FileStats"}
+   [:file-id ::sm/uuid]
+   [:page-count [::sm/int {:min 0}]]
+   [:shape-counts schema:shape-counts]
+   [:component-count [::sm/int {:min 0}]]
+   [:deleted-component-count [::sm/int {:min 0}]]
+   [:color-count [::sm/int {:min 0}]]
+   [:typography-count [::sm/int {:min 0}]]
+   [:library-count [::sm/int {:min 0}]]
+   [:referenced-by-count [::sm/int {:min 0}]]
+   [:revn [::sm/int {:min 0}]]
+   [:updated-at ::ct/inst]])
+
+(def ^:private schema:get-file-stats
+  [:map {:title "get-file-stats"}
+   [:id ::sm/uuid]])
+
+(sv/defmethod ::get-file-stats
+  "Return aggregate statistics for a single file: page count, shape
+   counts by type, component/color/typography counts, and inbound and
+   outbound library reference counts. Cheap alternative to `get-file`
+   when only metrics are needed."
+  {::doc/added "2.17"
+   ::rpc/id-type :file
+   ::sm/params schema:get-file-stats
+   ::sm/result schema:get-file-stats-result
+   ::db/transaction true}
+  [cfg {:keys [::rpc/profile-id id]}]
+  (check-read-permissions! cfg profile-id id)
+  (get-file-stats cfg id))
+
+
+;; --- COMMAND QUERY: get-file-libraries
 
 (def ^:private schema:get-file-libraries
   [:map {:title "get-file-libraries"}
@@ -637,11 +721,10 @@
   "Get libraries used by the specified file."
   {::doc/added "1.17"
    ::sm/params schema:get-file-libraries}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id]}]
-  (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! conn profile-id file-id)
-    (get-file-libraries conn file-id)))
-
+  [cfg {:keys [::rpc/profile-id file-id]}]
+  (bfc/check-file-exists cfg file-id)
+  (check-read-permissions! cfg profile-id file-id)
+  (bfc/get-file-libraries cfg file-id))
 
 ;; --- COMMAND QUERY: Files that use this File library
 
@@ -667,7 +750,7 @@
    ::sm/params schema:get-library-file-references}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
   (dm/with-open [conn (db/open pool)]
-    (check-read-permissions! conn profile-id file-id)
+    (check-read-permissions! cfg profile-id file-id)
     (get-library-file-references conn file-id)))
 
 ;; --- COMMAND QUERY: get-team-recent-files
@@ -683,7 +766,8 @@
             f.name,
             f.is_shared,
             ft.media_id AS thumbnail_id,
-            row_number() over w as row_num
+            row_number() over w as row_num,
+            p.team_id
        from file as f
       inner join project as p on (p.id = f.project_id)
        left join file_thumbnail as ft on (ft.file_id = f.id
@@ -710,48 +794,63 @@
    ::sm/params schema:get-team-recent-files}
   [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id]}]
   (dm/with-open [conn (db/open pool)]
-    (teams/check-read-permissions! conn profile-id team-id)
+    (teams/check-read-permissions! cfg profile-id team-id)
     (get-team-recent-files conn team-id)))
 
 
-;; --- COMMAND QUERY: get-file-summary
+;; --- COMMAND QUERY: get-team-deleted-files
 
-(defn- get-file-summary
-  [{:keys [::db/conn] :as cfg} {:keys [profile-id id project-id] :as params}]
-  (check-read-permissions! conn profile-id id)
-  (let [team (teams/get-team conn
-                             :profile-id profile-id
-                             :project-id project-id
-                             :file-id id)
+(def sql:team-deleted-files
+  "WITH deleted_files AS (
+     SELECT f.id,
+            f.revn,
+            f.vern,
+            f.project_id,
+            f.created_at,
+            f.modified_at,
+            f.name,
+            f.deleted_at AS will_be_deleted_at,
+            ft.media_id AS thumbnail_id,
+            row_number() OVER w AS row_num,
+            p.team_id
+       FROM file AS f
+      INNER JOIN project AS p ON (p.id = f.project_id)
+       LEFT JOIN file_thumbnail AS ft on (ft.file_id = f.id
+                                          AND ft.revn = f.revn)
+      WHERE p.team_id = ?
+        AND (p.deleted_at > ?::timestamptz OR
+             f.deleted_at > ?::timestamptz)
+     WINDOW w AS (PARTITION BY f.project_id
+                      ORDER BY f.modified_at DESC)
+      ORDER BY f.modified_at DESC
+   )
+   SELECT * FROM deleted_files")
 
-        file (get-file cfg id :project-id project-id)]
+(defn get-team-deleted-files
+  [conn team-id]
+  (let [now (ct/now)]
+    (db/exec! conn [sql:team-deleted-files team-id now now])))
 
-    (-> (cfeat/get-team-enabled-features cf/flags team)
-        (cfeat/check-client-features! (:features params))
-        (cfeat/check-file-features! (:features file) (:features params)))
+(def ^:private schema:get-team-deleted-files
+  [:map {:title "get-team-deleted-files"}
+   [:team-id ::sm/uuid]])
 
-    (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-      {:name             (:name file)
-       :components-count (count (ctkl/components-seq (:data file)))
-       :graphics-count   (count (get-in file [:data :media] []))
-       :colors-count     (count (get-in file [:data :colors] []))
-       :typography-count (count (get-in file [:data :typographies] []))})))
-
-(sv/defmethod ::get-file-summary
-  "Retrieve a file summary by its ID. Only authenticated users."
-  {::doc/added "1.20"
-   ::sm/params schema:get-file}
-  [cfg {:keys [::rpc/profile-id] :as params}]
-  (db/tx-run! cfg get-file-summary (assoc params :profile-id profile-id)))
-
+(sv/defmethod ::get-team-deleted-files
+  {::doc/added "2.12"
+   ::sm/params schema:get-team-deleted-files}
+  [cfg {:keys [::rpc/profile-id team-id]}]
+  (db/run! cfg (fn [{:keys [::db/conn] :as cfg}]
+                 (teams/check-read-permissions! cfg profile-id team-id)
+                 (get-team-deleted-files conn team-id))))
 
 ;; --- COMMAND QUERY: get-file-info
 
+
 (defn- get-file-info
   [{:keys [::db/conn] :as cfg} {:keys [id] :as params}]
-  (db/get* conn :file
-           {:id id}
-           {::sql/columns [:id]}))
+  (db/get conn :file
+          {:id id}
+          {::sql/columns [:id :deleted-at]}))
 
 (sv/defmethod ::get-file-info
   "Retrieve minimal file info by its ID."
@@ -771,12 +870,13 @@
   [conn {:keys [id name]}]
   (db/update! conn :file
               {:name name
-               :modified-at (dt/now)}
+               :modified-at (ct/now)}
               {:id id}
               {::db/return-keys true}))
 
 (sv/defmethod ::rename-file
   {::doc/added "1.17"
+   ::rpc/id-type :file
    ::webhooks/event? true
 
    ::sm/webhook
@@ -784,8 +884,8 @@
     [:id ::sm/uuid]
     [:project-id ::sm/uuid]
     [:name [:string {:max 250}]]
-    [:created-at ::dt/instant]
-    [:modified-at ::dt/instant]]
+    [:created-at ::ct/inst]
+    [:modified-at ::ct/inst]]
 
    ::sm/params
    [:map {:title "RenameFileParams"}
@@ -796,22 +896,22 @@
    [:map {:title "SimplifiedFile"}
     [:id ::sm/uuid]
     [:name [:string {:max 250}]]
-    [:created-at ::dt/instant]
-    [:modified-at ::dt/instant]]}
+    [:created-at ::ct/inst]
+    [:modified-at ::ct/inst]]
 
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id id)
-    (let [file (rename-file conn params)]
-      (rph/with-meta
-        (select-keys file [:id :name :created-at :modified-at])
-        {::audit/props {:project-id (:project-id file)
-                        :created-at (:created-at file)
-                        :modified-at (:modified-at file)}}))))
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id] :as params}]
+  (check-edition-permissions! conn profile-id id)
+  (let [file (rename-file conn params)]
+    (rph/with-meta
+      (select-keys file [:id :name :created-at :modified-at])
+      {::audit/props {:project-id (:project-id file)
+                      :created-at (:created-at file)
+                      :modified-at (:modified-at file)}})))
 
 ;; --- MUTATION COMMAND: set-file-shared
 
-(def sql:get-referenced-files
+(def ^:private sql:get-referenced-files
   "SELECT f.id
      FROM file_library_rel AS flr
     INNER JOIN file AS f ON (f.id = flr.file_id)
@@ -819,59 +919,54 @@
       AND (f.deleted_at IS NULL OR f.deleted_at > now())
     ORDER BY f.created_at ASC;")
 
-(defn- absorb-library-by-file!
+(defn- absorb-library-by-file
   [cfg ldata file-id]
 
-  (dm/assert!
-   "expected cfg with valid connection"
-   (db/connection-map? cfg))
+  (assert (db/connection-map? cfg)
+          "expected cfg with valid connection")
 
   (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg file-id)
             pmap/*tracked* (pmap/create-tracked)]
-    (let [file (-> (get-file cfg file-id
-                             :include-deleted? true
-                             :lock-for-update? true)
+    (let [file (-> (bfc/get-file cfg file-id
+                                 :include-deleted? true
+                                 :lock-for-update? true)
                    (update :data ctf/absorb-assets ldata))]
 
       (l/trc :hint "library absorbed"
              :library-id (str (:id ldata))
              :file-id (str file-id))
 
-      (db/update! cfg :file
-                  {:revn (inc (:revn file))
-                   :data (blob/encode (:data file))
-                   :modified-at (dt/now)
-                   :has-media-trimmed false}
-                  {:id file-id})
+      (bfc/update-file! cfg {:id file-id
+                             :migrations (:migrations file)
+                             :revn (inc (:revn file))
+                             :data (:data file)
+                             :modified-at (ct/now)
+                             :has-media-trimmed false}))))
 
-      (feat.fdata/persist-pointers! cfg file-id))))
-
-(defn- absorb-library
+(defn- absorb-library*
   "Find all files using a shared library, and absorb all library assets
   into the file local libraries"
-  [cfg {:keys [id] :as library}]
+  [cfg {:keys [id data] :as library}]
 
-  (dm/assert!
-   "expected cfg with valid connection"
-   (db/connection-map? cfg))
+  (assert (db/connection-map? cfg)
+          "expected cfg with valid connection")
 
-  (let [ldata (binding [pmap/*load-fn* (partial feat.fdata/load-pointer cfg id)]
-                (-> library :data (feat.fdata/process-pointers deref)))
-        ids   (->> (db/exec! cfg [sql:get-referenced-files id])
-                   (map :id))]
+  (let [ids (->> (db/exec! cfg [sql:get-referenced-files id])
+                 (sequence bfc/xf-map-id))]
 
     (l/trc :hint "absorbing library"
            :library-id (str id)
            :files (str/join "," (map str ids)))
 
-    (run! (partial absorb-library-by-file! cfg ldata) ids)
+    (run! (partial absorb-library-by-file cfg data) ids)
     library))
 
-(defn absorb-library!
+(defn absorb-library
   [{:keys [::db/conn] :as cfg} id]
-  (let [file (-> (get-file cfg id
-                           :lock-for-update? true
-                           :include-deleted? true)
+  (let [file (-> (bfc/get-file cfg id
+                               :realize? true
+                               :lock-for-update? true
+                               :include-deleted? true)
                  (check-version!))
 
         proj (db/get* conn :project {:id (:project-id file)}
@@ -883,7 +978,7 @@
     (-> (cfeat/get-team-enabled-features cf/flags team)
         (cfeat/check-file-features! (:features file)))
 
-    (absorb-library cfg file)))
+    (absorb-library* cfg file)))
 
 (defn- set-file-shared
   [{:keys [::db/conn] :as cfg} {:keys [profile-id id] :as params}]
@@ -896,23 +991,29 @@
                ;; file, we need to perform more complex operation,
                ;; so in this case we retrieve the complete file and
                ;; perform all required validations.
-               (let [file (-> (absorb-library! cfg id)
+               (let [file (-> (absorb-library cfg id)
                               (assoc :is-shared false))]
                  (db/delete! conn :file-library-rel {:library-file-id id})
                  (db/update! conn :file
                              {:is-shared false
-                              :modified-at (dt/now)}
+                              :modified-at (ct/now)}
                              {:id id})
-                 (select-keys file [:id :name :is-shared]))
+                 file)
 
                (and (false? (:is-shared file))
                     (true? (:is-shared params)))
                (let [file (assoc file :is-shared true)]
                  (db/update! conn :file
                              {:is-shared true
-                              :modified-at (dt/now)}
+                              :modified-at (ct/now)}
                              {:id id})
                  file)
+
+               (= (:is-shared file) (:is-shared params))
+               ;; File is already in the desired state (idempotent);
+               ;; this can happen when the frontend sends a duplicate
+               ;; request due to optimistic updates or race conditions.
+               file
 
                :else
                (ex/raise :type :validation
@@ -935,6 +1036,7 @@
 
 (sv/defmethod ::set-file-shared
   {::doc/added "1.17"
+   ::rpc/id-type :file
    ::webhooks/event? true
    ::sm/params schema:set-file-shared}
   [cfg {:keys [::rpc/profile-id] :as params}]
@@ -943,12 +1045,18 @@
 ;; --- MUTATION COMMAND: delete-file
 
 (defn- mark-file-deleted
-  [conn file-id]
-  (let [file (db/update! conn :file
-                         {:deleted-at (dt/now)}
-                         {:id file-id}
-                         {::db/return-keys [:id :name :is-shared :deleted-at
-                                            :project-id :created-at :modified-at]})]
+  [conn team file-id]
+  (let [delay (ldel/get-deletion-delay team)
+        file  (db/update! conn :file
+                          {:deleted-at (ct/in-future delay)}
+                          {:id file-id}
+                          {::db/return-keys [:id :name :is-shared :deleted-at
+                                             :project-id :created-at :modified-at]})]
+
+    ;; Remove all possible relations for that file
+    (db/delete! conn :file-library-rel
+                {:library-file-id file-id})
+
     (wrk/submit! {::db/conn conn
                   ::wrk/task :delete-object
                   ::wrk/params {:object :file
@@ -964,7 +1072,18 @@
 (defn- delete-file
   [{:keys [::db/conn] :as cfg} {:keys [profile-id id] :as params}]
   (check-edition-permissions! conn profile-id id)
-  (let [file (mark-file-deleted conn id)]
+  (let [team (teams/get-team conn
+                             :profile-id profile-id
+                             :file-id id)
+        file (mark-file-deleted conn team id)
+        msgbus (::mbus/msgbus cfg)]
+
+    (mbus/pub! msgbus
+               :topic id
+               :message {:type :file-deleted
+                         :file-id id
+                         :profile-id profile-id})
+
     (rph/with-meta (rph/wrap)
       {::audit/props {:project-id (:project-id file)
                       :name (:name file)
@@ -973,10 +1092,30 @@
 
 (sv/defmethod ::delete-file
   {::doc/added "1.17"
+   ::rpc/id-type :file
    ::webhooks/event? true
    ::sm/params schema:delete-file}
   [cfg {:keys [::rpc/profile-id] :as params}]
   (db/tx-run! cfg delete-file (assoc params :profile-id profile-id)))
+
+;; --- Library relation helpers
+
+(defn- check-library-team-ownership!
+  "Verify that file and library belong to the same team.
+  Prevents cross-team library relation injection."
+  [conn file-id library-id]
+  (let [sql "SELECT EXISTS (
+               SELECT 1 FROM file AS f
+               JOIN project AS fp ON (fp.id = f.project_id)
+               JOIN file AS l ON (l.id = ?)
+               JOIN project AS lp ON (lp.id = l.project_id)
+               WHERE f.id = ? AND fp.team_id = lp.team_id
+             ) AS ok"
+        row (db/exec-one! conn [sql library-id file-id])]
+    (when-not (:ok row)
+      (ex/raise :type :not-found
+                :code :object-not-found
+                :hint "file and library must belong to the same team"))))
 
 ;; --- MUTATION COMMAND: link-file-to-library
 
@@ -987,7 +1126,10 @@
 
 (defn link-file-to-library
   [conn {:keys [file-id library-id] :as params}]
-  (db/exec-one! conn [sql:link-file-to-library file-id library-id]))
+  (db/exec-one! conn [sql:link-file-to-library file-id library-id])
+  (bfc/upsert-file-library-sync! conn {:file-id file-id
+                                       :library-file-id library-id
+                                       :synced-at (ct/now)}))
 
 (def ^:private
   schema:link-file-to-library
@@ -996,18 +1138,30 @@
    [:library-id ::sm/uuid]])
 
 (sv/defmethod ::link-file-to-library
+  "Link a file to a library. Returns the recursive list of libraries used by that library"
   {::doc/added "1.17"
    ::webhooks/event? true
-   ::sm/params schema:link-file-to-library}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id library-id] :as params}]
+   ::sm/params schema:link-file-to-library
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id file-id library-id] :as params}]
+
   (when (= file-id library-id)
     (ex/raise :type :validation
               :code :invalid-library
               :hint "A file cannot be linked to itself"))
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (check-edition-permissions! conn profile-id library-id)
-    (link-file-to-library conn params)))
+
+  (check-edition-permissions! conn profile-id file-id)
+  (check-edition-permissions! conn profile-id library-id)
+  (check-library-team-ownership! conn file-id library-id)
+
+  (let [transitive-deps (bfc/get-libraries cfg [library-id])]
+    (when (contains? transitive-deps file-id)
+      (ex/raise :type :validation
+                :code :circular-library-reference
+                :hint "linking this library would create a circular dependency")))
+
+  (link-file-to-library conn params)
+  (bfc/get-libraries cfg [library-id]))
 
 ;; --- MUTATION COMMAND: unlink-file-from-library
 
@@ -1025,22 +1179,22 @@
 (sv/defmethod ::unlink-file-from-library
   {::doc/added "1.17"
    ::webhooks/event? true
-   ::sm/params schema:unlink-file-to-library}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (unlink-file-from-library conn params)
-    nil))
+   ::sm/params schema:unlink-file-to-library
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id file-id library-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (check-edition-permissions! conn profile-id library-id)
+  (check-library-team-ownership! conn file-id library-id)
+  (unlink-file-from-library conn params)
+  nil)
 
 ;; --- MUTATION COMMAND: update-sync
 
 (defn update-sync
   [conn {:keys [file-id library-id] :as params}]
-  (db/update! conn :file-library-rel
-              {:synced-at (dt/now)}
-              {:file-id file-id
-               :library-file-id library-id}
-              {::db/return-keys true}))
+  (bfc/upsert-file-library-sync! conn {:file-id file-id
+                                       :library-file-id library-id
+                                       :synced-at (ct/now)}))
 
 (def ^:private schema:update-file-library-sync-status
   [:map {:title "update-file-library-sync-status"}
@@ -1050,12 +1204,13 @@
 (sv/defmethod ::update-file-library-sync-status
   "Update the synchronization status of a file->library link"
   {::doc/added "1.17"
-   ::sm/params schema:update-file-library-sync-status}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (update-sync conn params)))
-
+   ::sm/params schema:update-file-library-sync-status
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id file-id library-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (check-edition-permissions! conn profile-id library-id)
+  (check-library-team-ownership! conn file-id library-id)
+  (update-sync conn params))
 
 ;; --- MUTATION COMMAND: ignore-sync
 
@@ -1063,22 +1218,165 @@
   [conn {:keys [file-id date] :as params}]
   (db/update! conn :file
               {:ignore-sync-until date
-               :modified-at (dt/now)}
+               :modified-at (ct/now)}
               {:id file-id}
               {::db/return-keys true}))
 
 (def ^:private schema:ignore-file-library-sync-status
   [:map {:title "ignore-file-library-sync-status"}
    [:file-id ::sm/uuid]
-   [:date ::dt/instant]])
+   [:date ::ct/inst]])
 
 ;; TODO: improve naming
 (sv/defmethod ::ignore-file-library-sync-status
   "Ignore updates in linked files"
   {::doc/added "1.17"
-   ::sm/params schema:ignore-file-library-sync-status}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (->  (ignore-sync conn params)
-         (update :features db/decode-pgarray #{}))))
+   ::sm/params schema:ignore-file-library-sync-status
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id file-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (->  (ignore-sync conn params)
+       (update :features db/decode-pgarray #{})))
+
+;; --- MUTATION COMMAND: delete-files-immediatelly
+
+(def ^:private sql:get-delete-team-files-candidates
+  "SELECT f.id
+    FROM file AS f
+    JOIN project AS p ON (p.id = f.project_id)
+    JOIN team AS t ON (t.id = p.team_id)
+   WHERE t.deleted_at IS NULL
+     AND t.id = ?
+     AND f.id = ANY(?::uuid[])")
+
+(def ^:private schema:permanently-delete-team-files
+  [:map {:title "permanently-delete-team-files"}
+   [:team-id ::sm/uuid]
+   [:ids [::sm/set ::sm/uuid]]])
+
+(defn- permanently-delete-team-files
+  [{:keys [::db/conn]} {:keys [::rpc/request-at team-id ids]}]
+  (let [ids (into #{}
+                  d/xf:map-id
+                  (db/exec! conn [sql:get-delete-team-files-candidates team-id
+                                  (db/create-array conn "uuid" ids)]))]
+
+    (reduce (fn [acc id]
+              (events/tap :progress {:file-id id :index (inc (count acc)) :total (count ids)})
+              (db/update! conn :file
+                          {:deleted-at request-at}
+                          {:id id}
+                          {::db/return-keys false})
+              (wrk/submit! {::db/conn conn
+                            ::wrk/task :delete-object
+                            ::wrk/params {:object :file
+                                          :deleted-at request-at
+                                          :id id}})
+              (conj acc id))
+            #{}
+            ids)))
+
+(sv/defmethod ::permanently-delete-team-files
+  "Mark the specified files to be deleted immediatelly on the
+  specified team. The team-id on params will be used to filter and
+  check writable permissons on team."
+
+  {::doc/added "2.13"
+   ::sm/params schema:permanently-delete-team-files}
+
+  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id] :as params}]
+  (teams/check-edition-permissions! pool profile-id team-id)
+  (sse/response #(db/tx-run! cfg permanently-delete-team-files params)))
+
+;; --- MUTATION COMMAND: restore-files-immediatelly
+
+(def ^:private sql:resolve-editable-files
+  "SELECT f.id, f.project_id
+     FROM file AS f
+     JOIN project AS p ON (p.id = f.project_id)
+     JOIN team AS t ON (t.id = p.team_id)
+    WHERE t.deleted_at IS NULL
+      AND t.id = ?
+      AND f.id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-files
+  "UPDATE file SET deleted_at = null, has_media_trimmed = false
+    WHERE id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-file-media-objects
+  "UPDATE file_media_object SET deleted_at = null
+    WHERE file_id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-file-changes
+  "UPDATE file_change SET deleted_at = null
+    WHERE file_id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-file-data
+  "UPDATE file_data SET deleted_at = null
+    WHERE file_id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-file-thumbnails
+  "UPDATE file_thumbnail SET deleted_at = null
+    WHERE file_id = ANY(?::uuid[])")
+
+(def ^:private sql:restore-file-tagged-object-thumbnails
+  "UPDATE file_tagged_object_thumbnail SET deleted_at = null
+    WHERE file_id = ANY(?::uuid[])")
+
+(defn- restore-files
+  [conn file-ids]
+  (let [file-ids (db/create-array conn "uuid" file-ids)]
+    (db/exec-one! conn [sql:restore-files file-ids])
+    (db/exec-one! conn [sql:restore-file-media-objects file-ids])
+    (db/exec-one! conn [sql:restore-file-changes file-ids])
+    (db/exec-one! conn [sql:restore-file-data file-ids])
+    (db/exec-one! conn [sql:restore-file-thumbnails file-ids])
+    (db/exec-one! conn [sql:restore-file-tagged-object-thumbnails file-ids])))
+
+(def ^:private sql:restore-projects
+  "UPDATE project SET deleted_at = null WHERE id = ANY(?::uuid[])")
+
+(defn- restore-projects
+  [conn project-ids]
+  (let [project-ids (db/create-array conn "uuid" project-ids)]
+    (->> (db/exec-one! conn [sql:restore-projects project-ids])
+         (db/get-update-count))))
+
+(defn- restore-deleted-team-files
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id team-id ids]}]
+  (teams/check-edition-permissions! conn profile-id team-id)
+  (let [total-files
+        (count ids)
+
+        {:keys [files projects]}
+        (reduce (fn [result {:keys [id project-id]}]
+                  (let [index (-> result :files count)]
+                    (events/tap :progress {:file-id id :index (inc index) :total total-files})
+                    (-> result
+                        (update :files conj id)
+                        (update :projects conj project-id))))
+                {:files #{} :projects #{}}
+                (db/plan conn [sql:resolve-editable-files team-id
+                               (db/create-array conn "uuid" ids)]))]
+
+    (when (seq files)
+      (restore-files conn files))
+
+    (when (seq projects)
+      (restore-projects conn projects))
+
+    files))
+
+(def ^:private schema:restore-deleted-team-files
+  [:map {:title "restore-deleted-team-files"}
+   [:team-id ::sm/uuid]
+   [:ids [::sm/set ::sm/uuid]]])
+
+(sv/defmethod ::restore-deleted-team-files
+  "Removes the deletion mark from the specified files (and respective
+  projects) on the specified team."
+  {::doc/added "2.13"
+   ::sse/stream? true
+   ::sm/params schema:restore-deleted-team-files}
+  [cfg params]
+  (sse/response #(db/tx-run! cfg restore-deleted-team-files params)))

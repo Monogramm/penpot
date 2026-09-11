@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.notifications.inline-notification
   (:require-macros [app.main.style :as stl])
@@ -21,16 +21,16 @@
   [{:keys [content accept cancel links] :as props}]
 
   [:> actionable* {:class (stl/css :new-inline)
-                   :cancelLabel (:label cancel)
-                   :onCancel (:callback cancel)
-                   :acceptLabel (:label accept)
-                   :onAccept (:callback accept)}
+                   :cancel-label (:label cancel)
+                   :on-cancel (:callback cancel)
+                   :accept-label (:label accept)
+                   :on-accept (:callback accept)}
    content
 
    (when (some? links)
      [:nav {:class (stl/css :link-nav)}
       (for [[index link] (d/enumerate links)]
-        [:& lb/link-button {:key (dm/str "link-" index)
-                            :class (stl/css :link)
-                            :on-click (:callback link)
-                            :value (:label link)}])])])
+        [:> lb/link-button* {:key (dm/str "link-" index)
+                             :class (stl/css :link)
+                             :on-click (:callback link)
+                             :value (:label link)}])])])

@@ -2,49 +2,80 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.logic.shapes
   (:require
    [app.common.data :as d]
+   [app.common.data.macros :as dm]
    [app.common.files.changes-builder :as pcb]
    [app.common.files.helpers :as cfh]
    [app.common.geom.shapes :as gsh]
+   [app.common.logic.variant-properties :as clvp]
    [app.common.types.component :as ctk]
    [app.common.types.container :as ctn]
+   [app.common.types.pages-list :as ctpl]
    [app.common.types.shape.interactions :as ctsi]
    [app.common.types.shape.layout :as ctl]
+   [app.common.types.shape.token :as ctst]
+   [app.common.types.text :as ctt]
    [app.common.types.token :as cto]
-   [app.common.uuid :as uuid]))
+   [app.common.uuid :as uuid]
+   [clojure.set :as set]))
+
+(def text-typography-style-attrs (set ctt/text-typography-attrs))
 
 (defn- generate-unapply-tokens
   "When updating attributes that have a token applied, we must unapply it, because the value
-   of the attribute now has been given directly, and does not come from the token."
+  of the attribute now has been given directly, and does not come from the token.
+  When applying a typography asset style we also unapply any typographic tokens."
   [changes objects changed-sub-attr]
-  (let [mod-obj-changes (->> (:redo-changes changes)
+  (let [new-objects     (pcb/get-objects changes)
+        mod-obj-changes (->> (:redo-changes changes)
                              (filter #(= (:type %) :mod-obj)))
 
-        check-attr (fn [shape changes attr]
-                     (let [tokens      (get shape :applied-tokens {})
-                           token-attrs (cto/shape-attr->token-attrs attr changed-sub-attr)]
-                       (if (some #(contains? tokens %) token-attrs)
-                         (pcb/update-shapes changes [(:id shape)] #(cto/unapply-token-id % token-attrs))
-                         changes)))
+        text-changed-attrs
+        (fn [shape]
+          (let [new-shape (get new-objects (:id shape))
+                attrs     (ctt/get-diff-attrs (:content shape) (:content new-shape))
 
-        check-shape (fn [changes mod-obj-change]
-                      (let [shape (get objects (:id mod-obj-change))
-                            xf (comp (filter #(= (:type %) :set))
-                                     (map :attr))
-                            attrs (into [] xf (:operations mod-obj-change))]
-                        (reduce (partial check-attr shape)
-                                changes
-                                attrs)))]
-    (reduce check-shape
-            changes
-            mod-obj-changes)))
+                attrs     (cond-> attrs
+                            ;; Unapply token when applying typography asset style
+                            (seq (set/intersection text-typography-style-attrs attrs))
+                            (into cto/typography-keys)
+
+                            ;; Unapply font-weight when changing the font-family attribute
+                            (and (:font-id attrs) (ctst/font-weight-applied? shape))
+                            (conj :font-weight))]
+            (apply set/union (map cto/shape-attr->token-attrs attrs))))
+
+        check-attr
+        (fn [shape changes attr]
+          (let [shape-id    (dm/get-prop shape :id)
+                tokens      (get shape :applied-tokens {})
+                token-attrs (if (and (cfh/text-shape? shape) (= attr :content))
+                              (text-changed-attrs shape)
+                              (cto/shape-attr->token-attrs attr changed-sub-attr))]
+
+            (if (some #(contains? tokens %) token-attrs)
+              (pcb/update-shapes changes [shape-id] #(cto/unapply-tokens-from-shape % token-attrs))
+              changes)))
+
+        check-shape
+        (fn [changes mod-obj-change]
+          (let [shape (get objects (:id mod-obj-change))
+                attrs (into []
+                            (comp (filter #(= (:type %) :set))
+                                  (map :attr))
+                            (:operations mod-obj-change))]
+            (reduce (partial check-attr shape)
+                    changes
+                    attrs)))]
+
+    (reduce check-shape changes mod-obj-changes)))
 
 (defn generate-update-shapes
-  [changes ids update-fn objects {:keys [attrs changed-sub-attr ignore-tree ignore-touched with-objects?]}]
+  [changes ids update-fn objects {:keys [attrs changed-sub-attr ignore-tree ignore-touched with-objects? translation?]}]
   (let [changes   (reduce
                    (fn [changes id]
                      (let [opts {:attrs attrs
@@ -52,16 +83,20 @@
                                  :ignore-touched ignore-touched
                                  :with-objects? with-objects?}]
                        (pcb/update-shapes changes [id] update-fn (d/without-nils opts))))
-                   (-> changes
-                       (pcb/with-objects objects))
+                   (cond-> changes
+                     (some? objects) (pcb/with-objects objects))
                    ids)
-        grid-ids (->> ids (filter (partial ctl/grid-layout? objects)))
-        changes (-> changes
-                    (pcb/update-shapes grid-ids ctl/assign-cell-positions {:with-objects? true})
-                    (pcb/reorder-grid-children ids)
-                    (cond->
-                     (not ignore-touched)
-                      (generate-unapply-tokens objects changed-sub-attr)))]
+        ;; Translation doesn't shift children between grid cells, so
+        ;; cell reassignment + child reorder are no-ops.
+        grid-ids (when-not translation?
+                   (->> ids (filter (partial ctl/grid-layout? objects))))
+        changes (cond-> changes
+                  (seq grid-ids)
+                  (-> (pcb/update-shapes grid-ids ctl/assign-cell-positions {:with-objects? true})
+                      (pcb/reorder-grid-children ids))
+
+                  (not ignore-touched)
+                  (generate-unapply-tokens objects changed-sub-attr))]
     changes))
 
 (defn- generate-update-shape-flags
@@ -78,182 +113,350 @@
     (-> changes
         (pcb/update-shapes ids update-fn {:attrs #{:blocked :hidden}}))))
 
+;; Deleting shapes inside a surviving component main transitively removes their
+;; copies across all pages. Whole-main and component-swap deletions are excluded.
+
+(defn- mutilates-main?
+  "Whether deleting `id` takes a shape out of a component main that survives.
+  `deleted-ids` are all the ids the deletion removes from the page."
+  [objects deleted-ids id]
+  (->> (cfh/get-parent-ids objects id)
+       (some (fn [parent-id]
+               (let [parent (get objects parent-id)]
+                 (and (:main-instance parent)
+                      (not (contains? deleted-ids parent-id))))))))
+
+(defn- build-shape-ref-index
+  "Index every referencing shape by shape-ref and page."
+  [pages-index page-objects]
+  (reduce (fn [index page-id]
+            (reduce (fn [index shape]
+                      (if-let [shape-ref (:shape-ref shape)]
+                        (update index shape-ref (fnil conj []) [page-id (:id shape)])
+                        index))
+                    index
+                    (vals (page-objects page-id))))
+          {}
+          (keys pages-index)))
+
+(defn- collect-copy-deletions
+  "Collect dangling copy roots and their subtree ids by page.
+  `scheduled` prevents duplicate deletions during transitive traversal."
+  [ref-index descendants-of dangling scheduled]
+  (loop [dangling  dangling
+         scheduled scheduled
+         result    {}]
+    (if (empty? dangling)
+      result
+      (let [hits
+            (into #{}
+                  (comp (mapcat ref-index)
+                        (remove (fn [[_ id]] (contains? scheduled id))))
+                  dangling)
+
+            ;; Ancestor subtrees already contain nested hits.
+            nested
+            (into #{}
+                  (mapcat (fn [[page-id id]] (descendants-of page-id id)))
+                  hits)
+
+            subtrees
+            (into []
+                  (comp (remove (fn [[_ id]] (contains? nested id)))
+                        (map (fn [[page-id id]]
+                               [page-id id (-> (descendants-of page-id id)
+                                               (set)
+                                               (conj id))])))
+                  hits)
+
+            deleted
+            (into #{} (mapcat #(nth % 2)) subtrees)]
+        (recur deleted
+               (into scheduled deleted)
+               (reduce (fn [result [page-id root-id ids]]
+                         (-> result
+                             (update-in [page-id :roots]
+                                        (fnil conj (d/ordered-set))
+                                        root-id)
+                             (update-in [page-id :ids] (fnil into #{}) ids)))
+                       result
+                       subtrees))))))
+
+(defn- propagated-copy-deletions
+  "Collect propagated copy deletions unless component sync owns the operation."
+  [objects pages-index page-objects deleted-ids allow-altering-copies]
+  (if (or allow-altering-copies (nil? pages-index))
+    {}
+    (let [dangling (into #{}
+                         (filter #(mutilates-main? objects deleted-ids %))
+                         deleted-ids)]
+      (if (empty? dangling)
+        {}
+        (collect-copy-deletions (build-shape-ref-index pages-index page-objects)
+                                ;; Cache subtrees shared by multiple references.
+                                (memoize (fn [page-id id]
+                                           (cfh/get-children-ids (page-objects page-id) id)))
+                                dangling
+                                deleted-ids)))))
+
+(declare generate-delete-shapes)
+
+(defn- generate-copy-deletions
+  "Delete propagated copy roots through each page's normal deletion workflow."
+  [changes data page pages-index copy-deletions]
+  (reduce-kv (fn [changes pid {:keys [roots]}]
+               (let [options     {:ignore-touched true
+                                  :allow-altering-copies true}
+                     target-page (if (= pid (:id page))
+                                   page
+                                   (get pages-index pid))]
+                 (if (= pid (:id page))
+                   (second (generate-delete-shapes changes roots options))
+                   (let [[_ target-changes]
+                         (generate-delete-shapes (pcb/empty-changes nil pid)
+                                                 data
+                                                 target-page
+                                                 (:objects target-page)
+                                                 roots
+                                                 options)]
+                     (pcb/concat-changes-without-local changes target-changes)))))
+             changes
+             copy-deletions))
+
 (defn generate-delete-shapes
-  [changes file page objects ids {:keys [components-v2 ignore-touched component-swap]}]
-  (let [ids           (cfh/clean-loops objects ids)
+  ([changes file page objects ids options]
+   (generate-delete-shapes (-> changes
+                               (pcb/with-page page)
+                               (pcb/with-objects objects)
+                               (pcb/with-library-data file))
+                           ids
+                           options))
+  ([changes ids {:keys [ignore-touched
+                        allow-altering-copies
+                        ;; We will delete the shapes and its descendants.
+                        ;; ignore-children-fn is used to ignore some descendants
+                        ;; on the deletion process. It should receive a shape and
+                        ;; return a boolean
+                        ignore-children-fn
+                        ignore-mask
+                        ignore-flows-for]
+                 :or {ignore-children-fn (constantly false)
+                      ignore-mask false
+                      ignore-flows-for #{}}}]
+   (let [objects (pcb/get-objects changes)
+         data    (pcb/get-library-data changes)
+         page-id (pcb/get-page-id changes)
+         page    (or (pcb/get-page changes)
+                     (ctpl/get-page data page-id))
 
-        in-component-copy?
-        (fn [shape-id]
-          ;; Look for shapes that are inside a component copy, but are
-          ;; not the root. In this case, they must not be deleted,
-          ;; but hidden (to be able to recover them more easily).
-          ;; Unless we are doing a component swap, in which case we want
-          ;; to delete the old shape
-          (let [shape           (get objects shape-id)]
-            (and (ctn/has-any-copy-parent? objects shape)
-                 (not component-swap))))
+         ids     (cfh/clean-loops objects ids)
+         in-component-copy?
+         (fn [shape-id]
+           ;; Look for shapes that are inside a component copy, but are
+           ;; not the root. In this case, they must not be deleted,
+           ;; but hidden (to be able to recover them more easily).
+           ;; If we want to specifically allow altering the copies, this is
+           ;; a special case, like a component swap, in which case we want
+           ;; to delete the old shape
+           (let [shape           (get objects shape-id)]
+             (and (ctn/has-any-copy-parent? objects shape)
+                  (not allow-altering-copies))))
 
-        [ids-to-delete ids-to-hide]
-        (if components-v2
-          (loop [ids-seq       (seq ids)
-                 ids-to-delete []
-                 ids-to-hide   []]
-            (let [id (first ids-seq)]
-              (if (nil? id)
-                [ids-to-delete ids-to-hide]
-                (if (in-component-copy? id)
-                  (recur (rest ids-seq)
-                         ids-to-delete
-                         (conj ids-to-hide id))
-                  (recur (rest ids-seq)
-                         (conj ids-to-delete id)
-                         ids-to-hide)))))
-          [ids []])
+         [ids-to-delete ids-to-hide]
+         (loop [ids-seq       (seq ids)
+                ids-to-delete []
+                ids-to-hide   []]
+           (let [id (first ids-seq)]
+             (if (nil? id)
+               [ids-to-delete ids-to-hide]
+               (if (in-component-copy? id)
+                 (recur (rest ids-seq)
+                        ids-to-delete
+                        (conj ids-to-hide id))
+                 (recur (rest ids-seq)
+                        (conj ids-to-delete id)
+                        ids-to-hide)))))
 
-        changes (-> changes
-                    (pcb/with-page page)
-                    (pcb/with-objects objects)
-                    (pcb/with-library-data file))
+         lookup  (d/getf objects)
 
-        lookup  (d/getf objects)
+         groups-to-unmask
+         (when-not ignore-mask
+           (reduce (fn [group-ids id]
+                     ;; When the shape to delete is the mask of a masked group,
+                     ;; the mask condition must be removed, and it must be
+                     ;; converted to a normal group.
+                     (let [obj    (lookup id)
+                           parent (lookup (:parent-id obj))]
+                       (if (and (:masked-group parent)
+                                (= id (first (:shapes parent))))
+                         (conj group-ids (:id parent))
+                         group-ids)))
+                   #{}
+                   ids-to-delete)
+           [])
 
-        groups-to-unmask
-        (reduce (fn [group-ids id]
-                  ;; When the shape to delete is the mask of a masked group,
-                  ;; the mask condition must be removed, and it must be
-                  ;; converted to a normal group.
-                  (let [obj    (lookup id)
-                        parent (lookup (:parent-id obj))]
-                    (if (and (:masked-group parent)
-                             (= id (first (:shapes parent))))
-                      (conj group-ids (:id parent))
-                      group-ids)))
-                #{}
-                ids-to-delete)
+         id-to-delete? (set ids-to-delete)
 
-        interacting-shapes
-        (filter (fn [shape]
-                  ;; If any of the deleted shapes is the destination of
-                  ;; some interaction, this must be deleted, too.
-                  (let [interactions (:interactions shape)]
-                    (some #(and (ctsi/has-destination %)
-                                (contains? ids-to-delete (:destination %)))
-                          interactions)))
-                (vals objects))
+         interacting-shapes
+         (into []
+               (filter (fn [shape]
+                         ;; If any of the deleted shapes is the destination of
+                         ;; some interaction, this must be deleted, too.
+                         (let [interactions (:interactions shape)]
+                           (some #(and (ctsi/has-destination %)
+                                       (id-to-delete? (:destination %)))
+                                 interactions))))
+               (vals objects))
 
-        changes
-        (reduce (fn [changes {:keys [id] :as flow}]
-                  (if (contains? ids-to-delete (:starting-frame flow))
-                    (pcb/set-flow changes id nil)
-                    changes))
-                changes
-                (:flows page))
+         changes
+         (->> (:flows page)
+              (reduce
+               (fn [changes [id flow]]
+                 (if (and (id-to-delete? (:starting-frame flow))
+                          (not (contains? ignore-flows-for (:starting-frame flow))))
+                   (-> changes
+                       (pcb/with-page page)
+                       (pcb/set-flow id nil))
+                   changes))
+               changes))
 
 
-        all-parents
-        (reduce (fn [res id]
-                  ;; All parents of any deleted shape must be resized.
-                  (into res (cfh/get-parent-ids objects id)))
-                (d/ordered-set)
-                (concat ids-to-delete ids-to-hide))
+         all-parents
+         (reduce (fn [res id]
+                   ;; All parents of any deleted shape must be resized.
+                   (into res (cfh/get-parent-ids objects id)))
+                 (d/ordered-set)
+                 (concat ids-to-delete ids-to-hide))
 
-        all-children
-        (->> ids-to-delete ;; Children of deleted shapes must be also deleted.
-             (reduce (fn [res id]
-                       (into res (cfh/get-children-ids objects id)))
-                     [])
-             (reverse)
-             (into (d/ordered-set)))
+         ;; Descendants of deleted shapes must be also deleted,
+         ;; except the ignored ones by the function ignore-children-fn
+         descendants-to-delete
+         (->> ids-to-delete
+              (reduce (fn [res id]
+                        (into res (cfh/get-children-ids
+                                   objects
+                                   id
+                                   {:ignore-children-fn ignore-children-fn})))
+                      [])
+              (reverse)
+              (into (d/ordered-set)))
 
-        find-all-empty-parents
-        (fn recursive-find-empty-parents [empty-parents]
-          (let [all-ids   (into empty-parents ids-to-delete)
-                contains? (partial contains? all-ids)
-                xform     (comp (map lookup)
-                                (filter #(or (cfh/group-shape? %) (cfh/bool-shape? %)))
-                                (remove #(->> (:shapes %) (remove contains?) seq))
-                                (map :id))
-                parents   (into #{} xform all-parents)]
-            (if (= empty-parents parents)
-              empty-parents
-              (recursive-find-empty-parents parents))))
+         find-all-empty-parents
+         (fn recursive-find-empty-parents [empty-parents]
+           (let [all-ids   (into empty-parents ids-to-delete)
+                 contains? (partial contains? all-ids)
+                 xform     (comp (map lookup)
+                                 (filter #(or (cfh/group-shape? %) (cfh/bool-shape? %) (ctk/is-variant-container? %)))
+                                 (remove #(->> (:shapes %) (remove contains?) seq))
+                                 (map :id))
+                 parents   (into #{} xform all-parents)]
+             (if (= empty-parents parents)
+               empty-parents
+               (recursive-find-empty-parents parents))))
 
-        empty-parents
-        ;; Any parent whose children are all deleted, must be deleted too.
-        ;; Unless we are during a component swap: in this case we are replacing a shape by
-        ;; other one, so must not delete empty parents.
-        (if-not component-swap
-          (into (d/ordered-set) (find-all-empty-parents #{}))
-          #{})
+         empty-parents
+         ;; Any parent whose children are all deleted, must be deleted too.
+         ;; If we want to specifically allow altering the copies, this is a special case,
+         ;; for example during a component swap. in this case we are replacing a shape by
+         ;; other one, so must not delete empty parents.
+         (if-not allow-altering-copies
+           (into (d/ordered-set) (find-all-empty-parents #{}))
+           #{})
 
-        components-to-delete
-        (if components-v2
-          (reduce (fn [components id]
-                    (let [shape (get objects id)]
-                      (if (and (= (:component-file shape) (:id file)) ;; Main instances should exist only in local file
-                               (:main-instance shape))                ;; but check anyway
-                        (conj components (:component-id shape))
-                        components)))
-                  []
-                  (into ids-to-delete all-children))
-          [])
+         components-to-delete
+         (reduce (fn [components id]
+                   (let [shape (get objects id)]
+                     (if (and (= (:component-file shape) (:id data)) ;; Main instances should exist only in local file
+                              (:main-instance shape))                ;; but check anyway
+                       (conj components (:component-id shape))
+                       components)))
+                 []
+                 (into ids-to-delete descendants-to-delete))
 
-        ids-set (set ids-to-delete)
+         ;; Empty main parents also leave their copies dangling.
+         all-deleted-ids
+         (-> (set ids-to-delete)
+             (into descendants-to-delete)
+             (into empty-parents))
 
-        guides-to-delete
-        (->> (:guides page)
-             (vals)
-             (filter #(contains? ids-set (:frame-id %)))
-             (map :id))
+         pages-index
+         (when data
+           (or (:pages-index data)
+               (dm/get-in data [:data :pages-index])))
 
-        changes (reduce (fn [changes guide-id]
-                          (pcb/set-flow changes guide-id nil))
-                        changes
-                        guides-to-delete)
+         page-objects
+         (fn [id]
+           (if (= id (:id page))
+             objects
+             (dm/get-in pages-index [id :objects])))
 
-        changes (reduce (fn [changes component-id]
-                          ;; It's important to delete the component before the main instance, because we
-                          ;; need to store the instance position if we want to restore it later.
-                          (pcb/delete-component changes component-id (:id page)))
-                        changes
-                        components-to-delete)
+         copy-deletions
+         (propagated-copy-deletions objects pages-index page-objects
+                                    all-deleted-ids allow-altering-copies)
 
-        changes (-> changes
-                    (generate-update-shape-flags ids-to-hide objects {:hidden true})
-                    (pcb/remove-objects all-children {:ignore-touched true})
-                    (pcb/remove-objects ids-to-delete {:ignore-touched ignore-touched})
-                    (pcb/remove-objects empty-parents)
-                    (pcb/resize-parents all-parents)
-                    (pcb/update-shapes groups-to-unmask
-                                       (fn [shape]
-                                         (assoc shape :masked-group false)))
-                    (pcb/update-shapes (map :id interacting-shapes)
-                                       (fn [shape]
-                                         (d/update-when shape :interactions
-                                                        (fn [interactions]
-                                                          (into []
-                                                                (remove #(and (ctsi/has-destination %)
-                                                                              (contains? ids-to-delete (:destination %))))
-                                                                interactions))))))]
-    [all-parents changes]))
+         ;; Propagated copy deletions supersede hiding the same shapes.
+         ids-to-hide
+         (if-let [deleted (seq (get-in copy-deletions [(:id page) :ids]))]
+           (into [] (remove (set deleted)) ids-to-hide)
+           ids-to-hide)
+
+         guides-to-delete
+         (->> (:guides page)
+              (vals)
+              (filter #(id-to-delete? (:frame-id %)))
+              (map :id))
+
+         changes (reduce (fn [changes guide-id]
+                           (-> changes
+                               (pcb/with-page page)
+                               (pcb/set-guide guide-id nil)))
+                         changes
+                         guides-to-delete)
+
+         changes (reduce (fn [changes component-id]
+                           ;; It's important to delete the component before the main instance, because we
+                           ;; need to store the instance position if we want to restore it later.
+                           (pcb/delete-component changes component-id (:id page)))
+                         changes
+                         components-to-delete)
+
+         changes (-> changes
+                     (generate-update-shape-flags ids-to-hide objects {:hidden true})
+                     (pcb/remove-objects descendants-to-delete {:ignore-touched true})
+                     (pcb/remove-objects ids-to-delete {:ignore-touched ignore-touched})
+                     (pcb/remove-objects empty-parents)
+                     (generate-copy-deletions data page pages-index copy-deletions)
+                     (pcb/resize-parents all-parents)
+                     (pcb/update-shapes groups-to-unmask
+                                        (fn [shape]
+                                          (assoc shape :masked-group false)))
+                     (pcb/update-shapes (map :id interacting-shapes)
+                                        (fn [shape]
+                                          (d/update-when shape :interactions
+                                                         (fn [interactions]
+                                                           (into []
+                                                                 (remove #(and (ctsi/has-destination %)
+                                                                               (id-to-delete? (:destination %))))
+                                                                 interactions))))))]
+     [all-parents changes])))
 
 
 (defn generate-relocate
-  [changes objects parent-id page-id to-index ids & {:keys [cell ignore-parents?]}]
-  (let [ids    (cfh/order-by-indexed-shapes objects ids)
-        shapes (map (d/getf objects) ids)
-        parent (get objects parent-id)
+  [changes parent-id to-index ids & {:keys [cell ignore-parents?]}]
+  (let [objects     (pcb/get-objects changes)
+        ids         (cfh/order-by-indexed-shapes objects ids)
+        shapes      (map (d/getf objects) ids)
+        parent      (get objects parent-id)
         all-parents (into #{parent-id} (map #(cfh/get-parent-id objects %)) ids)
-        parents  (if ignore-parents? #{parent-id} all-parents)
+        parents     (if ignore-parents? #{parent-id} all-parents)
 
-        children-ids
-        (->> ids
-             (mapcat #(cfh/get-children-ids-with-self objects %)))
+        children-ids (mapcat #(cfh/get-children-ids-with-self objects %) ids)
 
-        child-heads
-        (->> ids
-             (mapcat #(ctn/get-child-heads objects %))
-             (map :id))
+        child-heads (mapcat #(ctn/get-child-heads objects %) ids)
+
+        child-heads-ids (map :id child-heads)
+
+        variant-shapes (filter ctk/is-variant? shapes)
 
         component-main-parent
         (ctn/find-component-main objects parent false)
@@ -265,7 +468,7 @@
                result #{}]
 
           (if-not current-id
-                   ;; Base case, no next element
+            ;; Base case, no next element
             result
 
             (let [group (get objects current-id)]
@@ -273,14 +476,14 @@
                        (not= current-id parent-id)
                        (empty? (remove removed-id? (:shapes group))))
 
-                       ;; Adds group to the remove and check its parent
+                ;; Adds group to the remove and check its parent
                 (let [to-check (concat to-check [(cfh/get-parent-id objects current-id)])]
                   (recur (first to-check)
                          (rest to-check)
                          (conj removed-id? current-id)
                          (conj result current-id)))
 
-                       ;; otherwise recur
+                ;; otherwise recur
                 (recur (first to-check)
                        (rest to-check)
                        removed-id?
@@ -337,15 +540,25 @@
                      (map :id)))
 
         index-cell-data  (when to-index (ctl/get-cell-by-index parent to-index))
-        cell (or cell (and index-cell-data [(:row index-cell-data) (:column index-cell-data)]))]
+        cell (or cell (and index-cell-data [(:row index-cell-data) (:column index-cell-data)]))
+
+
+        ;; Parents that are a variant-container that becomes empty
+        empty-variant-cont (reduce
+                            (fn [to-delete parent-id]
+                              (let [parent (get objects parent-id)]
+                                (if (and (ctk/is-variant-container? parent)
+                                         (empty? (remove (set ids) (:shapes parent))))
+                                  (conj to-delete (:id parent))
+                                  to-delete)))
+                            #{}
+                            (remove #(= % parent-id) all-parents))]
 
     (-> changes
-        (pcb/with-page-id page-id)
-        (pcb/with-objects objects)
-
-        ;; Remove layout-item properties when moving a shape outside a layout
+        ;; Remove layout-item properties and tokens when moving a shape outside a layout
         (cond-> (not (ctl/any-layout? parent))
-          (pcb/update-shapes ids ctl/remove-layout-item-data))
+          (-> (pcb/update-shapes ids ctl/remove-layout-item-data)
+              (pcb/update-shapes ids cto/unapply-layout-item-tokens)))
 
         ;; Remove the hide in viewer flag
         (cond-> (and (not= uuid/zero parent-id) (cfh/frame-shape? parent))
@@ -353,7 +566,7 @@
 
         ;; Remove the swap slots if it is moving to a different component
         (pcb/update-shapes
-         child-heads
+         child-heads-ids
          (fn [shape]
            (cond-> shape
              (not= component-main-parent (ctn/find-component-main objects shape false))
@@ -365,7 +578,15 @@
 
         ;; Add component-root property when moving a component outside a component
         (cond-> (not (ctn/get-instance-root objects parent))
-          (pcb/update-shapes child-heads #(assoc % :component-root true)))
+          (pcb/update-shapes child-heads-ids #(assoc % :component-root true)))
+
+        ;; Remove variant info and rename when moving outside a variant-container
+        (cond-> (not (ctk/is-variant-container? parent))
+          (clvp/generate-make-shapes-no-variant variant-shapes))
+
+        ;; Add variant info and rename when moving into a different variant-container
+        (cond-> (ctk/is-variant-container? parent)
+          (clvp/generate-make-shapes-variant child-heads parent))
 
         ;; Move the shapes
         (pcb/change-parent parent-id
@@ -440,7 +661,11 @@
           (pcb/update-shapes ids #(assoc % :blocked true)))
 
         ;; Resize parent containers that need to
-        (pcb/resize-parents parents))))
+        (pcb/resize-parents parents)
+
+        ;; Remove parents when are a variant-container that becomes empty
+        (cond-> (seq empty-variant-cont)
+          (#(second (generate-delete-shapes % empty-variant-cont {})))))))
 
 (defn change-show-in-viewer
   [shape hide?]
@@ -451,5 +676,12 @@
   (update shape :interactions ctsi/add-interaction interaction))
 
 (defn show-in-viewer
+  "Auto-unhide the shape in viewer when it becomes an interaction
+   destination, but only when the user has not explicitly hidden it.
+   Preserves explicit `:hide-in-viewer true` so that adding or updating
+   an interaction whose destination has been deliberately hidden does not
+   silently flip the viewer-visibility flag the user set. See #9049."
   [shape]
-  (dissoc shape :hide-in-viewer))
+  (if (true? (:hide-in-viewer shape))
+    shape
+    (dissoc shape :hide-in-viewer)))

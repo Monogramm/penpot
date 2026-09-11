@@ -1,189 +1,264 @@
-# Contributing Guide #
+# Contributing Guide
 
-Thank you for your interest in contributing to Penpot. This is a
-generic guide that details how to contribute to Penpot in a way that
-is efficient for everyone. If you want a specific documentation for
-different parts of the platform, please refer to `docs/` directory.
+Thank you for your interest in contributing to Penpot. This guide covers
+how to propose changes, submit fixes, and follow project conventions.
 
+For architecture details, module-specific guidelines, and AI-agent
+instructions, see [AGENTS.md](AGENTS.md). For final user technical
+documentation, see the `docs/` directory or the rendered [Help
+Center](https://help.penpot.app/).
 
-## Reporting Bugs ##
+## Table of Contents
 
-We are using [GitHub Issues](https://github.com/penpot/penpot/issues)
-for our public bugs. We keep a close eye on this and try to make it
-clear when we have an internal fix in progress. Before filing a new
-task, try to make sure your problem doesn't already exist.
+- [Prerequisites](#prerequisites)
+- [Reporting Bugs](#reporting-bugs)
+- [Pull Requests](#pull-requests)
+  - [Workflow](#workflow)
+  - [Branch naming](#branch-naming)
+  - [Format](#format)
+    - [Title format](#title-format)
+    - [Description](#description)
+  - [Review process](#review-process)
+  - [What we won't accept](#what-we-wont-accept)
+  - [Good first issues](#good-first-issues)
+- [Commit Guidelines](#commit-guidelines)
+  - [Commit types](#commit-types)
+  - [Rules](#rules)
+  - [Examples](#examples)
+- [Formatting and Linting](#formatting-and-linting)
+- [Changelog](#changelog)
+- [Code of Conduct](#code-of-conduct)
+- [Developer's Certificate of Origin (DCO)](#developers-certificate-of-origin-dco)
 
-If you found a bug, please report it, as far as possible with:
+## Prerequisites
 
-- a detailed explanation of steps to reproduce the error
-- a browser and the browser version used
-- a dev tools console exception stack trace (if it is available)
+- **Language**: Penpot is written primarily in Clojure (backend), ClojureScript
+  (frontend/exporter), and Rust (render-wasm). Familiarity with the Clojure
+  ecosystem is expected for most contributions.
+- **Issue tracker**: We use [GitHub Issues](https://github.com/penpot/penpot/issues)
+  for public bugs and [Taiga](https://tree.taiga.io/project/penpot/) for
+  internal project management. Changelog entries reference both.
 
-If you found a bug that you consider better discuss in private (for
-example: security bugs), consider first send an email to
-`support@penpot.app`.
+## Reporting Bugs
 
-**We don't have formal bug bounty program for security reports; this
-is an open source application and your contribution will be recognized
-in the changelog.**
+Report bugs via [GitHub Issues](https://github.com/penpot/penpot/issues).
+Before filing, search existing issues to avoid duplicates.
 
+Include the following when possible:
 
-## Pull requests ##
+1. Steps to reproduce the error.
+2. Browser and browser version used.
+3. DevTools console exception stack trace (if available).
 
-If you want propose a change or bug fix with the Pull-Request system
-firstly you should carefully read the **DCO** section and format your
-commits accordingly.
+For security bugs or issues better discussed in private, email
+`support@penpot.app` or report them on [Github Security
+Advisories](https://github.com/penpot/penpot/security/advisories)
 
-If you intend to fix a bug it's fine to submit a pull request right
-away but we still recommend to file an issue detailing what you're
-fixing. This is helpful in case we don't accept that specific fix but
-want to keep track of the issue.
+> **Note:** We do not have a formal bug bounty program. Security
+> contributions are recognized in the changelog.
 
-If you want to implement or start working in a new feature, please
-open a **question** / **discussion** issue for it. No pull-request
-will be accepted without previous chat about the changes,
-independently if it is a new feature, already planned feature or small
-quick win.
+## Pull Requests
 
-If is going to be your first pull request, You can learn how from this
-free video series:
+### Workflow
 
-https://egghead.io/courses/how-to-contribute-to-an-open-source-project-on-github
+1. **Read the DCO** — see [Developer's Certificate of Origin](#developers-certificate-of-origin-dco)
+   below. All code patches must include a `Signed-off-by` line.
+2. **Discuss before building** — open a [GitHub
+   Issue](https://github.com/penpot/penpot/issues) before starting work on
+   a new feature or significant change. For planned features on the roadmap,
+   reference the corresponding Taiga story. Do not expect your contribution
+   to be accepted if you submit it without prior discussion — this applies
+   to new features, planned features, and quick wins alike.
+3. **Bug fixes** — you may submit a PR directly, but we still recommend
+   filing an issue first so we can track it independently of your fix.
+4. **Format and lint** — run the checks described in
+   [Formatting and Linting](#formatting-and-linting) before submitting.
 
-We will use the `easy fix` mark for tag for indicate issues that are
-easy for beginners.
+### Branch naming
 
+Branch names are not enforced, but we recommend the following:
 
-## Commit Guidelines ##
+- **`issue-NNNN`** — when working from a GitHub issue, name the branch after
+  it (e.g. `issue-11525`). This makes each PR's origin self-evident.
+- Otherwise, use a short, descriptive name with words separated by hyphens
+  and no slashes (e.g. `fix-ellipse-icon-typo`, `feat-auto-link-libraries`).
 
-We have very precise rules over how our git commit messages can be formatted.
+Since PRs are squash-merged, the branch name does not survive into the
+commit history — what matters is the [PR title](#title-format).
 
-The commit message format is:
+### Format
+
+#### Title
+
+> **IMPORTANT:** When a PR is squash-merged, the PR title becomes the
+> commit message on the main branch. Getting the title right matters.
+
+Pull request titles **must** follow the same convention as commit subjects:
 
 ```
-<type> <subject>
+:emoji: Subject line (imperative, capitalized, no period, <=70 chars)
+```
+
+Read [Creating Commits](./.serena/memories/workflow/creating-commits.md)
+for more concrete information.
+
+#### Description
+
+Every pull request should include a description that helps reviewers
+understand the change quickly:
+
+1. **What and why** — describe the change and its motivation.
+2. **Link related issues** — use `Closes #1234` or reference a Taiga
+   story (e.g. `Taiga #5678`).
+3. **Screenshots or recordings** — required for any UI-visible change.
+4. **Testing notes** — how did you verify the change? Any edge cases?
+5. **Breaking changes** — call out anything that affects existing users
+   or requires migration steps.
+
+Read [Creating PRs](./.serena/memories/workflow/creating-prs.md)
+for more concrete information.
+
+### Review process
+
+- We are a small team and maintainers juggle reviews alongside other
+  tasks. Please do not expect your code to be reviewed instantly.
+- Reviews are handled in dedicated blocks of time, usually in the order
+  PRs arrive. It may take a few days to get a first review, especially
+  when urgent tasks come up.
+- Address review feedback by **pushing new commits** — do not
+  force-push during review, as it breaks comment threads.
+- PRs require at least **one approval** before merge.
+- We use **squash-merge** by default. The PR title becomes the final
+  commit message, so follow the [title format](#title-format) above.
+
+### What we won't accept
+
+To save time on both sides, please avoid submitting PRs that:
+
+- Introduce new dependencies without prior discussion.
+- Change the build system or CI configuration without maintainer approval.
+- Mix unrelated changes in a single PR — keep PRs focused on one concern.
+- Submit AI-generated code without human review.
+- Skip local syntax and formatting checks before submitting.
+- Skip the [discussion step](#workflow) for non-bug-fix changes.
+
+### Good first issues
+
+We use the `good first issue` label to mark issues appropriate for newcomers.
+
+## Commit Guidelines
+
+Commit messages must follow this format:
+
+```
+:emoji: <subject>
 
 [body]
 
 [footer]
 ```
 
-Where type is:
+### Commit types
 
-- :bug: `:bug:` a commit that fixes a bug
-- :sparkles: `:sparkles:` a commit that an improvement
-- :tada: `:tada:` a commit with new feature
-- :recycle: `:recycle:` a commit that introduces a refactor
-- :lipstick: `:lipstick:` a commit with cosmetic changes
-- :ambulance: `:ambulance:` a commit that fixes critical bug
-- :books: `:books:` a commit that improves or adds documentation
-- :construction: `:construction:`: a wip commit
-- :boom: `:boom:` a commit with breaking changes
-- :wrench: `:wrench:` a commit for config updates
-- :zap: `:zap:` a commit with performance improvements
-- :whale: `:whale:` a commit for docker related stuff
-- :rewind: `:rewind:` a commit that reverts changes
-- :paperclip: `:paperclip:` a commit with other not relevant changes
-- :arrow_up: `:arrow_up:` a commit with dependencies updates
+| Emoji                  | Code                     | Description                |
+| ---------------------- | ------------------------ | -------------------------- |
+| :bug:                  | `:bug:`                  | Bug fix                    |
+| :sparkles:             | `:sparkles:`             | Improvement or enhancement |
+| :tada:                 | `:tada:`                 | New feature                |
+| :recycle:              | `:recycle:`              | Refactor                   |
+| :lipstick:             | `:lipstick:`             | Cosmetic changes           |
+| :ambulance:            | `:ambulance:`            | Critical bug fix           |
+| :books:                | `:books:`                | Documentation              |
+| :construction:         | `:construction:`         | Work in progress           |
+| :boom:                 | `:boom:`                 | Breaking change            |
+| :wrench:               | `:wrench:`               | Configuration update       |
+| :zap:                  | `:zap:`                  | Performance improvement    |
+| :whale:                | `:whale:`                | Docker-related change      |
+| :paperclip:            | `:paperclip:`            | Other non-relevant changes |
+| :arrow_up:             | `:arrow_up:`             | Dependency update          |
+| :arrow_down:           | `:arrow_down:`           | Dependency downgrade       |
+| :fire:                 | `:fire:`                 | Removal of code or files   |
+| :globe_with_meridians: | `:globe_with_meridians:` | Add or update translations |
+| :rocket:               | `:rocket:`               | Epic or highlight          |
 
-More info:
- - https://gist.github.com/parmentf/035de27d6ed1dce0b36a
- - https://gist.github.com/rxaviers/7360908
+### Rules
 
-Each commit should have:
+- Use the **imperative mood** in the subject (e.g. "Fix", not "Fixed")
+- Capitalize the first letter of the subject
+- Add clear and concise description on the body
+- Do not end the subject with a period
+- Keep the subject to **70 characters** or fewer
+- **Wrap body lines at 76 characters or fewer** (trailers and URLs excepted)
+- Separate the subject from the body with a **blank line**
 
-- A concise subject using imperative mood.
-- The subject should have capitalized the first letter, without period
-  at the end and no larger than 65 characters.
-- A blank line between the subject line and the body.
-- An entry on the CHANGES.md file if applicable, referencing the
-  github or taiga issue/user-story using the these same rules.
+You can check a commit against these rules with `./scripts/check-commit`.
 
-Examples of good commit messages:
+### Examples
 
-- `:bug: Fix unexpected error on launching modal`
-- `:bug: Set proper error message on generic error`
-- `:sparkles: Enable new modal for profile`
-- `:zap: Improve performance of dashboard navigation`
-- `:wrench: Update default backend configuration`
-- `:books: Add more documentation for authentication process`
-- `:ambulance: Fix critical bug on user registration process`
-- `:tada: Add new approach for user registration`
+```
+:bug: Fix unexpected error on launching modal
+:sparkles: Enable new modal for profile
+:zap: Improve performance of dashboard navigation
+:ambulance: Fix critical bug on user registration process
+:tada: Add new approach for user registration
+```
 
+## Formatting and Linting
 
-## Code of conduct ##
+Each module has its own linting and formatting commands — see the relevant one on the
+[Serena Memories](./.serena/memories/)
 
-As contributors and maintainers of this project, we pledge to respect
-all people who contribute through reporting issues, posting feature
-requests, updating documentation, submitting pull requests or patches,
-and other activities.
+## Changelog
 
-We are committed to making participation in this project a
-harassment-free experience for everyone, regardless of level of
-experience, gender, gender identity and expression, sexual
-orientation, disability, personal appearance, body size, race,
-ethnicity, age, or religion.
+The changelog is updated automatically as part of the release process. Contributors
+should **not** modify `CHANGES.md` manually in their pull requests.
 
-Examples of unacceptable behavior by participants include the use of
-sexual language or imagery, derogatory comments or personal attacks,
-trolling, public or private harassment, insults, or other
-unprofessional conduct.
+## Code of Conduct
 
-Project maintainers have the right and responsibility to remove, edit,
-or reject comments, commits, code, wiki edits, issues, and other
-contributions that are not aligned to this Code of Conduct. Project
-maintainers who do not follow the Code of Conduct may be removed from
-the project team.
+This project follows the [Contributor Covenant](https://www.contributor-covenant.org/).
+The full Code of Conduct is available at
+[help.penpot.app/contributing-guide/coc](https://help.penpot.app/contributing-guide/coc/)
+and in the repository's [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-This code of conduct applies both within project spaces and in public
-spaces when an individual is representing the project or its
-community.
+To report unacceptable behavior, open an issue or contact a project maintainer
+directly.
 
-Instances of abusive, harassing, or otherwise unacceptable behavior
-may be reported by opening an issue or contacting one or more of the
-project maintainers.
+## Developer's Certificate of Origin (DCO)
 
-This Code of Conduct is adapted from the Contributor Covenant, version
-1.1.0, available from http://contributor-covenant.org/version/1/1/0/
+By submitting code you agree to and can certify the following:
 
+> **Developer's Certificate of Origin 1.1**
+>
+> By making a contribution to this project, I certify that:
+>
+> (a) The contribution was created in whole or in part by me and I have the
+> right to submit it under the open source license indicated in the file; or
+>
+> (b) The contribution is based upon previous work that, to the best of my
+> knowledge, is covered under an appropriate open source license and I have
+> the right under that license to submit that work with modifications,
+> whether created in whole or in part by me, under the same open source
+> license (unless I am permitted to submit under a different license), as
+> indicated in the file; or
+>
+> (c) The contribution was provided directly to me by some other person who
+> certified (a), (b) or (c) and I have not modified it.
+>
+> (d) I understand and agree that this project and the contribution are public
+> and that a record of the contribution (including all personal information
+> I submit with it, including my sign-off) is maintained indefinitely and
+> may be redistributed consistent with this project or the open source
+> license(s) involved.
 
-## Developer's Certificate of Origin (DCO) ##
+### Signed-off-by
 
-By submitting code you are agree and can certify the below:
+All code patches (**documentation is excluded**) must contain a sign-off line
+at the end of the commit body. Add it automatically with `git commit -s`.
 
-    Developer's Certificate of Origin 1.1
+```
+Signed-off-by: Your Real Name <your.email@example.com>
+```
 
-    By making a contribution to this project, I certify that:
-
-    (a) The contribution was created in whole or in part by me and I
-        have the right to submit it under the open source license
-        indicated in the file; or
-
-    (b) The contribution is based upon previous work that, to the best
-        of my knowledge, is covered under an appropriate open source
-        license and I have the right under that license to submit that
-        work with modifications, whether created in whole or in part
-        by me, under the same open source license (unless I am
-        permitted to submit under a different license), as indicated
-        in the file; or
-
-    (c) The contribution was provided directly to me by some other
-        person who certified (a), (b) or (c) and I have not modified
-        it.
-
-    (d) I understand and agree that this project and the contribution
-        are public and that a record of the contribution (including all
-        personal information I submit with it, including my sign-off) is
-        maintained indefinitely and may be redistributed consistent with
-        this project or the open source license(s) involved.
-
-Then, all your code patches (**documentation are excluded**) should
-contain a sign-off at the end of the patch/commit description body. It
-can be automatically added on adding `-s` parameter to `git commit`.
-
-This is an example of the aspect of the line:
-
-	Signed-off-by: Andrey Antukh <niwi@niwi.nz>
-
-Please, use your real name (sorry, no pseudonyms or anonymous
-contributions are allowed).
+- Use your **real name** — pseudonyms and anonymous contributions are not
+  allowed.
+- The `Signed-off-by` line is **mandatory** and must match the commit author.

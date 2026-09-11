@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.media
   (:require
@@ -14,6 +14,8 @@
    [beicon.v2.core :as rx]
    [cljs.spec.alpha :as s]
    [cuerdas.core :as str]))
+
+;; FIXME: revisit the need of this NS
 
 ;; --- Predicates
 
@@ -38,7 +40,7 @@
 (defn validate-file
   "Check that a file obtained with the file javascript API is valid."
   [file]
-  (when-not (contains? cm/valid-image-types (.-type file))
+  (when-not (contains? cm/image-types (.-type file))
     (ex/raise :type :validation
               :code :media-type-not-allowed
               :hint (str/ffmt "media type % is not supported" (.-type file))))
@@ -47,13 +49,14 @@
 (defn notify-start-loading
   []
   (st/emit! (ntf/show {:content (tr "media.loading")
+                       :tag ::media-upload
                        :type :toast
                        :level :info
                        :timeout nil})))
 
 (defn notify-finished-loading
   []
-  (st/emit! (ntf/hide)))
+  (st/emit! (ntf/hide :tag ::media-upload)))
 
 (defn process-error
   [error]
@@ -66,6 +69,9 @@
 
               (= (:code error) :media-type-mismatch)
               (tr "errors.media-type-mismatch")
+
+              (= (:code error) :invalid-image)
+              (tr "errors.media-type-not-allowed")
 
               :else
               (tr "errors.unexpected-error"))]

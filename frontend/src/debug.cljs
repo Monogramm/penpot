@@ -2,17 +2,26 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns debug
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.common.exceptions :as ex]
+   [app.common.files.helpers :as cfh]
    [app.common.files.repair :as cfr]
    [app.common.files.validate :as cfv]
    [app.common.json :as json]
    [app.common.logging :as l]
+   [app.common.pprint :as pp]
+   [app.common.render-wasm.helpers :as wasm.h]
+   [app.common.render-wasm.mem :as wasm.mem]
+   [app.common.render-wasm.wasm :as wasm]
    [app.common.transit :as t]
+   [app.common.types.component :as ctk]
+   [app.common.types.components-list :as ctkl]
+   [app.common.types.container :as ctn]
    [app.common.types.file :as ctf]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dwc]
@@ -26,14 +35,13 @@
    [app.main.data.workspace.path.shortcuts]
    [app.main.data.workspace.selection :as dws]
    [app.main.data.workspace.shortcuts]
+   [app.main.data.workspace.undo :as dwu]
    [app.main.errors :as errors]
-   [app.main.features :as features]
    [app.main.repo :as rp]
    [app.main.store :as st]
    [app.util.debug :as dbg]
    [app.util.dom :as dom]
-   [app.util.object :as obj]
-   [app.util.timers :as timers]
+   [app.util.http :as http]
    [beicon.v2.core :as rx]
    [cljs.pprint :refer [pprint]]
    [cuerdas.core :as str]
@@ -58,15 +66,27 @@
 (defn enable!
   [option]
   (dbg/enable! option)
-  (when (= :events option)
-    (set! st/*debug-events* true))
+  (case option
+    :events
+    (set! st/*debug-events* true)
+
+    :events-times
+    (set! st/*debug-events-time* true)
+
+    nil)
   (js* "app.main.reinit()"))
 
 (defn disable!
   [option]
   (dbg/disable! option)
-  (when (= :events option)
-    (set! st/*debug-events* false))
+  (case option
+    :events
+    (set! st/*debug-events* false)
+
+    :events-times
+    (set! st/*debug-events-time* false)
+
+    nil)
   (js* "app.main.reinit()"))
 
 (defn ^:export toggle-debug
@@ -103,6 +123,90 @@
    (js/console.log str (json/->js val))
    val))
 
+(defn- wasm-read-len-prefixed-utf8
+  "Reads a `[u32 byte_len][utf8 bytes...]` buffer returned by WASM and frees it.
+   Returns a JS string (possibly empty)."
+  [ptr]
+  (when (and ptr (not (zero? ptr)))
+    (let [heap-u8  (wasm.mem/get-heap-u8)
+          heap-u32 (wasm.mem/get-heap-u32)
+          len      (aget heap-u32 (wasm.mem/->offset-32 ptr))
+          start    (+ ptr 4)
+          end      (+ start len)
+          decoder  (js/TextDecoder. "utf-8")
+          text     (.decode decoder (.subarray heap-u8 start end))]
+      (wasm.mem/free)
+      text)))
+
+(defn ^:export wasmCaptureFrames
+  [amount]
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_capture_frames"))]
+    (if (fn? f)
+      (wasm.h/call module "_capture_frames" amount)
+      (js/console.warn "[debug] render-wasm module not ready or missing _render_stats"))))
+
+(defn ^:export wasmRenderStats
+  []
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_render_stats"))]
+    (if (fn? f)
+      (wasm.h/call module "_render_stats")
+      (js/console.warn "[debug] render-wasm module not ready or missing _render_stats"))))
+
+(defn ^:export wasmAtlasConsole
+  "Logs the current render-wasm atlas as an image in the JS console (if present)."
+  []
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_debug_atlas_console"))]
+    (if (fn? f)
+      (wasm.h/call module "_debug_atlas_console")
+      (js/console.warn "[debug] render-wasm module not ready or missing _debug_atlas_console"))))
+
+(defn ^:export wasmAtlasBase64
+  "Returns the atlas PNG base64 (empty string if missing/empty)."
+  []
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_debug_atlas_base64"))]
+    (if (fn? f)
+      (let [ptr (wasm.h/call module "_debug_atlas_base64")
+            s   (or (wasm-read-len-prefixed-utf8 ptr) "")]
+        s)
+      (do
+        (js/console.warn "[debug] render-wasm module not ready or missing _debug_atlas_base64")
+        ""))))
+
+(defn ^:export wasmSurfaceConsole
+  "Logs the render-wasm surface id as an image in the JS console."
+  [id]
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_debug_surface_console"))]
+    (if (fn? f)
+      (wasm.h/call module "_debug_surface_console" id)
+      (js/console.warn "[debug] render-wasm module not ready or missing _debug_surface_console"))))
+
+(defn ^:export wasmCacheConsole
+  "Logs the current render-wasm cache surface as an image in the JS console."
+  []
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_debug_cache_console"))]
+    (if (fn? f)
+      (wasm.h/call module "_debug_cache_console")
+      (js/console.warn "[debug] render-wasm module not ready or missing _debug_cache_console"))))
+
+(defn ^:export wasmCacheBase64
+  "Returns the cache surface PNG base64 (empty string if missing/empty)."
+  []
+  (let [module wasm/internal-module
+        f      (when module (unchecked-get module "_debug_cache_base64"))]
+    (if (fn? f)
+      (let [ptr (wasm.h/call module "_debug_cache_base64")
+            s   (or (wasm-read-len-prefixed-utf8 ptr) "")]
+        s)
+      (do
+        (js/console.warn "[debug] render-wasm module not ready or missing _debug_cache_base64")
+        ""))))
+
 (when (exists? js/window)
   (set! (.-dbg ^js js/window) json/->js)
   (set! (.-pp ^js js/window) pprint))
@@ -119,31 +223,6 @@
   z-index: 99999;
   opacity: 0.5;
 ")
-
-(defn ^:export fps
-  "Adds a widget to keep track of the average FPS's"
-  []
-  (let [last (volatile! (.now js/performance))
-        avg  (volatile! 0)
-        node (-> (.createElement js/document "div")
-                 (obj/set! "id" "fps")
-                 (obj/set! "style" widget-style))
-        body (obj/get js/document "body")
-
-        do-thing (fn do-thing []
-                   (timers/raf
-                    (fn []
-                      (let [cur (.now js/performance)
-                            ts (/ 1000 (* (- cur @last)))
-                            val (+ @avg (* (- ts @avg) 0.1))]
-
-                        (obj/set! node "innerText" val)
-                        (vreset! last cur)
-                        (vreset! avg val)
-                        (do-thing)))))]
-
-    (.appendChild body node)
-    (do-thing)))
 
 (defn ^:export dump-state []
   (logjs "state" @st/state)
@@ -180,12 +259,12 @@
   [state name]
   (let [objects (dsh/lookup-page-objects state)
         result  (or (d/seek (fn [shape] (= name (:name shape))) (vals objects))
-                    (get objects (uuid/uuid name)))]
+                    (get objects (uuid/parse name)))]
     result))
 
 (defn ^:export dump-object
   [name]
-  (get-object @st/state name))
+  (clj->js (get-object @st/state name)))
 
 (defn get-selected
   [state]
@@ -196,6 +275,14 @@
   (let [objects (dsh/lookup-page-objects @st/state)
         result  (->> (get-selected @st/state) (map #(get objects %)))]
     (logjs "selected" result)
+    nil))
+
+
+(defn ^:export dump-selected-edn
+  []
+  (let [objects (dsh/lookup-page-objects @st/state)
+        result  (->> (get-selected @st/state) (map #(get objects %)))]
+    (pp/pprint result {:length 30 :level 30})
     nil))
 
 (defn ^:export preview-selected
@@ -223,12 +310,12 @@
 (defn ^:export select-by-object-id
   [object-id]
   (let [[_ page-id shape-id _] (str/split object-id #"/")]
-    (st/emit! (dcm/go-to-workspace :page-id (uuid/uuid page-id)))
-    (st/emit! (dws/select-shape (uuid/uuid shape-id)))))
+    (st/emit! (dcm/go-to-workspace :page-id (uuid/parse page-id)))
+    (st/emit! (dws/select-shape (uuid/parse shape-id)))))
 
 (defn ^:export select-by-id
   [shape-id]
-  (st/emit! (dws/select-shape (uuid/uuid shape-id))))
+  (st/emit! (dws/select-shape (uuid/parse shape-id))))
 
 (defn dump-tree'
   ([state] (dump-tree' state false false false))
@@ -256,7 +343,7 @@
          file       (dsh/lookup-file state)
          libraries  (get state :files)
          shape-id   (if (some? shape-id)
-                      (uuid/uuid shape-id)
+                      (uuid/parse shape-id)
                       (first (dsh/lookup-selected state)))]
      (if (some? shape-id)
        (ctf/dump-subtree file page-id shape-id libraries {:show-ids show-ids
@@ -269,14 +356,6 @@
   ([shape-id show-ids] (dump-subtree' @st/state shape-id show-ids false false))
   ([shape-id show-ids show-touched] (dump-subtree' @st/state shape-id show-ids show-touched false))
   ([shape-id show-ids show-touched show-modified] (dump-subtree' @st/state shape-id show-ids show-touched show-modified)))
-
-(when *assert*
-  (defonce debug-subscription
-    (->> st/stream
-         (rx/filter ptk/event?)
-         (rx/filter (fn [s] (and (dbg/enabled? :events)
-                                 (not (debug-exclude-events (ptk/type s))))))
-         (rx/subs! #(println "[stream]: " (ptk/repr-event %))))))
 
 (defn ^:export apply-changes
   "Takes a Transit JSON changes"
@@ -370,14 +449,14 @@
    (let [file       (dsh/lookup-file @st/state)
          libraries  (get @st/state :files)]
      (try
-       (->> (if-let [shape-id (some-> shape-id parse-uuid)]
+       (->> (if-let [shape-id (some-> shape-id uuid/parse)]
               (let [page (dm/get-in file [:data :pages-index (get @st/state :current-page-id)])]
                 (cfv/validate-shape shape-id file page libraries))
               (cfv/validate-file file libraries))
             (group-by :code)
             (clj->js))
        (catch :default cause
-         (errors/print-error! cause))))))
+         (ex/print-throwable cause))))))
 
 (defn ^:export validate-schema
   []
@@ -385,7 +464,7 @@
     (let [file (dsh/lookup-file @st/state)]
       (cfv/validate-file-schema! file))
     (catch :default cause
-      (errors/print-error! cause))))
+      (ex/print-throwable cause))))
 
 (defn ^:export repair
   [reload?]
@@ -393,7 +472,7 @@
    (ptk/reify ::repair-current-file
      ptk/EffectEvent
      (effect [_ state _]
-       (let [features (features/get-team-enabled-features state)
+       (let [features (:features state)
              sid      (:session-id state)
 
              file     (dsh/lookup-file state)
@@ -417,7 +496,7 @@
                           (when reload?
                             (dom/reload-current-window)))
                         (fn [cause]
-                          (errors/print-error! cause)))))))))
+                          (ex/print-throwable cause)))))))))
 
 (defn ^:export fix-orphan-shapes
   []
@@ -427,10 +506,139 @@
   []
   (st/emit! (dw/find-components-norefs)))
 
+(defn- set-shape-ref*
+  [id shape-ref]
+  (ptk/reify ::set-shape-ref
+    ptk/WatchEvent
+    (watch [_ _ _]
+      (let [shape-id (uuid/parse id)
+            shape-ref (uuid/parse shape-ref)]
+        (rx/of (dw/update-shape shape-id {:shape-ref shape-ref}))))))
+
 (defn ^:export set-shape-ref
   [id shape-ref]
-  (st/emit! (dw/set-shape-ref id shape-ref)))
+  (st/emit! (set-shape-ref* id shape-ref)))
 
-(defn ^:export enable-text-v2
+(defn ^:export network-averages
   []
-  (st/emit! (features/enable-feature "text-editor/v2")))
+  (.log js/console (clj->js @http/network-averages)))
+
+
+(defn print-last-exception
+  []
+  (some-> errors/last-exception ex/print-throwable))
+
+
+(defn ^:export dbg
+  [o]
+  (app.common.pprint/pprint o {:level 100 :length 100}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; PRUNE UNRELATED ITEMS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn- get-related-ids
+  "Given a `context` map (:pindex, :fdata) and a `[page-id id]` pair, returns
+   the set of `[page-id id]` pairs directly related to it, NOT recursively:
+   - its children (including itself)
+   - its ancestors
+   - the main instance `[page-id id]` of its component, if it's inside a
+     component copy of a component defined in the current file (libraries
+     are ignored)
+
+   Ids are only unique within a page, so every id is always tracked together
+   with the page it belongs to."
+  [{:keys [pindex fdata]} [page-id id]]
+  (let [page-objects (-> (get pindex page-id) :objects)
+        shape        (get page-objects id)]
+    (if (nil? shape)
+      #{}
+      (let [related   (-> #{}
+                          (into (map (partial vector page-id) (cfh/get-parent-ids page-objects id)))
+                          (into (map (partial vector page-id) (cfh/get-children-ids-with-self page-objects id))))
+            head      (when (ctk/in-component-copy? shape)
+                        (ctn/get-head-shape page-objects shape))
+            component (when (and (some? head) (= (:component-file head) (:id fdata)))
+                        (ctkl/get-component fdata (:component-id head)))]
+        (cond-> related
+          (some? component)
+          (conj [(:main-instance-page component) (:main-instance-id component)]))))))
+
+(defn ^:export prune-unrelated-items
+  "This function is DESTRUCTIVE. It deletes from the current file all the pages and layers unrelated to the selection.
+   It is used to isolate bugs"
+  []
+  (let [state       @st/state
+        current-pid (:current-page-id state)
+        selected    (get-selected state)
+
+        fdata       (dsh/lookup-file-data state)
+        pindex      (:pages-index fdata)
+
+        context {:pindex pindex
+                 :fdata  fdata}
+
+        related
+        (loop [related (into #{} (map (partial vector current-pid)) selected)]
+          (let [expanded (->> related
+                              (reduce (fn [acc pair] (into acc (get-related-ids context pair)))
+                                      related)
+                              (remove (fn [[_ id]] (= id uuid/zero)))
+                              set)]
+            (if (= expanded related)
+              related
+              (recur expanded))))
+
+        related-by-page
+        (reduce (fn [acc [page-id id]] (update acc page-id (fnil conj #{}) id))
+                {}
+                related)
+
+        unrelated-pages
+        (->> (:pages fdata)
+             (remove (fn [page-id] (seq (get related-by-page page-id))))
+             vec)
+
+        unrelated-items-by-page
+        (->> (:pages fdata)
+             (remove (set unrelated-pages))
+             (map (fn [page-id]
+                    (let [page-related (get related-by-page page-id #{})
+                          ids (->> (get pindex page-id)
+                                   :objects
+                                   keys
+                                   (remove #{uuid/zero})
+                                   (remove page-related)
+                                   set)]
+                      [page-id ids])))
+             (filter (fn [[_ ids]] (seq ids)))
+             vec)
+
+        items-to-delete
+        (reduce + (map (comp count second) unrelated-items-by-page))]
+
+    (js/console.log (str "Pages to delete: " (count unrelated-pages)
+                         ", items to delete: " items-to-delete))
+    (.table js/console
+            (->> unrelated-items-by-page
+                 (mapcat (fn [[page-id ids]]
+                           (let [objects (-> (get pindex page-id) :objects)]
+                             (map (fn [id]
+                                    {:page-id (str page-id)
+                                     :id (str id)
+                                     :name (:name (get objects id))})
+                                  ids))))
+                 (clj->js)))
+    (when (and (or (seq unrelated-pages) (pos? items-to-delete))
+               (js/confirm (str "Delete " (count unrelated-pages) " unrelated page(s) and "
+                                items-to-delete " unrelated item(s)?")))
+      (let [undo-id (js/Symbol)]
+        (apply st/emit!
+               (concat
+                [(dwu/start-undo-transaction undo-id)]
+                (map dw/delete-page unrelated-pages)
+                (map (fn [[page-id ids]]
+                       (dw/delete-shapes page-id ids))
+                     unrelated-items-by-page)
+                [(dwu/commit-undo-transaction undo-id)]))))
+    nil))

@@ -2,34 +2,40 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.menus.measures
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data :as d]
+   [app.common.data.macros :as dm]
+   [app.common.geom.rect :as grc]
    [app.common.geom.shapes :as gsh]
    [app.common.logic.shapes :as cls]
-   [app.common.types.shape :as cts]
    [app.common.types.shape.layout :as ctl]
    [app.main.constants :refer [size-presets]]
    [app.main.data.workspace :as udw]
    [app.main.data.workspace.interactions :as dwi]
    [app.main.data.workspace.shapes :as dwsh]
+   [app.main.data.workspace.tokens.application :as dwta]
    [app.main.data.workspace.transforms :as dwt]
    [app.main.data.workspace.undo :as dwu]
+   [app.main.features :as features]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.dropdown :refer [dropdown]]
-   [app.main.ui.components.numeric-input :refer [numeric-input*]]
+   [app.main.ui.components.numeric-input :as deprecated-input]
    [app.main.ui.components.radio-buttons :refer [radio-button radio-buttons]]
+   [app.main.ui.components.search-bar :refer [search-bar*]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
-   [app.main.ui.hooks :as hooks]
-   [app.main.ui.icons :as i]
-   [app.main.ui.workspace.sidebar.options.menus.border-radius :refer  [border-radius-menu]]
+   [app.main.ui.ds.foundations.assets.icon :refer [icon*] :as i]
+   [app.main.ui.icons :as deprecated-icon]
+   [app.main.ui.workspace.sidebar.options.menus.border-radius :refer  [border-radius-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.input-wrapper-tokens :refer [numeric-input-wrapper*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [clojure.set :as set]
+   [cuerdas.core :as str]
    [rumext.v2 :as mf]))
 
 (def measure-attrs
@@ -42,7 +48,12 @@
    :selrect
    :points
    :show-content
-   :hide-in-viewer])
+   :hide-in-viewer
+
+   ;; Needed to disable/enable width/height
+   ;; otherwise the memo will not detect changes
+   :layout-item-h-sizing
+   :layout-item-v-sizing])
 
 (def ^:private generic-options
   #{:size :position :rotation})
@@ -60,16 +71,10 @@
     :circle  generic-options
     :frame   frame-options
     :group   generic-options
-    :image   rect-options
     :path    generic-options
     :rect    rect-options
     :svg-raw generic-options
     :text    generic-options))
-
-(def ^:private clip-content-icon (i/icon-xref :clip-content (stl/css :checkbox-button)))
-(def ^:private play-icon (i/icon-xref :play (stl/css :checkbox-button)))
-(def ^:private locked-icon (i/icon-xref :detach (stl/css :lock-ratio-icon)))
-(def ^:private unlocked-icon (i/icon-xref :detached (stl/css :lock-ratio-icon)))
 
 (defn select-measure-keys
   "Consider some shapes can be drawn from bottom to top or from left to right"
@@ -91,104 +96,270 @@
                  shape)]
     (select-keys shape measure-attrs)))
 
+(def ^:private xf:map-type (map :type))
+(def ^:private xf:mapcat-type-to-options (mapcat type->options))
+
+(defn fixed-decimal-value
+  "Fixes the amount of decimals that are kept"
+  ([value]
+   (fixed-decimal-value value 2))
+
+  ([value decimals]
+   (cond
+     (string? value)
+     (fixed-decimal-value (parse-double value) decimals)
+
+     (number? value)
+     (parse-double (.toFixed value decimals)))))
+
+(defn filter-size-presets
+  "Filter the `size-presets` list by `term`, preserving category headers only
+  when at least one of their following presets matches."
+  [term presets]
+  (if (str/blank? term)
+    presets
+    (let [lterm    (str/lower term)
+          matches? (fn [p] (and (:width p)
+                                (str/includes? (str/lower (:name p)) lterm)))]
+      (loop [remaining presets
+             acc       []]
+        (if-let [head (first remaining)]
+          (if (:width head)
+            (recur (rest remaining)
+                   (cond-> acc (matches? head) (conj head)))
+            (let [[items tail]    (split-with :width (rest remaining))
+                  matching-items  (filter matches? items)]
+              (recur tail
+                     (if (seq matching-items)
+                       (into (conj acc head) matching-items)
+                       acc))))
+          acc)))))
+
+(defn check-measures-menu-props
+  [old-props new-props]
+  (let [o-values (unchecked-get old-props "values")
+        n-values (unchecked-get new-props "values")]
+    (and (identical? (unchecked-get old-props "ids")
+                     (unchecked-get new-props "ids"))
+         (identical? (unchecked-get old-props "type")
+                     (unchecked-get new-props "type"))
+         (identical? (unchecked-get old-props "appliedTokens")
+                     (unchecked-get new-props "appliedTokens"))
+         (identical? (get o-values :x)
+                     (get n-values :x))
+         (identical? (get o-values :y)
+                     (get n-values :y))
+         (identical? (get o-values :rotation)
+                     (get n-values :rotation))
+         (identical? (get o-values :hide-in-viewer)
+                     (get n-values :hide-in-viewer))
+         (identical? (get o-values :width)
+                     (get n-values :width))
+         (identical? (get o-values :height)
+                     (get n-values :height))
+         (identical? (get o-values :layout-item-h-sizing)
+                     (get n-values :layout-item-h-sizing))
+         (identical? (get o-values :layout-item-v-sizing)
+                     (get n-values :layout-item-v-sizing))
+         (identical? (get o-values :points)
+                     (get n-values :points))
+         (identical? (get o-values :selrect)
+                     (get n-values :selrect))
+         (identical? (get o-values :r1)
+                     (get n-values :r1))
+         (identical? (get o-values :r2)
+                     (get n-values :r2))
+         (identical? (get o-values :r3)
+                     (get n-values :r3))
+         (identical? (get o-values :r4)
+                     (get n-values :r4))
+         (identical? (get o-values :proportion-lock)
+                     (get n-values :proportion-lock)))))
+
+(mf/defc node-position-menu*
+  "X and Y inputs for the current path selection."
+  [{:keys [values on-x-change on-y-change]}]
+  ;; Match the shape position input layout.
+  [:section {:class (stl/css :element-set)}
+   [:div {:class (stl/css :position)}
+    [:div {:class (stl/css :x-position)
+           :title (tr "workspace.options.x")}
+     [:span {:class (stl/css :icon-text)} "X"]
+     [:> deprecated-input/numeric-input* {:no-validate true
+                                          :placeholder (if (= :multiple (:x values)) (tr "settings.multiple") "--")
+                                          :on-change on-x-change
+                                          :class (stl/css :numeric-input)
+                                          :value (:x values)}]]
+    [:div {:class (stl/css :y-position)
+           :title (tr "workspace.options.y")}
+     [:span {:class (stl/css :icon-text)} "Y"]
+     [:> deprecated-input/numeric-input* {:no-validate true
+                                          :placeholder (if (= :multiple (:y values)) (tr "settings.multiple") "--")
+                                          :on-change on-y-change
+                                          :class (stl/css :numeric-input)
+                                          :value (:y values)}]]]])
+
 (mf/defc measures-menu*
-  {::mf/props :obj
-   ::mf/wrap [mf/memo]}
-  [{:keys [ids ids-with-children values type all-types shape]}]
-  (let [options
+  {::mf/wrap [#(mf/memo' % check-measures-menu-props)]}
+  [{:keys [ids values applied-tokens type shapes]}]
+  (let [token-numeric-inputs
+        (features/use-feature "tokens/numeric-input")
+
+        all-types
+        (mf/with-memo [type shapes]
+          ;; We only need this when multiple type is used
+          (when (= type :multiple)
+            (into #{} xf:map-type shapes)))
+
+        options
         (mf/with-memo [type all-types]
           (if (= type :multiple)
-            (into #{} (mapcat type->options) all-types)
+            (into #{} xf:mapcat-type-to-options all-types)
             (type->options type)))
 
-        ids-with-children
-        (or ids-with-children ids)
-
-        old-shapes
-        (if (= type :multiple)
-          (deref (refs/objects-by-id ids))
-          [shape])
-
         frames
-        (map #(deref (refs/object-by-id (:frame-id %))) old-shapes)
+        (mf/with-memo [shapes]
+          (let [objects (deref refs/workspace-page-objects)]
+            (into [] (comp (keep :frame-id)
+                           (map (d/getf objects)))
+                  shapes)))
 
-        ids (hooks/use-equal-memo ids)
+        selection-parents-ref
+        (mf/with-memo [ids]
+          (refs/parents-by-ids ids))
 
-        selection-parents-ref (mf/use-memo (mf/deps ids) #(refs/parents-by-ids ids))
-        selection-parents     (mf/deref selection-parents-ref)
+        selection-parents
+        (mf/deref selection-parents-ref)
 
-        flex-child?       (->> selection-parents (some ctl/flex-layout?))
-        absolute?         (ctl/item-absolute? shape)
-        flex-container?   (ctl/flex-layout? shape)
-        flex-auto-width?  (ctl/auto-width? shape)
-        flex-fill-width?  (ctl/fill-width? shape)
-        flex-auto-height? (ctl/auto-height? shape)
-        flex-fill-height? (ctl/fill-height? shape)
+        shape
+        (first shapes)
 
-        disabled-position-x?   (and flex-child? (not absolute?))
-        disabled-position-y?   (and flex-child? (not absolute?))
-        disabled-width-sizing? (and (or flex-child? flex-container?)
-                                    (or flex-auto-width? flex-fill-width?)
-                                    (not absolute?))
-        disabled-height-sizing? (and (or flex-child? flex-container?)
-                                     (or flex-auto-height? flex-fill-height?)
-                                     (not absolute?))
+        flex-child?
+        (some ctl/flex-layout? selection-parents)
+
+        absolute?
+        (ctl/item-absolute? shape)
+
+        flex-container?
+        (ctl/flex-layout? shape)
+
+        flex-auto-width?
+        (ctl/auto-width? shape)
+
+        flex-fill-width?
+        (ctl/fill-width? shape)
+
+        flex-auto-height?
+        (ctl/auto-height? shape)
+
+        flex-fill-height?
+        (ctl/fill-height? shape)
+
+        disabled-position?
+        (and flex-child? (not absolute?))
+
+        disabled-width-sizing?
+        (and (or flex-child? flex-container?)
+             (or flex-auto-width? flex-fill-width?)
+             (not absolute?))
+
+        disabled-height-sizing?
+        (and (or flex-child? flex-container?)
+             (or flex-auto-height? flex-fill-height?)
+             (not absolute?))
 
         ;; To show interactively the measures while the user is manipulating
         ;; the shape with the mouse, generate a copy of the shapes applying
         ;; the transient transformations.
-        shapes (as-> old-shapes $
-                 (map gsh/translate-to-frame $ frames))
+        shapes
+        (mf/with-memo [shapes frames]
+          (map gsh/translate-to-frame shapes frames))
+
+        ;; We repeatedly obtain the first shape after the
+        ;; transformation.
+        shape
+        (first shapes)
 
         ;; For rotated or stretched shapes, the origin point we show in the menu
         ;; is not the (:x :y) shape attribute, but the top left coordinate of the
         ;; wrapping rectangle.
-        values (let [{:keys [x y]} (gsh/shapes->rect [(first shapes)])]
-                 (cond-> values
-                   (not= (:x values) :multiple) (assoc :x x)
-                   (not= (:y values) :multiple) (assoc :y y)
-                   ;; In case of multiple selection, the origin point has been already
-                   ;; calculated and given in the fake :ox and :oy attributes. See
-                   ;; common/src/app/common/attrs.cljc
-                   (and (= (:x values) :multiple)
-                        (some? (:ox values))) (assoc :x (:ox values))
-                   (and (= (:y values) :multiple)
-                        (some? (:oy values))) (assoc :y (:oy values))))
+        values
+        (let [rect  (-> (get shape :points)
+                        (grc/points->rect))
+              val-x (get values :x)
+              val-y (get values :y)]
+          (cond-> values
+            (not= val-x :multiple) (assoc :x (dm/get-prop rect :x))
+            (not= val-y :multiple) (assoc :y (dm/get-prop rect :y))
+            ;; In case of multiple selection, the origin point has been already
+            ;; calculated and given in the fake :ox and :oy attributes. See
+            ;; common/src/app/common/attrs.cljc
+            (and (= val-x :multiple)
+                 (some? (:ox values)))
+            (assoc :x (:ox values))
+
+            (and (= val-y :multiple)
+                 (some? (:oy values)))
+            (assoc :y (:oy values))))
 
         ;; For :height and :width we take those in the :selrect attribute, because
         ;; not all shapes have an own :width and :height (e. g. paths). Here the
         ;; rotation is ignored (selrect always has the original size excluding
         ;; transforms).
-        values (let [{:keys [width height]} (-> shapes first :selrect)]
-                 (cond-> values
-                   (not= (:width values) :multiple) (assoc :width width)
-                   (not= (:height values) :multiple) (assoc :height height)))
+        values
+        (let [selrect  (get shape :selrect)
+              rotation (get shape :rotation 0)]
+          (cond-> values
+            (not= (:width values) :multiple) (assoc :width (dm/get-prop selrect :width))
+            (not= (:height values) :multiple) (assoc :height (dm/get-prop selrect :height))
+            (not= (:rotation values) :multiple) (assoc :rotation rotation)))
 
-        ;; The :rotation, however, does use the transforms.
-        values (let [{:keys [rotation] :or {rotation 0}} (-> shapes first)]
-                 (cond-> values
-                   (not= (:rotation values) :multiple) (assoc :rotation rotation)))
+        proportion-lock
+        (get values :proportion-lock)
 
-        proportion-lock  (:proportion-lock values)
+        clip-content-ref
+        (mf/use-ref nil)
 
-        clip-content-ref (mf/use-ref nil)
-        show-in-viewer-ref (mf/use-ref nil)
+        show-in-viewer-ref
+        (mf/use-ref nil)
 
         ;; PRESETS
-        preset-state*         (mf/use-state false)
-        show-presets-dropdown? (deref preset-state*)
+        preset-state*
+        (mf/use-state false)
 
-        open-presets
+        show-presets-dropdown?
+        (deref preset-state*)
+
+        preset-search-term*
+        (mf/use-state "")
+
+        preset-search-term
+        (deref preset-search-term*)
+
+        preset-container-ref
+        (mf/use-ref nil)
+
+        toggle-presets
         (mf/use-fn
-         (mf/deps show-presets-dropdown?)
          (fn []
-           (reset! preset-state* true)))
+           (swap! preset-state* not)
+           (reset! preset-search-term* "")))
 
         close-presets
         (mf/use-fn
          (mf/deps show-presets-dropdown?)
          (fn []
-           (reset! preset-state* false)))
+           (reset! preset-state* false)
+           (reset! preset-search-term* "")))
+
+        on-preset-search-change
+        (mf/use-fn
+         (fn [value _event]
+           (reset! preset-search-term* value)))
+
+        filtered-size-presets
+        (mf/with-memo [preset-search-term]
+          (filter-size-presets preset-search-term size-presets))
 
         on-preset-selected
         (mf/use-fn
@@ -201,15 +372,17 @@
                             (dom/get-data "height")
                             (d/read-string))]
              (st/emit! (udw/update-dimensions ids :width width)
-                       (udw/update-dimensions ids :height height)))))
+                       (udw/update-dimensions ids :height height))
+             (reset! preset-state* false)
+             (reset! preset-search-term* ""))))
 
         ;; ORIENTATION
 
-        orientation (when (= type :frame)
-                      (cond (> (:width values) (:height values))
-                            :horiz
-                            :else
-                            :vert))
+        orientation
+        (when (= type :frame)
+          (if (> (:width values) (:height values))
+            :horiz
+            :vert))
 
         on-orientation-change
         (mf/use-fn
@@ -218,14 +391,17 @@
            (st/emit! (udw/change-orientation ids (keyword orientation)))))
 
         ;; SIZE AND PROPORTION LOCK
-
         on-size-change
         (mf/use-fn
-         (mf/deps ids)
+         (mf/deps ids shapes)
          (fn [value attr]
-           (binding [cts/*wasm-sync* true]
+           (if (or (string? value) (number? value))
              (st/emit! (udw/trigger-bounding-box-cloaking ids)
-                       (udw/update-dimensions ids attr value)))))
+                       (udw/update-dimensions-coalesced ids attr value))
+             (st/emit! (udw/trigger-bounding-box-cloaking ids)
+                       (dwta/apply-token-from-input {:token (first value)
+                                                     :attrs #{attr}
+                                                     :shape-ids ids})))))
 
         on-proportion-lock-change
         (mf/use-fn
@@ -235,36 +411,53 @@
              (run! #(st/emit! (udw/set-shape-proportion-lock % new-lock)) ids))))
 
         ;; POSITION
-
-        do-position-change
-        (mf/use-fn
-         (mf/deps ids)
-         (fn [shape' frame' value attr]
-           (let [to (+ value (attr frame'))]
-             (st/emit! (udw/update-position (:id shape') {attr to})))))
-
         on-position-change
         (mf/use-fn
          (mf/deps ids)
          (fn [value attr]
-           (st/emit! (udw/trigger-bounding-box-cloaking ids))
-           (binding [cts/*wasm-sync* true]
-             (doall (map #(do-position-change %1 %2 value attr) shapes frames)))))
-
-        ;; ROTATION
+           (if (or (string? value) (number? value))
+             (do
+               (st/emit! (udw/trigger-bounding-box-cloaking ids))
+               (st/emit! (udw/update-positions ids {attr value})))
+             (st/emit! (udw/trigger-bounding-box-cloaking ids)
+                       (dwta/apply-token-from-input {:token (first value)
+                                                     :attrs #{attr}
+                                                     :shape-ids ids})))))
 
         on-rotation-change
         (mf/use-fn
          (mf/deps ids)
          (fn [value]
-           (binding [cts/*wasm-sync* true]
+           (if (or (string? value) (number? value))
+             (let [value (fixed-decimal-value value)]
+               (st/emit! (udw/trigger-bounding-box-cloaking ids))
+               (st/emit! (udw/increase-rotation-coalesced ids value)))
              (st/emit! (udw/trigger-bounding-box-cloaking ids)
-                       (udw/increase-rotation ids value)))))
+                       (dwta/apply-token-from-input {:token (first value)
+                                                     :attrs #{:rotation}
+                                                     :shape-ids ids})))))
 
-        on-width-change #(on-size-change % :width)
-        on-height-change #(on-size-change % :height)
-        on-pos-x-change #(on-position-change % :x)
-        on-pos-y-change #(on-position-change % :y)
+        on-width-change
+        (mf/use-fn (mf/deps on-size-change) #(on-size-change % :width))
+
+        on-height-change
+        (mf/use-fn (mf/deps on-size-change) #(on-size-change % :height))
+
+        on-pos-x-change
+        (mf/use-fn (mf/deps on-position-change) #(on-position-change % :x))
+
+        on-pos-y-change
+        (mf/use-fn (mf/deps on-position-change) #(on-position-change % :y))
+
+
+        ;; DETACH
+        on-detach-token
+        (mf/use-fn
+         (mf/deps ids)
+         (fn [token-name attr]
+           (st/emit! (dwta/unapply-token {:token-name token-name
+                                          :attributes #{attr}
+                                          :shape-ids ids}))))
 
         ;; CLIP CONTENT AND SHOW IN VIEWER
         on-change-clip-content
@@ -284,9 +477,9 @@
                        (dwsh/update-shapes ids (fn [shape] (cls/change-show-in-viewer shape (not value)))))
 
              (when-not value
-                 ;; when a frame is no longer shown in view mode, cannot have
-                 ;; interactions that navigate to it.
-               (apply st/emit! (map #(dwi/remove-all-interactions-nav-to %) ids)))
+               ;; when a frame is no longer shown in view mode, cannot
+               ;; have interactions that navigate to it.
+               (run! st/emit! (map #(dwi/remove-all-interactions-nav-to %) ids)))
 
              (st/emit! (dwu/commit-undo-transaction undo-id)))))
 
@@ -295,43 +488,60 @@
          (fn []
            (st/emit! (dwt/selected-fit-content))))]
 
-    [:div {:class (stl/css :element-set)}
+    [:section {:class (stl/css :element-set)
+               :aria-label "shape-measures-section"}
      (when (and (options :presets)
                 (or (nil? all-types) (= (count all-types) 1)))
        [:div {:class (stl/css :presets)}
         [:div {:class (stl/css-case  :presets-wrapper true
                                      :opened show-presets-dropdown?)
-               :on-click open-presets}
+               :ref preset-container-ref
+               :on-click toggle-presets}
          [:span {:class (stl/css :select-name)} (tr "workspace.options.size-presets")]
-         [:span {:class (stl/css :collapsed-icon)} i/arrow]
+         [:span {:class (stl/css :collapsed-icon)} deprecated-icon/arrow]
 
          [:& dropdown {:show show-presets-dropdown?
-                       :on-close close-presets}
-          [:ul {:class (stl/css :custom-select-dropdown)}
-           (for [size-preset size-presets]
-             (if-not (:width size-preset)
-               [:li {:key (:name size-preset)
-                     :class (stl/css-case :dropdown-element true
-                                          :disabled true)}
-                [:span {:class (stl/css :preset-name)} (:name size-preset)]]
+                       :on-close close-presets
+                       :container preset-container-ref}
+          [:div {:class (stl/css :custom-select-dropdown)
+                 :on-click dom/stop-propagation}
+           [:div {:class (stl/css :preset-search)}
+            [:> search-bar* {:on-change on-preset-search-change
+                             :value preset-search-term
+                             :auto-focus true
+                             :placeholder (tr "workspace.options.search-size-preset")}]]
+           [:ul {:class (stl/css :preset-list)}
+            (if (empty? filtered-size-presets)
+              [:li {:class (stl/css-case :dropdown-element true
+                                         :disabled true)}
+               [:span {:class (stl/css :preset-name)}
+                (tr "workspace.options.no-size-preset-results")]]
+              (for [size-preset filtered-size-presets]
+                (if-not (:width size-preset)
+                  [:li {:key (:name size-preset)
+                        :class (stl/css-case :dropdown-element true
+                                             :disabled true)}
+                   [:span {:class (stl/css :preset-name)} (:name size-preset)]]
 
-               (let [preset-match (and (= (:width size-preset) (d/parse-integer (:width values) 0))
-                                       (= (:height size-preset) (d/parse-integer (:height values) 0)))]
-                 [:li {:key (:name size-preset)
-                       :class (stl/css-case :dropdown-element true
-                                            :match preset-match)
-                       :data-width (str (:width size-preset))
-                       :data-height (str (:height size-preset))
-                       :on-click on-preset-selected}
-                  [:div {:class (stl/css :name-wrapper)}
-                   [:span {:class (stl/css :preset-name)} (:name size-preset)]
-                   [:span {:class (stl/css :preset-size)} (:width size-preset) " x " (:height size-preset)]]
-                  (when preset-match
-                    [:span {:class (stl/css :check-icon)} i/tick])])))]]]
+                  (let [preset-match (and (= (:width size-preset) (d/parse-integer (:width values) 0))
+                                          (= (:height size-preset) (d/parse-integer (:height values) 0)))]
+                    [:li {:key (:name size-preset)
+                          :class (stl/css-case :dropdown-element true
+                                               :match preset-match)
+                          :data-width (str (:width size-preset))
+                          :data-height (str (:height size-preset))
+                          :on-click on-preset-selected}
+                     [:div {:class (stl/css :name-wrapper)}
+                      [:span {:class (stl/css :preset-name)} (:name size-preset)]
+                      [:span {:class (stl/css :preset-size)} (:width size-preset) " x " (:height size-preset)]]
+                     (when preset-match
+                       [:span {:class (stl/css :check-icon)} deprecated-icon/tick])]))))]]]]
 
         [:& radio-buttons {:selected (or (d/name orientation) "")
                            :on-change on-orientation-change
-                           :name "frame-otientation"}
+                           :name "frame-orientation"
+                           :wide true
+                           :class (stl/css :radio-buttons)}
          [:& radio-button {:icon i/size-vertical
                            :value "vert"
                            :id "size-vertical"}]
@@ -341,81 +551,162 @@
         [:> icon-button*
          {:variant "ghost"
           :aria-label (tr "workspace.options.fit-content")
-          :title (tr "workspace.options.fit-content")
           :on-pointer-down handle-fit-content
-          :icon "fit-content"}]])
+          :icon i/fit-content}]])
+
      (when (options :size)
        [:div {:class (stl/css :size)}
-        [:div {:class (stl/css-case :width true
-                                    :disabled disabled-width-sizing?)
-               :title (tr "workspace.options.width")}
-         [:span {:class (stl/css :icon-text)} "W"]
-         [:> numeric-input* {:min 0.01
-                             :no-validate true
-                             :placeholder (if (= :multiple (:width values)) (tr "settings.multiple") "--")
-                             :on-change on-width-change
-                             :disabled disabled-width-sizing?
-                             :class (stl/css :numeric-input)
-                             :value (:width values)}]]
-        [:div {:class (stl/css-case :height true
-                                    :disabled disabled-height-sizing?)
-               :title (tr "workspace.options.height")}
-         [:span {:class (stl/css :icon-text)} "H"]
-         [:> numeric-input* {:min 0.01
-                             :no-validate true
-                             :placeholder (if (= :multiple (:height values)) (tr "settings.multiple") "--")
-                             :on-change on-height-change
-                             :disabled disabled-height-sizing?
-                             :class (stl/css :numeric-input)
-                             :value (:height values)}]]
-        [:button {:class (stl/css-case
-                          :lock-size-btn true
-                          :selected (true? proportion-lock)
-                          :disabled (= proportion-lock :multiple))
-                  :on-click on-proportion-lock-change}
-         (if proportion-lock
-           locked-icon
-           unlocked-icon)]])
+        (if token-numeric-inputs
+          [:*
+           [:> numeric-input-wrapper*
+            {:disabled disabled-width-sizing?
+             :on-change on-width-change
+             :on-detach on-detach-token
+             :icon i/character-w
+             :min 0.01
+             :attr :width
+             :property (tr "workspace.options.width")
+             :applied-token (get applied-tokens :width)
+             :placeholder (if (or (= :multiple (get applied-tokens :width))
+                                  (= :multiple (get values :width)))
+                            (tr "settings.multiple") "--")
+             :value (get values :width)}]
+
+           [:> numeric-input-wrapper*
+            {:disabled disabled-height-sizing?
+             :on-change on-height-change
+             :on-detach on-detach-token
+             :min 0.01
+             :icon i/character-h
+             :attr :height
+             :align :right
+             :property (tr "workspace.options.height")
+             :applied-token (get applied-tokens :height)
+             :value (get values :height)}]]
+
+          [:*
+           [:div {:class (stl/css-case :width true
+                                       :disabled disabled-width-sizing?)
+                  :title (tr "workspace.options.width")}
+            [:span {:class (stl/css :icon-text)} "W"]
+            [:> deprecated-input/numeric-input*
+             {:min 0.01
+              :no-validate true
+              :placeholder (if (= :multiple (:width values)) (tr "settings.multiple") "--")
+              :on-change on-width-change
+              :is-disabled disabled-width-sizing?
+              :class (stl/css :numeric-input)
+              :value (:width values)}]]
+           [:div {:class (stl/css-case :height true
+                                       :disabled disabled-height-sizing?)
+                  :title (tr "workspace.options.height")}
+            [:span {:class (stl/css :icon-text)} "H"]
+            [:> deprecated-input/numeric-input* {:min 0.01
+                                                 :no-validate true
+                                                 :placeholder (if (= :multiple (:height values)) (tr "settings.multiple") "--")
+                                                 :on-change on-height-change
+                                                 :is-disabled disabled-height-sizing?
+                                                 :class (stl/css :numeric-input)
+                                                 :value (:height values)}]]])
+
+        [:> icon-button* {:variant "ghost"
+                          :tooltip-placement "top-left"
+                          :icon (if proportion-lock "lock" "unlock")
+                          :class (stl/css-case :selected (true? proportion-lock))
+                          :disabled (= proportion-lock :multiple)
+                          :aria-label (if proportion-lock (tr "workspace.options.size.unlock") (tr "workspace.options.size.lock"))
+                          :on-click on-proportion-lock-change}]])
+
      (when (options :position)
        [:div {:class (stl/css :position)}
-        [:div {:class (stl/css-case :x-position true
-                                    :disabled disabled-position-x?)
-               :title (tr "workspace.options.x")}
-         [:span {:class (stl/css :icon-text)} "X"]
-         [:> numeric-input* {:no-validate true
-                             :placeholder (if (= :multiple (:x values)) (tr "settings.multiple") "--")
-                             :on-change on-pos-x-change
-                             :disabled disabled-position-x?
-                             :class (stl/css :numeric-input)
-                             :value (:x values)}]]
+        (if token-numeric-inputs
+          [:*
+           [:> numeric-input-wrapper*
+            {:disabled disabled-position?
+             :on-change on-pos-x-change
+             :on-detach on-detach-token
+             :icon i/character-x
+             :attr :x
+             :property (tr "workspace.options.x")
+             :applied-token (get applied-tokens :x)
+             :placeholder (if (or (= :multiple (get applied-tokens :x))
+                                  (= :multiple (get values :x)))
+                            (tr "settings.multiple") "--")
+             :value (get values :x)}]
+           [:> numeric-input-wrapper*
+            {:disabled disabled-position?
+             :on-change on-pos-y-change
+             :on-detach on-detach-token
+             :icon i/character-y
+             :attr :y
+             :align :right
+             :property (tr "workspace.options.y")
+             :applied-token (get applied-tokens :y)
+             :placeholder (if (or (= :multiple (get applied-tokens :y))
+                                  (= :multiple (get values :y)))
+                            (tr "settings.multiple") "--")
+             :value (get values :y)}]]
 
-        [:div {:class (stl/css-case :y-position true
-                                    :disabled disabled-position-y?)
-               :title (tr "workspace.options.y")}
-         [:span {:class (stl/css :icon-text)} "Y"]
-         [:> numeric-input* {:no-validate true
-                             :placeholder (if (= :multiple (:y values)) (tr "settings.multiple") "--")
-                             :disabled disabled-position-y?
-                             :on-change on-pos-y-change
-                             :class (stl/css :numeric-input)
-                             :value (:y values)}]]])
+          [:*
+           [:div {:class (stl/css-case :x-position true
+                                       :disabled disabled-position?)
+                  :title (tr "workspace.options.x")}
+            [:span {:class (stl/css :icon-text)} "X"]
+            [:> deprecated-input/numeric-input* {:no-validate true
+                                                 :placeholder (if (= :multiple (:x values)) (tr "settings.multiple") "--")
+                                                 :on-change on-pos-x-change
+                                                 :is-disabled disabled-position?
+                                                 :class (stl/css :numeric-input)
+                                                 :value (:x values)}]]
+
+           [:div {:class (stl/css-case :y-position true
+                                       :disabled disabled-position?)
+                  :title (tr "workspace.options.y")}
+            [:span {:class (stl/css :icon-text)} "Y"]
+            [:> deprecated-input/numeric-input* {:no-validate true
+                                                 :placeholder (if (= :multiple (:y values)) (tr "settings.multiple") "--")
+                                                 :disabled disabled-position?
+                                                 :on-change on-pos-y-change
+                                                 :class (stl/css :numeric-input)
+                                                 :value (:y values)}]]])])
+
      (when (or (options :rotation) (options :radius))
        [:div {:class (stl/css :rotation-radius)}
         (when (options :rotation)
-          [:div {:class (stl/css :rotation)
-                 :title (tr "workspace.options.rotation")}
-           [:span {:class (stl/css :icon)}  i/rotation]
-           [:> numeric-input*
-            {:no-validate true
-             :min -359
-             :max 359
-             :data-wrap true
-             :placeholder (if (= :multiple (:rotation values)) (tr "settings.multiple") "--")
-             :on-change on-rotation-change
-             :class (stl/css :numeric-input)
-             :value (:rotation values)}]])
+          (if token-numeric-inputs
+            [:> numeric-input-wrapper*
+             {:on-change on-rotation-change
+              :on-detach on-detach-token
+              :icon i/rotation
+              :min -359
+              :max 359
+              :attr :rotation
+              :property (tr "workspace.options.rotation")
+              :applied-token (get applied-tokens :rotation)
+              :placeholder (if (or (= :multiple (get applied-tokens :rotation))
+                                   (= :multiple (get values :rotation)))
+                             (tr "settings.multiple") "--")
+              :value (get values :rotation)}]
+
+            [:div {:class (stl/css :rotation)
+                   :title (tr "workspace.options.rotation")}
+             [:span {:class (stl/css :icon)}  deprecated-icon/rotation]
+             [:> deprecated-input/numeric-input*
+              {:no-validate true
+               :min -359
+               :max 359
+               :data-wrap true
+               :placeholder (if (= :multiple (:rotation values)) (tr "settings.multiple") "--")
+               :on-change on-rotation-change
+               :class (stl/css :numeric-input)
+               :value (:rotation values)}]]))
+
         (when (options :radius)
-          [:& border-radius-menu {:ids ids :ids-with-children ids-with-children :values values :shape shape}])])
+          [:> border-radius-menu* {:class (stl/css :border-radius)
+                                   :ids ids
+                                   :values values
+                                   :applied-tokens applied-tokens}])])
+
      (when (or (options :clip-content) (options :show-in-viewer))
        [:div {:class (stl/css :clip-show)}
         (when (options :clip-content)
@@ -431,7 +722,8 @@
                     :title (tr "workspace.options.clip-content")
                     :class (stl/css-case  :clip-content-label true
                                           :selected (not (:show-content values)))}
-            clip-content-icon]])
+
+            [:> icon* {:icon-id i/clip-content}]]])
         (when (options :show-in-viewer)
           [:div {:class (stl/css :show-in-viewer)}
            [:input {:type "checkbox"
@@ -445,5 +737,4 @@
                     :title (tr "workspace.options.show-in-viewer")
                     :class (stl/css-case  :clip-content-label true
                                           :selected (not (:hide-in-viewer values)))}
-            [:span {:class (stl/css :icon)}
-             play-icon]]])])]))
+            [:> icon* {:icon-id i/play}]]])])]))

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.util-objects-map-test
   (:require
@@ -86,7 +86,7 @@
 
 (t/deftest internal-encode-decode
   (smt/check!
-   (smt/for [data (->> (cg/map cg/uuid (sg/generator ::cts/shape))
+   (smt/for [data (->> (cg/map cg/uuid (sg/generator cts/schema:shape))
                        (cg/not-empty))]
      (let [obj1 (omap/wrap data)
            obj2 (omap/create (deref obj1))
@@ -103,7 +103,7 @@
 
 (t/deftest fressian-encode-decode
   (smt/check!
-   (smt/for [data (->> (cg/map cg/uuid (sg/generator ::cts/shape))
+   (smt/for [data (->> (cg/map cg/uuid (sg/generator cts/schema:shape))
                        (cg/not-empty)
                        (cg/fmap omap/wrap)
                        (cg/fmap (fn [o] {:objects o})))]
@@ -119,7 +119,7 @@
 
 (t/deftest transit-encode-decode
   (smt/check!
-   (smt/for [data (->> (cg/map cg/uuid (sg/generator ::cts/shape))
+   (smt/for [data (->> (cg/map cg/uuid (sg/generator cts/schema:shape))
                        (cg/not-empty)
                        (cg/fmap omap/wrap)
                        (cg/fmap (fn [o] {:objects o})))]

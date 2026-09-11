@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard.grid
   (:require-macros [app.main.style :as stl])
@@ -11,6 +11,7 @@
    [app.common.data.macros :as dm]
    [app.common.geom.point :as gpt]
    [app.common.logging :as log]
+   [app.common.time :as ct]
    [app.config :as cf]
    [app.main.data.common :as dcm]
    [app.main.data.dashboard :as dd]
@@ -25,26 +26,28 @@
    [app.main.repo :as rp]
    [app.main.store :as st]
    [app.main.ui.components.color-bullet :as bc]
+   [app.main.ui.components.portal :refer [portal-on-document*]]
    [app.main.ui.dashboard.file-menu :refer [file-menu*]]
    [app.main.ui.dashboard.import :refer [use-import-file]]
    [app.main.ui.dashboard.inline-edition :refer [inline-edition]]
-   [app.main.ui.dashboard.placeholder :refer [empty-placeholder loading-placeholder]]
+   [app.main.ui.dashboard.placeholder :refer [empty-grid-placeholder* loading-placeholder*]]
+   [app.main.ui.ds.foundations.assets.icon :as i :refer [icon*]]
    [app.main.ui.ds.product.loader :refer [loader*]]
    [app.main.ui.hooks :as h]
-   [app.main.ui.icons :as i]
-   [app.main.worker :as wrk]
+   [app.main.worker :as mw]
    [app.util.color :as uc]
    [app.util.dom :as dom]
    [app.util.dom.dnd :as dnd]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as kbd]
-   [app.util.time :as dt]
    [app.util.timers :as ts]
    [beicon.v2.core :as rx]
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
 
 (log/set-level! :debug)
+
+(def thumbnail-width 252)
 
 ;; --- Grid Item Thumbnail
 
@@ -56,16 +59,22 @@
 
 (defn render-thumbnail
   [file-id revn]
-  (->> (wrk/ask! {:cmd :thumbnails/generate-for-file
-                  :revn revn
-                  :file-id file-id
-                  :features (features/get-team-enabled-features @st/state)})
-       (rx/mapcat (fn [{:keys [fonts] :as result}]
-                    (->> (fonts/render-font-styles fonts)
-                         (rx/map (fn [styles]
-                                   (assoc result
-                                          :styles styles
-                                          :width 252))))))))
+  (if (features/active-feature? @st/state "render-wasm/v1")
+    (mw/ask! {:cmd :thumbnails/generate-for-file-wasm
+              :revn revn
+              :file-id file-id
+              :width thumbnail-width})
+    (->> (mw/ask! {:cmd :thumbnails/generate-for-file
+                   :revn revn
+                   :file-id file-id
+                   :width thumbnail-width})
+         (rx/mapcat
+          (fn [{:keys [fonts] :as result}]
+            (->> (fonts/render-font-styles fonts)
+                 (rx/map (fn [styles]
+                           (-> result
+                               (assoc :styles styles
+                                      :width thumbnail-width))))))))))
 
 (defn- ask-for-thumbnail
   "Creates some hooks to handle the files thumbnails cache"
@@ -75,9 +84,8 @@
        (rx/mapcat (partial persist-thumbnail file-id revn))))
 
 (mf/defc grid-item-thumbnail*
-  {::mf/props :obj
-   ::mf/private true}
-  [{:keys [can-edit file]}]
+  {::mf/private true}
+  [{:keys [can-edit file can-restore]}]
   (let [file-id      (get file :id)
         revn         (get file :revn)
         thumbnail-id (get file :thumbnail-id)
@@ -88,17 +96,20 @@
         visible?     (h/use-visible container :once? true)]
 
     (mf/with-effect [file-id revn visible? thumbnail-id]
-      (when (and visible? (not thumbnail-id))
-        (->> (ask-for-thumbnail file-id revn)
-             (rx/subs! (fn [thumbnail-id]
-                         (st/emit! (dd/set-file-thumbnail file-id thumbnail-id)))
-                       (fn [cause]
-                         (log/error :hint "unable to render thumbnail"
-                                    :file-if file-id
-                                    :revn revn
-                                    :message (ex-message cause)))))))
+      (when (and can-edit visible? (not thumbnail-id))
+        (let [subscription
+              (->> (ask-for-thumbnail file-id revn)
+                   (rx/subs! (fn [thumbnail-id]
+                               (st/emit! (dd/set-file-thumbnail file-id thumbnail-id)))
+                             (fn [cause]
+                               (log/error :hint "unable to render thumbnail"
+                                          :file-if file-id
+                                          :revn revn
+                                          :message (ex-message cause)))))]
+          (partial rx/dispose! subscription))))
 
-    [:div {:class (stl/css :grid-item-th)
+    [:div {:class (stl/css-case :grid-item-thumbnail true
+                                :is-deleted can-restore)
            :style {:background-color bg-color}
            :ref container}
      (when visible?
@@ -108,130 +119,138 @@
                 :src (cf/resolve-media thumbnail-id)
                 :loading "lazy"
                 :decoding "async"}]
-         [:> loader* {:class (stl/css :grid-loader)
-                      :draggable (dm/str can-edit)
-                      :overlay true
-                      :title (tr "labels.loading")}]))]))
+         (when can-edit
+           [:> loader* {:class (stl/css :grid-loader)
+                        :draggable (dm/str can-edit)
+                        :overlay true
+                        :title (tr "labels.loading")}])))]))
 
 ;; --- Grid Item Library
 
-(def ^:private menu-icon
-  (i/icon-xref :menu (stl/css :menu-icon)))
-
 (mf/defc grid-item-library*
-  {::mf/props :obj}
-  [{:keys [file]}]
+  [{:keys [file can-restore]}]
   (mf/with-effect [file]
     (when file
       (let [font-ids (map :font-id (get-in file [:library-summary :typographies :sample] []))]
         (run! fonts/ensure-loaded! font-ids))))
 
-  [:div {:class (stl/css :grid-item-th :library)}
+  [:div {:class (stl/css-case :library-thumbnail true
+                              :is-deleted can-restore)}
    (if (nil? file)
      [:> loader* {:class (stl/css :grid-loader)
                   :overlay true
                   :title (tr "labels.loading")}]
-     (let [summary (:library-summary file)
-           components (:components summary)
-           colors (:colors summary)
+     (let [summary      (:library-summary file)
+           components   (:components summary)
+           colors       (:colors summary)
            typographies (:typographies summary)]
        [:*
         (when (and (zero? (:count components)) (zero? (:count colors)) (zero? (:count typographies)))
           [:*
-           [:div {:class (stl/css :asset-section)}
-            [:div {:class (stl/css :asset-title)}
+           [:div {:class (stl/css :library-asset-section)}
+            [:div {:class (stl/css :library-asset-title)}
              [:span (tr "workspace.assets.components")]
-             [:span {:class (stl/css :num-assets)} (str "\u00A0(") 0 ")"]]] ;; Unicode 00A0 is non-breaking space
-           [:div {:class (stl/css :asset-section)}
-            [:div {:class (stl/css :asset-title)}
+             [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") 0 ")"]]] ;; Unicode 00A0 is non-breaking space
+           [:div {:class (stl/css :library-asset-section)}
+            [:div {:class (stl/css :library-asset-title)}
              [:span (tr "workspace.assets.colors")]
-             [:span {:class (stl/css :num-assets)} (str "\u00A0(") 0 ")"]]] ;; Unicode 00A0 is non-breaking space
-           [:div {:class (stl/css :asset-section)}
-            [:div {:class (stl/css :asset-title)}
+             [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") 0 ")"]]] ;; Unicode 00A0 is non-breaking space
+           [:div {:class (stl/css :library-asset-section)}
+            [:div {:class (stl/css :library-asset-title)}
              [:span (tr "workspace.assets.typography")]
-             [:span {:class (stl/css :num-assets)} (str "\u00A0(") 0 ")"]]]]) ;; Unicode 00A0 is non-breaking space
+             [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") 0 ")"]]]]) ;; Unicode 00A0 is non-breaking space
 
 
         (when (pos? (:count components))
-          [:div {:class (stl/css :asset-section)}
-           [:div {:class (stl/css :asset-title)}
+          [:div {:class (stl/css :library-asset-section)}
+           [:div {:class (stl/css :library-asset-title)}
             [:span (tr "workspace.assets.components")]
-            [:span {:class (stl/css :num-assets)} (str "\u00A0(") (:count components) ")"]] ;; Unicode 00A0 is non-breaking space
-           [:div {:class (stl/css :asset-list)}
+            [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") (:count components) ")"]] ;; Unicode 00A0 is non-breaking space
+           [:div {:class (stl/css :library-asset-list)}
             (for [component (:sample components)]
-              (let [root-id (or (:main-instance-id component) (:id component))] ;; Check for components-v2 in library
-                [:div {:class (stl/css :asset-list-item)
+              (let [root-id (:main-instance-id component)]
+                [:div {:class (stl/css :library-asset-item)
                        :key (str "assets-component-" (:id component))}
-                 [:& render/component-svg {:root-shape (get-in component [:objects root-id])
+                 [:& render/component-svg {:class (stl/css :library-asset-icon)
+                                           :root-shape (get-in component [:objects root-id])
                                            :objects (:objects component)}] ;; Components in the summary come loaded with objects, even in v2
-                 [:div {:class (stl/css :name-block)}
-                  [:span {:class (stl/css :item-name)
+                 [:div {:class (stl/css :library-name-block)}
+                  [:span {:class (stl/css :library-item-name)
                           :title (:name component)}
                    (:name component)]]]))
             (when (> (:count components) (count (:sample components)))
-              [:div {:class (stl/css :asset-list-item)}
-               [:div {:class (stl/css :name-block)}
-                [:span {:class (stl/css :item-name)} "(...)"]]])]])
+              [:div {:class (stl/css :library-asset-item)}
+               [:div {:class (stl/css :library-name-block)}
+                [:span {:class (stl/css :library-item-name)} "(...)"]]])]])
 
         (when (pos? (:count colors))
-          [:div {:class (stl/css :asset-section)}
-           [:div {:class (stl/css :asset-title)}
+          [:div {:class (stl/css :library-asset-section)}
+           [:div {:class (stl/css :library-asset-title)}
             [:span (tr "workspace.assets.colors")]
-            [:span {:class (stl/css :num-assets)} (str "\u00A0(") (:count colors) ")"]] ;; Unicode 00A0 is non-breaking space
-           [:div {:class (stl/css :asset-list)}
+            [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") (:count colors) ")"]] ;; Unicode 00A0 is non-breaking space
+           [:div {:class (stl/css :library-asset-list)}
             (for [color (:sample colors)]
               (let [default-name (cond
                                    (:gradient color) (uc/gradient-type->string (get-in color [:gradient :type]))
                                    (:color color) (:color color)
                                    :else (:value color))]
-                [:div {:class (stl/css :asset-list-item :color-item)
+                [:div {:class (stl/css :library-asset-item :library-color-item)
                        :key (str "assets-color-" (:id color))}
-                 [:& bc/color-bullet {:color {:color (:color color)
-                                              :id (:id color)
-                                              :opacity (:opacity color)}
-                                      :mini true}]
-                 [:div {:class (stl/css :name-block)}
-                  [:span {:class (stl/css :color-name)} (:name color)]
+                 [:> bc/color-bullet* {:color {:color (:color color)
+                                               :id (:id color)
+                                               :opacity (:opacity color)}
+                                       :mini true}]
+                 [:div {:class (stl/css :library-name-block)}
+                  [:span {:class (stl/css :library-color-name)} (:name color)]
                   (when-not (= (:name color) default-name)
-                    [:span {:class (stl/css :color-value)} (:color color)])]]))
+                    [:span {:class (stl/css :library-color-value)} (:color color)])]]))
 
             (when (> (:count colors) (count (:sample colors)))
-              [:div {:class (stl/css :asset-list-item)}
-               [:div {:class (stl/css :name-block)}
-                [:span {:class (stl/css :item-name)} "(...)"]]])]])
+              [:div {:class (stl/css :library-asset-item)}
+               [:div {:class (stl/css :library-name-block)}
+                [:span {:class (stl/css :library-item-name)} "(...)"]]])]])
 
         (when (pos? (:count typographies))
-          [:div {:class (stl/css :asset-section)}
-           [:div {:class (stl/css :asset-title)}
+          [:div {:class (stl/css :library-asset-section)}
+           [:div {:class (stl/css :library-asset-title)}
             [:span (tr "workspace.assets.typography")]
-            [:span {:class (stl/css :num-assets)} (str "\u00A0(") (:count typographies) ")"]] ;; Unicode 00A0 is non-breaking space
-           [:div {:class (stl/css :asset-list)}
+            [:span {:class (stl/css :library-num-assets)} (str "\u00A0(") (:count typographies) ")"]] ;; Unicode 00A0 is non-breaking space
+           [:div {:class (stl/css :library-asset-list)}
             (for [typography (:sample typographies)]
-              [:div {:class (stl/css :asset-list-item)
+              [:div {:class (stl/css :library-asset-item)
                      :key (str "assets-typography-" (:id typography))}
-               [:div {:class (stl/css :typography-sample)
+               [:div {:class (stl/css :library-typography-sample)
                       :style {:font-family (:font-family typography)
                               :font-weight (:font-weight typography)
                               :font-style (:font-style typography)}}
                 (tr "workspace.assets.typography.sample")]
-               [:div {:class (stl/css :name-block)}
-                [:span {:class (stl/css :item-name)
+               [:div {:class (stl/css :library-name-block)}
+                [:span {:class (stl/css :library-item-name)
                         :title (:name typography)}
                  (:name typography)]]])
 
             (when (> (:count typographies) (count (:sample typographies)))
-              [:div {:class (stl/css :asset-list-item)}
-               [:div {:class (stl/css :name-block)}
-                [:span {:class (stl/css :item-name)} "(...)"]]])]])]))])
+              [:div {:class (stl/css :library-asset-item)}
+               [:div {:class (stl/css :library-name-block)}
+                [:span {:class (stl/css :library-item-name)} "(...)"]]])]])]))])
 
 ;; --- Grid Item
 
-(mf/defc grid-item-metadata
-  [{:keys [modified-at]}]
-
-  (let [locale (mf/deref i18n/locale)
-        time   (dt/timeago modified-at {:locale locale})]
-    [:span {:class (stl/css :date)} time]))
+(mf/defc grid-item-metadata*
+  {::mf/private true}
+  [{:keys [file layout]}]
+  (let [deleted-at (:will-be-deleted-at file)
+        date-class (stl/css-case :grid-item-date (= layout :grid)
+                                 :list-item-date (= layout :list))]
+    (if deleted-at
+      (let [time (ct/timeago deleted-at)]
+        [:span {:class date-class
+                :title (tr "dashboard.deleted.will-be-deleted-at" time)}
+         time])
+      (let [time (ct/timeago (:modified-at file))]
+        [:span {:class date-class
+                :title (tr "dashboard.grid.last-modified-at" time)}
+         time]))))
 
 (defn create-counter-element
   [_element file-count]
@@ -241,29 +260,38 @@
     counter-el))
 
 (mf/defc grid-item*
-  {::mf/props :obj}
-  [{:keys [file origin can-edit selected-files]}]
-  (let [file-id         (:id file)
+  {::mf/private true}
+  [{:keys [file origin can-edit selected-files can-restore layout]}]
+  (let [node-ref      (mf/use-ref)
+        menu-ref      (mf/use-ref)
 
-        is-library-view (= origin :libraries)
+        state         (mf/deref refs/dashboard-local)
 
-        dashboard-local (mf/deref refs/dashboard-local)
-        file-menu-open? (:menu-open dashboard-local)
+        file-id       (get file :id)
 
-        selected?       (contains? selected-files file-id)
+        menu-pos      (get state :menu-pos)
+        menu-open?    (and (get state :menu-open)
+                           (= file-id (:file-id state)))
 
-        node-ref        (mf/use-ref)
-        menu-ref        (mf/use-ref)
+        selected?     (contains? selected-files file-id)
+        selected-num  (count selected-files)
+
+        list?         (= layout :list)
+
+        editing?      (and (= file-id (:file-id state))
+                           (:edition state))
+
+        library-view? (= origin :libraries)
 
         on-menu-close
         (mf/use-fn
-         (fn [_]
-           (st/emit! (dd/hide-file-menu))))
+         #(st/emit! (dd/hide-file-menu)))
 
         on-select
         (mf/use-fn
+         (mf/deps selected? selected-num)
          (fn [event]
-           (when (or (not selected?) (> (count selected-files) 1))
+           (when (or (not selected?) (> selected-num 1))
              (dom/stop-propagation event)
              (let [shift? (kbd/shift? event)]
                (when-not shift?
@@ -272,73 +300,80 @@
 
         on-navigate
         (mf/use-fn
-         (mf/deps file-id)
+         (mf/deps file-id can-restore)
          (fn [event]
-           (let [menu-icon (mf/ref-val menu-ref)
-                 target    (dom/get-target event)]
-             (when-not (dom/child? target menu-icon)
-               (st/emit! (dcm/go-to-workspace :file-id file-id))))))
+           (when-not can-restore
+             (let [menu-icon (mf/ref-val menu-ref)
+                   target    (dom/get-target event)]
+               (when-not (dom/child? target menu-icon)
+                 (st/emit! (dcm/go-to-workspace :file-id file-id)))))))
 
         on-drag-start
         (mf/use-fn
-         (mf/deps selected-files can-edit)
+         (mf/deps selected? selected-num)
          (fn [event]
            (st/emit! (dd/hide-file-menu))
            (when can-edit
-             (let [offset          (dom/get-offset-position (dom/event->native-event event))
-
-                   select-current? (not (contains? selected-files (:id file)))
-
-                   item-el         (mf/ref-val node-ref)
-                   counter-el      (create-counter-element
-                                    item-el
-                                    (if select-current?
-                                      1
-                                      (count selected-files)))]
-               (when select-current?
+             (let [offset     (dom/get-offset-position (dom/event->native-event event))
+                   item-el    (mf/ref-val node-ref)
+                   counter-el (create-counter-element item-el
+                                                      (if (not selected?)
+                                                        1
+                                                        selected-num))]
+               (when (not selected?)
                  (st/emit! (dd/clear-selected-files))
                  (st/emit! (dd/toggle-file-select file)))
 
                (dnd/set-data! event "penpot/files" "dummy")
                (dnd/set-allowed-effect! event "move")
 
-              ;; set-drag-image requires that the element is rendered and
-              ;; visible to the user at the moment of creating the ghost
-              ;; image (to make a snapshot), but you may remove it right
-              ;; afterwards, in the next render cycle.
+               ;; set-drag-image requires that the element is rendered
+               ;; and visible to the user at the moment of creating the
+               ;; ghost image (to make a snapshot), but you may remove
+               ;; it right afterwards, in the next render cycle.
                (dom/append-child! item-el counter-el)
                (dnd/set-drag-image! event item-el (:x offset) (:y offset))
-               (ts/raf #(.removeChild ^js item-el counter-el))))))
+               ;; Guard against race condition: if the user navigates away
+               ;; before the RAF fires, item-el may have been unmounted and
+               ;; counter-el is no longer a child — removeChild would throw.
+               (ts/raf #(when (dom/child? counter-el item-el)
+                          (dom/remove-child! item-el counter-el)))))))
 
         on-menu-click
         (mf/use-fn
-         (mf/deps file selected?)
+         (mf/deps file selected? menu-open?)
          (fn [event]
            (dom/stop-propagation event)
-           (dom/prevent-default event)
-           (when-not selected?
-             (when-not (kbd/shift? event)
-               (st/emit! (dd/clear-selected-files)))
-             (st/emit! (dd/toggle-file-select file)))
 
-           (let [client-position (dom/get-client-position event)
-                 position (if (and (nil? (:y client-position)) (nil? (:x client-position)))
-                            (let [target-element (dom/get-target event)
-                                  points         (dom/get-bounding-rect target-element)
-                                  y              (:top points)
-                                  x              (:left points)]
-                              (gpt/point x y))
-                            client-position)]
-             (st/emit! (dd/show-file-menu-with-position file-id position)))))
+           (if menu-open?
+             (st/emit! (dd/hide-file-menu))
+
+             (do
+               (when-not selected?
+                 (when-not (kbd/shift? event)
+                   (st/emit! (dd/clear-selected-files)))
+                 (st/emit! (dd/toggle-file-select file)))
+
+               (let [client-position
+                     (dom/get-client-position event)
+
+                     position
+                     (if (and (nil? (:y client-position)) (nil? (:x client-position)))
+                       (let [target-element (dom/get-target event)
+                             points         (dom/get-bounding-rect target-element)
+                             y              (:top points)
+                             x              (:left points)]
+                         (gpt/point x y))
+                       client-position)]
+
+                 (st/emit! (dd/show-file-menu-with-position file-id position)))))))
 
         on-context-menu
         (mf/use-fn
-         (mf/deps is-library-view)
+         (mf/deps on-menu-click)
          (fn [event]
-           (dom/stop-propagation event)
            (dom/prevent-default event)
-           (when-not is-library-view
-             (on-menu-click event))))
+           (on-menu-click event)))
 
         edit
         (mf/use-fn
@@ -356,95 +391,158 @@
            (dom/stop-propagation event)
            (st/emit! (dd/start-edit-file-name file-id))))
 
-        handle-key-down
-        (mf/use-callback
+        on-key-down
+        (mf/use-fn
          (mf/deps on-navigate on-select)
          (fn [event]
            (dom/stop-propagation event)
            (when (kbd/enter? event)
              (on-navigate event))
            (when (kbd/shift? event)
-             (when (or (kbd/down-arrow? event) (kbd/left-arrow? event) (kbd/up-arrow? event) (kbd/right-arrow? event))
-               (on-select event)) ;; TODO Fix this
-             )))]
+             (when (or (kbd/down-arrow? event)
+                       (kbd/left-arrow? event)
+                       (kbd/up-arrow? event)
+                       (kbd/right-arrow? event))
+               ;; TODO Fix this
+               (on-select event)))))
 
-    [:li {:class (stl/css-case :grid-item true
-                               :project-th true
-                               :library is-library-view)}
-     [:div
-      {:class (stl/css-case :selected selected?
-                            :library is-library-view)
-       :ref node-ref
-       :role "button"
-       :title (:name file)
-       :draggable (dm/str can-edit)
-       :on-click on-select
-       :on-key-down handle-key-down
-       :on-double-click on-navigate
-       :on-drag-start on-drag-start
-       :on-context-menu on-context-menu}
+        on-menu-key-down
+        (mf/use-fn
+         (mf/deps on-menu-click)
+         (fn [event]
+           (when (kbd/enter? event)
+             (dom/stop-propagation event)
+             (dom/prevent-default event)
+             (on-menu-click event))))
 
-      [:div {:class (stl/css :overlay)}]
+        ;; The options menu is identical in both layouts, so we build it once
+        ;; and place it where each layout needs it. NOTE: hiccup bound in a
+        ;; let is not compiled by rumext, so it must be wrapped in mf/html.
+        menu-element
+        (mf/html
+         [:div {:class (stl/css-case :project-thumbnail-actions true
+                                     :is-force-display menu-open?)}
+          [:div {:class (stl/css :project-thumbnail-icon :menu)
+                 :tab-index "0"
+                 :role "button"
+                 :aria-label (tr "dashboard.options")
+                 :ref menu-ref
+                 :id (dm/str file-id "-action-menu")
+                 :on-click on-menu-click
+                 :on-key-down on-menu-key-down}
 
-      (if ^boolean is-library-view
-        [:> grid-item-library* {:file file}]
-        [:> grid-item-thumbnail* {:file file :can-edit can-edit}])
+           [:> icon* {:icon-id i/menu
+                      :class (stl/css :menu-icon)}]
 
-      (when (and (:is-shared file) (not is-library-view))
-        [:div {:class (stl/css :item-badge)} i/library])
-
-      [:div {:class (stl/css :info-wrapper)}
-       [:div {:class (stl/css :item-info)}
-        (if (and (= file-id (:file-id dashboard-local)) (:edition dashboard-local))
-          [:& inline-edition {:content (:name file)
-                              :on-end edit}]
-          [:h3 (:name file)])
-        [:& grid-item-metadata {:modified-at (:modified-at file)}]]
-
-       (when-not is-library-view
-         [:div {:class (stl/css-case :project-th-actions true :force-display (:menu-open dashboard-local))}
-          [:div
-           {:class (stl/css :project-th-icon :menu)
-            :tab-index "0"
-            :ref menu-ref
-            :id (str file-id "-action-menu")
-            :on-click on-menu-click
-            :on-key-down (fn [event]
-                           (when (kbd/enter? event)
-                             (dom/stop-propagation event)
-                             (on-menu-click event)))}
-           menu-icon
-           (when (and selected? file-menu-open?)
-           ;; When the menu is open we disable events in the dashboard. We need to force pointer events
-           ;; so the menu can be handled
-             [:div {:style {:pointer-events "all"}}
+           (when (and selected? menu-open?)
+             ;; When the menu is open we disable events in the dashboard. We need to force pointer events
+             ;; so the menu can be handled
+             [:> portal-on-document* {}
               [:> file-menu* {:files (vals selected-files)
-                              :left (+ 24 (:x (:menu-pos dashboard-local)))
-                              :top (:y (:menu-pos dashboard-local))
+                              :left (+ 24 (:x menu-pos))
+                              :top (:y menu-pos)
                               :can-edit can-edit
                               :navigate true
                               :on-edit on-edit
-                              :on-menu-close on-menu-close
+                              :on-close on-menu-close
                               :origin origin
-                              :parent-id (dm/str file-id "-action-menu")}]])]])]]]))
+                              :parent-id (dm/str file-id "-action-menu")
+                              :can-restore can-restore}]])]])]
 
-(mf/defc grid
-  {::mf/props :obj}
-  [{:keys [files project origin limit create-fn can-edit selected-files]}]
+    (if ^boolean list?
+      [:li {:class (stl/css-case :grid-item true
+                                 :list-item true
+                                 :library-item library-view?)}
+       [:div
+        {:class (stl/css-case :list-item-row true
+                              :is-selected selected?)
+         :ref node-ref
+         :role "button"
+         :title (:name file)
+         :aria-label (:name file)
+         :draggable (dm/str can-edit)
+         :on-click on-select
+         :on-key-down on-key-down
+         :on-double-click on-navigate
+         :on-drag-start on-drag-start
+         :on-context-menu on-context-menu}
+
+        (if ^boolean editing?
+          [:& inline-edition {:content (:name file)
+                              :on-end edit
+                              :max-length 250}]
+          [:h3 {:class (stl/css :list-item-name)} (:name file)])
+
+        (when (and (:is-shared file) (not library-view?))
+          [:span {:class (stl/css :list-item-badge)
+                  :aria-label (tr "workspace.assets.shared-library")
+                  :title (tr "workspace.assets.shared-library")}
+           [:> icon* {:icon-id i/library}]])
+
+        [:> grid-item-metadata* {:file file :layout :list}]
+
+        menu-element]]
+
+      [:li {:class (stl/css-case :grid-item true
+                                 :project-thumbnail true
+                                 :library-item library-view?)}
+       [:div {:class (stl/css-case :is-selected selected?
+                                   :grid-item-button true)
+              :ref node-ref
+              :role "button"
+              :title (:name file)
+              :aria-label (:name file)
+              :draggable (dm/str can-edit)
+              :on-click on-select
+              :on-key-down on-key-down
+              :on-double-click on-navigate
+              :on-drag-start on-drag-start
+              :on-context-menu on-context-menu}
+
+        (if ^boolean library-view?
+          [:> grid-item-library* {:file file
+                                  :can-restore can-restore}]
+          [:> grid-item-thumbnail* {:file file
+                                    :can-edit can-edit
+                                    :can-restore can-restore}])
+
+        (when (and (:is-shared file) (not library-view?))
+          [:div {:class (stl/css :grid-item-badge)}
+           [:> icon* {:icon-id i/library}]])
+
+        [:div {:class (stl/css :grid-item-info)}
+         [:div {:class (stl/css :grid-item-meta)}
+          (if ^boolean editing?
+            [:& inline-edition {:content (:name file)
+                                :on-end edit
+                                :max-length 250}]
+            [:h3 {:class (stl/css :grid-item-title)} (:name file)])
+          [:> grid-item-metadata* {:file file :layout :grid}]]
+
+         menu-element]]])))
+
+(mf/defc grid*
+  [{:keys [files project origin limit create-fn can-edit selected-files can-restore layout]}]
   (let [dragging?  (mf/use-state false)
-        project-id (:id project)
+        list?      (= layout :list)
+        project-id (get project :id)
+        team-id    (get project :team-id)
+
         node-ref   (mf/use-var nil)
 
         on-finish-import
         (mf/use-fn
+         (mf/deps project-id team-id)
          (fn []
            (st/emit! (dpj/fetch-files project-id)
-                     (dtm/fetch-shared-files)
+                     (dtm/fetch-shared-files team-id)
                      (dd/clear-selected-files))))
 
+        import-files
+        (use-import-file project-id on-finish-import)
 
-
-        import-files (use-import-file project-id on-finish-import)
+        on-scroll
+        (mf/use-fn #(st/emit! (dd/hide-file-menu)))
 
         on-drag-enter
         (mf/use-fn
@@ -487,10 +585,24 @@
            :on-drag-over on-drag-over
            :on-drag-leave on-drag-leave
            :on-drop on-drop
+           :on-scroll on-scroll
            :ref node-ref}
      (cond
        (nil? files)
-       [:& loading-placeholder]
+       [:> loading-placeholder*]
+
+       (and (seq files) list?)
+       [:ul {:class (stl/css :grid-row :list-view)}
+        (when @dragging?
+          [:li {:class (stl/css :list-item-dragged)}])
+        (for [item files]
+          [:> grid-item* {:file item
+                          :key (dm/str (:id item))
+                          :origin origin
+                          :selected-files selected-files
+                          :can-edit can-edit
+                          :can-restore can-restore
+                          :layout :list}])]
 
        (seq files)
        (for [[index slice] (d/enumerate (partition-all limit files))]
@@ -499,40 +611,57 @@
           (when @dragging?
             [:li {:class (stl/css :grid-item)}])
           (for [item slice]
-            [:> grid-item*
-             {:file item
-              :key (dm/str (:id item))
-              :origin origin
-              :selected-files selected-files
-              :can-edit can-edit}])])
+            [:> grid-item* {:file item
+                            :key (dm/str (:id item))
+                            :origin origin
+                            :selected-files selected-files
+                            :can-edit can-edit
+                            :can-restore can-restore}])])
 
        :else
-       [:& empty-placeholder
-        {:limit limit
-         :can-edit can-edit
-         :create-fn create-fn
-         :origin origin}])]))
+       [:> empty-grid-placeholder* {:limit limit
+                                    :can-edit can-edit
+                                    :create-fn create-fn
+                                    :origin origin
+                                    :project-id project-id
+                                    :team-id team-id
+                                    :on-finish-import on-finish-import}])]))
 
-(mf/defc line-grid-row
-  [{:keys [files selected-files dragging? limit can-edit] :as props}]
+(mf/defc line-grid-row*
+  {::mf/private true}
+  [{:keys [files selected-files is-dragging limit can-edit can-restore layout]}]
   (let [elements limit
-        limit (if dragging? (dec limit) limit)]
-    [:ul {:class (stl/css :grid-row :no-wrap)
-          :style {:grid-template-columns (dm/str "repeat(" elements ", 1fr)")}}
+        limit    (if is-dragging (dec limit) limit)
+        list?    (= layout :list)]
+    (if ^boolean list?
+      [:ul {:class (stl/css :grid-row :list-view)}
+       (when is-dragging
+         [:li {:class (stl/css :list-item-dragged)}])
+       (for [item (take limit files)]
+         [:> grid-item* {:id (:id item)
+                         :file item
+                         :selected-files selected-files
+                         :can-edit can-edit
+                         :key (dm/str (:id item))
+                         :can-restore can-restore
+                         :layout :list}])]
 
-     (when dragging?
-       [:li {:class (stl/css :grid-item :dragged)}])
+      [:ul {:class (stl/css :grid-row :no-wrap)
+            :style {:grid-template-columns (dm/str "repeat(" elements ", 1fr)")}}
 
-     (for [item (take limit files)]
-       [:> grid-item*
-        {:id (:id item)
-         :file item
-         :selected-files selected-files
-         :can-edit can-edit
-         :key (dm/str (:id item))}])]))
+       (when is-dragging
+         [:li {:class (stl/css :grid-item :is-dragged)}])
 
-(mf/defc line-grid
-  [{:keys [project team files limit create-fn can-edit] :as props}]
+       (for [item (take limit files)]
+         [:> grid-item* {:id (:id item)
+                         :file item
+                         :selected-files selected-files
+                         :can-edit can-edit
+                         :key (dm/str (:id item))
+                         :can-restore can-restore}])])))
+
+(mf/defc line-grid*
+  [{:keys [project team files limit create-fn can-edit can-restore layout]}]
   (let [dragging?        (mf/use-state false)
         project-id       (:id project)
         team-id          (:id team)
@@ -542,8 +671,9 @@
 
         on-finish-import
         (mf/use-fn
+         (mf/deps team-id)
          (fn []
-           (st/emit! (dd/fetch-recent-files)
+           (st/emit! (dd/fetch-recent-files team-id)
                      (dd/clear-selected-files))))
 
         import-files (use-import-file project-id on-finish-import)
@@ -584,9 +714,10 @@
 
         on-drop-success
         (mf/use-fn
+         (mf/deps team-id)
          (fn []
            (st/emit! (ntf/success (tr "dashboard.success-move-file"))
-                     (dd/fetch-recent-files)
+                     (dd/fetch-recent-files team-id)
                      (dd/clear-selected-files))))
 
         on-drop
@@ -620,19 +751,23 @@
            :on-drop on-drop}
      (cond
        (nil? files)
-       [:& loading-placeholder]
+       [:> loading-placeholder*]
 
        (seq files)
-       [:& line-grid-row {:files files
-                          :team-id team-id
-                          :selected-files selected-files
-                          :dragging? @dragging?
-                          :can-edit can-edit
-                          :limit limit}]
+       [:> line-grid-row* {:files files
+                           :team-id team-id
+                           :selected-files selected-files
+                           :is-dragging @dragging?
+                           :can-edit can-edit
+                           :limit limit
+                           :can-restore can-restore
+                           :layout layout}]
 
        :else
-       [:& empty-placeholder
-        {:dragging? @dragging?
-         :limit limit
-         :can-edit can-edit
-         :create-fn create-fn}])]))
+       [:> empty-grid-placeholder* {:is-dragging @dragging?
+                                    :limit limit
+                                    :can-edit can-edit
+                                    :create-fn create-fn
+                                    :project-id project-id
+                                    :team-id team-id
+                                    :on-finish-import on-finish-import}])]))

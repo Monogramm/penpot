@@ -2,16 +2,18 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns user
   (:require
+   [app.binfile.common :as bfc]
    [app.common.data :as d]
    [app.common.debug :as debug]
    [app.common.exceptions :as ex]
    [app.common.files.helpers :as cfh]
    [app.common.fressian :as fres]
    [app.common.geom.matrix :as gmt]
+   [app.common.json :as json]
    [app.common.logging :as l]
    [app.common.perf :as perf]
    [app.common.pprint :as pp]
@@ -19,20 +21,22 @@
    [app.common.schema.desc-js-like :as smdj]
    [app.common.schema.desc-native :as smdn]
    [app.common.schema.generators :as sg]
+   [app.common.schema.openapi :as oapi]
    [app.common.spec :as us]
-   [app.common.json :as json]
+   [app.common.time :as ct]
    [app.common.transit :as t]
    [app.common.types.file :as ctf]
    [app.common.uuid :as uuid]
+   [app.common.uri :as u]
    [app.config :as cf]
    [app.db :as db]
    [app.main :as main]
-   [app.srepl.helpers :as srepl.helpers]
-   [app.srepl.main :as srepl]
+   [app.srepl.helpers :as h]
+   [app.srepl.main :refer :all]
    [app.util.blob :as blob]
-   [app.util.time :as dt]
    [clj-async-profiler.core :as prof]
    [clojure.contrib.humanize :as hum]
+   [clojure.datafy :refer [datafy]]
    [clojure.java.io :as io]
    [clojure.pprint :refer [pprint print-table]]
    [clojure.repl :refer :all]
@@ -100,24 +104,20 @@
   []
   (try
     (main/start)
-    :started
     (catch Throwable cause
       (ex/print-throwable cause))))
 
 (defn- stop
   []
-  (main/stop)
-  :stopped)
+  (main/stop))
 
 (defn restart
   []
-  (stop)
-  (repl/refresh :after 'user/start))
+  (main/restart))
 
 (defn restart-all
   []
-  (stop)
-  (repl/refresh-all :after 'user/start))
+  (main/restart-all))
 
 ;; (defn compression-bench
 ;;   [data]

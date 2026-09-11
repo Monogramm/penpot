@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.workspace.media
   (:require
@@ -10,13 +10,13 @@
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
-   [app.common.files.builder :as fb]
    [app.common.files.changes-builder :as pcb]
-   [app.common.logging :as log]
+   [app.common.files.shapes-builder :as sb]
    [app.common.math :as mth]
+   [app.common.media :as media]
    [app.common.schema :as sm]
-   [app.common.svg.shapes-builder :as csvg.shapes-builder]
    [app.common.types.container :as ctn]
+   [app.common.types.fills :as types.fills]
    [app.common.types.shape :as cts]
    [app.common.uuid :as uuid]
    [app.config :as cf]
@@ -24,7 +24,7 @@
    [app.main.data.helpers :as dsh]
    [app.main.data.media :as dmm]
    [app.main.data.notifications :as ntf]
-   [app.main.data.workspace.libraries :as dwl]
+   [app.main.data.uploads :as uploads]
    [app.main.data.workspace.shapes :as dwsh]
    [app.main.data.workspace.svg-upload :as svg]
    [app.main.repo :as rp]
@@ -37,9 +37,23 @@
    [promesa.core :as p]
    [tubax.core :as tubax]))
 
+(def accept-image-types
+  (str/join "," media/image-types))
+
 (defn- optimize
   [input]
   (svgo/optimize input svgo/defaultOptions))
+
+(defn valid-svg-string?
+  "True when `text` parses as SVG XML. Lets callers reject malformed markup
+  up front instead of failing asynchronously inside the import pipeline."
+  [text]
+  (and (string? text)
+       (not (str/blank? text))
+       (try
+         (tubax/xml->clj text)
+         true
+         (catch :default _ false))))
 
 (defn svg->clj
   [[name text]]
@@ -62,18 +76,22 @@
     ptk/WatchEvent
     (watch [_ _ _]
       (let [{:keys [name width height id mtype]} image
+
+            fills (types.fills/create
+                   {:fill-opacity 1
+                    :fill-image {:width width
+                                 :height height
+                                 :mtype mtype
+                                 :id id
+                                 :keep-aspect-ratio true}})
+
             shape {:name name
                    :width width
                    :height height
                    :x (mth/round (- x (/ width 2)))
                    :y (mth/round (- y (/ height 2)))
-                   :fills [{:fill-opacity 1
-                            :fill-image {:name name
-                                         :width width
-                                         :height height
-                                         :mtype mtype
-                                         :id id
-                                         :keep-aspect-ratio true}}]}]
+                   :fills fills}]
+
         (rx/of (dwsh/create-and-add-shape :rect x y shape))))))
 
 (defn svg-uploaded
@@ -96,6 +114,26 @@
     :file-id file-id
     :url url
     :is-local true}))
+
+;; Size of each upload chunk in bytes — read from config directly,
+;; same source used by the uploads namespace.
+(def ^:private chunk-size cf/upload-chunk-size)
+
+(defn- upload-blob-chunked
+  "Uploads `blob` to `file-id` as a chunked media object using the
+  three-step session API.  Returns an observable that emits the
+  assembled file-media-object map."
+  [{:keys [file-id name is-local blob]}]
+  (let [mtype (.-type blob)]
+    (->> (uploads/upload-blob-chunked blob)
+         (rx/mapcat
+          (fn [{:keys [session-id]}]
+            (rp/cmd! :assemble-file-media-object
+                     {:session-id session-id
+                      :file-id    file-id
+                      :is-local   is-local
+                      :name       name
+                      :mtype      mtype}))))))
 
 (defn process-uris
   [{:keys [file-id local? name uris mtype on-image on-svg]}]
@@ -137,12 +175,18 @@
             (and (not force-media)
                  (= (.-type blob) "image/svg+xml")))
 
-          (prepare-blob [blob]
-            (let [name (or name (if (dmm/file? blob) (fb/strip-image-extension (.-name blob)) "blob"))]
-              {:file-id file-id
-               :name name
-               :is-local local?
-               :content blob}))
+          (upload-blob [blob]
+            (let [params {:file-id  file-id
+                          :name     (or name (if (dmm/file? blob) (media/strip-image-extension (.-name blob)) "blob"))
+                          :is-local local?
+                          :blob     blob}]
+              (if (>= (.-size blob) chunk-size)
+                (upload-blob-chunked params)
+                (rp/cmd! :upload-file-media-object
+                         {:file-id  file-id
+                          :name     (:name params)
+                          :is-local local?
+                          :content  blob}))))
 
           (extract-content [blob]
             (let [name (or name (.-name blob))]
@@ -153,8 +197,7 @@
      (->> (rx/from blobs)
           (rx/map dmm/validate-file)
           (rx/filter (comp not svg-blob?))
-          (rx/map prepare-blob)
-          (rx/mapcat #(rp/cmd! :upload-file-media-object %))
+          (rx/mapcat upload-blob)
           (rx/tap on-image))
 
      (->> (rx/from blobs)
@@ -164,9 +207,10 @@
           (rx/merge-map svg->clj)
           (rx/tap on-svg)))))
 
-(defn handle-media-error [error on-error]
-  (if (ex/ex-info? error)
-    (handle-media-error (ex-data error) on-error)
+(defn handle-media-error
+  [cause]
+  (ex/print-throwable cause)
+  (let [error (ex-data cause)]
     (cond
       (= (:code error) :invalid-svg-file)
       (rx/of (ntf/error (tr "errors.media-type-not-allowed")))
@@ -189,13 +233,8 @@
       (= (:code error) :unable-to-optimize)
       (rx/of (ntf/error (:hint error)))
 
-      (fn? on-error)
-      (on-error error)
-
       :else
-      (do
-        (.error js/console "ERROR" error)
-        (rx/of (ntf/error (tr "errors.cannot-upload")))))))
+      (rx/of (ntf/error (tr "errors.cannot-upload"))))))
 
 
 (def ^:private
@@ -209,7 +248,7 @@
    [:mtype {:optional true} :string]])
 
 (defn- process-media-objects
-  [{:keys [uris on-error] :as params}]
+  [{:keys [uris] :as params}]
   (dm/assert!
    (and (sm/check schema:process-media-objects params)
         (or (contains? params :blobs)
@@ -225,25 +264,15 @@
                          :timeout nil
                          :tag :media-loading}))
        (->> (if (seq uris)
-                ;; Media objects is a list of URL's pointing to the path
+              ;; Media objects is a list of URL's pointing to the path
               (process-uris params)
-                ;; Media objects are blob of data to be upload
+              ;; Media objects are blob of data to be upload
               (process-blobs params))
 
-              ;; Every stream has its own sideeffect. We need to ignore the result
+            ;; Every stream has its own sideeffect. We need to ignore the result
             (rx/ignore)
-            (rx/catch #(handle-media-error % on-error))
+            (rx/catch handle-media-error)
             (rx/finalize #(st/emit! (ntf/hide :tag :media-loading))))))))
-
-;; Deprecated in components-v2
-(defn upload-media-asset
-  [params]
-  (let [params (assoc params
-                      :force-media true
-                      :local? false
-                      :on-image #(st/emit! (dwl/add-media %))
-                      :on-svg #(st/emit! (dwl/add-media %)))]
-    (process-media-objects params)))
 
 (defn upload-media-workspace
   [{:keys [position file-id] :as params}]
@@ -255,9 +284,8 @@
 
 (defn upload-fill-image
   [file on-success]
-  (dm/assert!
-   "expected a valid blob for `file` param"
-   (dmm/blob? file))
+  (assert (dmm/blob? file) "expected a valid blob for `file` param")
+
   (ptk/reify ::upload-fill-image
     ptk/WatchEvent
     (watch [_ state _]
@@ -283,22 +311,6 @@
              (rx/tap on-upload-success)
              (rx/catch handle-media-error))))))
 
-;; --- Upload File Media objects
-
-(defn load-and-parse-svg
-  "Load the contents of a media-obj of type svg, and parse it
-  into a clojure structure."
-  [media-obj]
-  (let [path (cf/resolve-file-media media-obj)]
-    (->> (http/send! {:method :get :uri path :mode :no-cors})
-         (rx/map :body)
-         (rx/map #(vector (:name media-obj) %))
-         (rx/merge-map svg->clj)
-         (rx/catch  ; When error downloading media-obj, skip it and continue with next one
-          #(log/error :msg (str "Error downloading " (:name media-obj) " from " path)
-                      :hint (ex-message %)
-                      :error %)))))
-
 (defn create-shapes-svg
   "Convert svg elements into penpot shapes."
   [file-id objects pos svg-data]
@@ -310,7 +322,7 @@
         process-svg
         (fn [svg-data]
           (let [[root-svg-shape children]
-                (csvg.shapes-builder/create-svg-shapes svg-data pos objects uuid/zero nil #{} false)
+                (sb/create-svg-shapes svg-data pos objects uuid/zero nil #{} false)
 
                 frame-shape
                 (cts/setup-shape
@@ -322,7 +334,7 @@
                   :name (:name root-svg-shape)
                   :frame-id uuid/zero
                   :parent-id uuid/zero
-                  :fills []})
+                  :fills (types.fills/create)})
 
                 root-svg-shape
                 (-> root-svg-shape
@@ -358,19 +370,21 @@
                       :frame-id uuid/zero
                       :parent-id uuid/zero})
 
+        img-fills   (types.fills/create
+                     {:fill-opacity 1
+                      :fill-image {:id id
+                                   :width width
+                                   :height height
+                                   :mtype mtype
+                                   :keep-aspect-ratio true}})
+
         img-shape   (cts/setup-shape
                      {:type :rect
                       :x (:x pos)
                       :y (:y pos)
                       :width width
                       :height height
-                      :fills [{:fill-opacity 1
-                               :fill-image {:name name
-                                            :id id
-                                            :width width
-                                            :height height
-                                            :mtype mtype
-                                            :keep-aspect-ratio true}}]
+                      :fills img-fills
                       :name name
                       :frame-id (:id frame-shape)
                       :parent-id (:id frame-shape)})]
@@ -378,7 +392,7 @@
 
 (defn- add-shapes-and-component
   [it file-data page name [shape children]]
-  (let [[component-shape component-shapes updated-shapes]
+  (let [[component-shape updated-shapes]
         (ctn/convert-shape-in-component shape children (:id file-data))
 
         changes (-> (pcb/empty-changes it)
@@ -389,7 +403,6 @@
                     (pcb/add-component (:id component-shape)
                                        ""
                                        name
-                                       component-shapes
                                        updated-shapes
                                        (:id shape)
                                        (:id page)))]
@@ -476,3 +489,24 @@
            (rx/take 1)
            (rx/map #(svg/add-svg-shapes id % position {:ignore-selection? true
                                                        :change-selection? false}))))))
+(defn create-svg-shape-with-images
+  [file-id id name svg-string position on-success on-error]
+  (ptk/reify ::create-svg-shape-with-images
+    ptk/WatchEvent
+    (watch [_ _ _]
+      (->> (svg->clj [name svg-string])
+           (rx/take 1)
+           (rx/mapcat
+            (fn [svg-data]
+              (->> (svg/upload-images svg-data file-id)
+                   (rx/map #(assoc svg-data :image-data %)))))
+           (rx/map
+            (fn [svg-data]
+              (svg/add-svg-shapes
+               id
+               svg-data
+               position
+               {:ignore-selection? true
+                :change-selection? false})))
+           (rx/tap on-success)
+           (rx/catch on-error)))))

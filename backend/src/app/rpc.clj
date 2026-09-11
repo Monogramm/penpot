@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc
   (:require
@@ -12,30 +12,39 @@
    [app.common.logging :as l]
    [app.common.schema :as sm]
    [app.common.spec :as us]
+   [app.common.time :as ct]
+   [app.common.uri :as u]
+   [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
    [app.http :as-alias http]
    [app.http.access-token :as actoken]
    [app.http.client :as-alias http.client]
+   [app.http.middleware :as mw]
+   [app.http.security :as sec]
    [app.http.session :as session]
    [app.loggers.audit :as audit]
    [app.main :as-alias main]
    [app.metrics :as mtx]
    [app.msgbus :as-alias mbus]
+   [app.nitrate :as nitrate]
+   [app.redis :as rds]
    [app.rpc.climit :as climit]
+   [app.rpc.commands.teams :as teams]
    [app.rpc.cond :as cond]
+   [app.rpc.doc :as doc]
    [app.rpc.helpers :as rph]
    [app.rpc.retry :as retry]
    [app.rpc.rlimit :as rlimit]
    [app.setup :as-alias setup]
    [app.storage :as-alias sto]
+   [app.util.cache :as cache]
    [app.util.inet :as inet]
    [app.util.services :as sv]
-   [app.util.time :as dt]
+   [clojure.set :as set]
    [clojure.spec.alpha :as s]
    [cuerdas.core :as str]
    [integrant.core :as ig]
-   [promesa.core :as p]
    [yetti.request :as yreq]
    [yetti.response :as yres]))
 
@@ -43,7 +52,7 @@
 
 (defn- default-handler
   [_]
-  (p/rejected (ex/error :type :not-found)))
+  (ex/raise :type :not-found))
 
 (defn- handle-response-transformation
   [response request mdata]
@@ -63,74 +72,86 @@
   (let [mdata    (meta result)
         response (if (fn? result)
                    (result request)
-                   (let [result (rph/unwrap result)]
-                     {::yres/status  (::http/status mdata 200)
-                      ::yres/headers (::http/headers mdata {})
+                   (let [result  (rph/unwrap result)
+                         status  (or (::http/status mdata)
+                                     (if (nil? result)
+                                       204
+                                       200))
+
+                         headers (::http/headers mdata {})
+                         headers (cond-> headers
+                                   (and (yres/stream-body? result)
+                                        (not (contains? headers "content-type")))
+                                   (assoc "content-type" "application/octet-stream"))]
+
+                     {::yres/status  status
+                      ::yres/headers headers
                       ::yres/body    result}))]
+
     (-> response
         (handle-response-transformation request mdata)
         (handle-before-comple-hook mdata))))
 
-(defn get-external-session-id
-  [request]
-  (when-let [session-id (yreq/get-header request "x-external-session-id")]
-    (when-not (or (> (count session-id) 256)
-                  (= session-id "null")
-                  (str/blank? session-id))
-      session-id)))
-
-(defn- get-external-event-origin
-  [request]
-  (when-let [origin (yreq/get-header request "x-event-origin")]
-    (when-not (or (> (count origin) 256)
-                  (= origin "null")
-                  (str/blank? origin))
-      origin)))
-
-(defn- rpc-handler
+(defn- make-rpc-handler
   "Ring handler that dispatches cmd requests and convert between
   internal async flow into ring async flow."
-  [methods {:keys [params path-params method] :as request}]
-  (let [handler-name (:type path-params)
-        etag         (yreq/get-header request "if-none-match")
-        profile-id   (or (::session/profile-id request)
-                         (::actoken/profile-id request))
+  [methods]
+  (let [methods (update-vals methods peek)]
+    (fn [{:keys [params path-params method] :as request}]
+      (let [handler-name (:method-name path-params)
+            etag         (yreq/get-header request "if-none-match")
+            session-id   (yreq/get-header request "x-session-id")
 
-        ip-addr      (inet/parse-request request)
-        session-id   (get-external-session-id request)
-        event-origin (get-external-event-origin request)
+            key-id       (get request ::http/auth-key-id)
+            session-pid  (::session/profile-id request)
+            token-pid    (::actoken/profile-id request)
+            profile-id   (or session-pid
+                             token-pid
+                             (if key-id uuid/zero nil))
 
-        data         (-> params
-                         (assoc ::handler-name handler-name)
-                         (assoc ::ip-addr ip-addr)
-                         (assoc ::request-at (dt/now))
-                         (assoc ::external-session-id session-id)
-                         (assoc ::external-event-origin event-origin)
-                         (assoc ::session/id (::session/id request))
-                         (assoc ::cond/key etag)
-                         (cond-> (uuid? profile-id)
-                           (assoc ::profile-id profile-id)))
+            ip-addr      (inet/parse-request request)
 
-        data         (vary-meta data assoc ::http/request request)
-        handler-fn   (get methods (keyword handler-name) default-handler)]
+            data         (-> params
+                             (assoc ::handler-name handler-name)
+                             (assoc ::ip-addr ip-addr)
+                             (assoc ::request-at (ct/now))
+                             (assoc ::request-id (uuid/next))
+                             (assoc ::session-id (some-> session-id uuid/parse*))
+                             (assoc ::cond/key etag)
+                             (cond-> (uuid? profile-id)
+                               (assoc ::profile-id profile-id))
+                             (cond-> (uuid? session-pid)
+                               (assoc ::auth-type :session))
+                             (cond-> (and (not (uuid? session-pid))
+                                          (uuid? token-pid))
+                               (-> (assoc ::auth-type :token)
+                                   (assoc ::token-perms (set (::actoken/perms request #{})))))
+                             (cond-> key-id
+                               (assoc ::auth-key-id key-id)))
 
-    (when (and (or (= method :get)
-                   (= method :head))
-               (not (str/starts-with? handler-name "get-")))
-      (ex/raise :type :restriction
-                :code :method-not-allowed
-                :hint "method not allowed for this request"))
+            data         (with-meta data
+                           {::http/request request})
 
-    (binding [cond/*enabled* true]
-      (let [response (handler-fn data)]
-        (handle-response request response)))))
+            handler-fn   (get methods (keyword handler-name) default-handler)]
+
+        (when (and (or (= method :get)
+                       (= method :head))
+                   (not (str/starts-with? handler-name "get-")))
+          (ex/raise :type :restriction
+                    :code :method-not-allowed
+                    :hint "method not allowed for this request"))
+
+        ;; FIXME: why we have this cond enabled here, we need to move it outside this handler
+        (binding [cond/*enabled* true]
+          (let [response (handler-fn data)]
+            (handle-response request response)))))))
 
 (defn- wrap-metrics
   "Wrap service method with metrics measurement."
   [{:keys [::mtx/metrics ::metrics-id]} f mdata]
   (let [labels (into-array String [(::sv/name mdata)])]
     (fn [cfg params]
-      (let [tp (dt/tpoint)]
+      (let [tp (ct/tpoint)]
         (try
           (f cfg params)
           (finally
@@ -141,13 +162,40 @@
 
 (defn- wrap-authentication
   [_ f mdata]
-  (fn [cfg params]
-    (let [profile-id (::profile-id params)]
-      (if (and (::auth mdata true) (not (uuid? profile-id)))
-        (ex/raise :type :authentication
-                  :code :authentication-required
-                  :hint "authentication required for this endpoint")
-        (f cfg params)))))
+  (let [required-auth?      (::auth mdata true)
+        required-auth-type  (::auth-type mdata)
+        required-perms      (into #{} (::perms mdata))]
+    (fn [cfg params]
+      (let [profile-id  (::profile-id params)
+            auth-type   (::auth-type params)
+            token-perms (set (::token-perms params #{}))]
+        (cond
+          (and required-auth? (not (uuid? profile-id)))
+          (ex/raise :type :authentication
+                    :code :authentication-required
+                    :hint "authentication required for this endpoint")
+
+          (and (= required-auth-type :token)
+               (not= auth-type :token))
+          (ex/raise :type :authorization
+                    :code :token-auth-required
+                    :hint "access token authentication required for this endpoint")
+
+          (and (seq required-perms)
+               (not= auth-type :token))
+          (ex/raise :type :authorization
+                    :code :token-auth-required
+                    :hint "access token authentication required for this endpoint")
+
+          (and (seq required-perms)
+               (not (set/subset? required-perms token-perms)))
+          (ex/raise :type :authorization
+                    :code :missing-perms
+                    :hint "missing required permissions"
+                    :required required-perms)
+
+          :else
+          (f cfg params))))))
 
 (defn- wrap-db-transaction
   [_ f mdata]
@@ -159,12 +207,13 @@
 (defn- wrap-audit
   [_ f mdata]
   (if (or (contains? cf/flags :webhooks)
-          (contains? cf/flags :audit-log))
+          (contains? cf/flags :audit-log)
+          (contains? cf/flags :telemetry))
     (if-not (::audit/skip mdata)
       (fn [cfg params]
         (let [result (f cfg params)]
-          (->> (audit/prepare-event cfg mdata params result)
-               (audit/submit! cfg))
+          (->> (audit/prepare-rpc-event cfg mdata params result)
+               (audit/submit cfg))
           result))
       f)
     f))
@@ -200,7 +249,94 @@
                         ::sm/explain (explain params)))))))
     f))
 
-(defn- wrap-all
+
+(defonce ^:private organization-sso-auth-cache
+  (cache/create :expire "15m" :max-size 1024))
+
+(defn invalidate-organization-sso-cache-by-organization!
+  "Invalidates all organization-SSO authorization cache entries for the given organization-id."
+  [organization-id]
+  (cache/invalidate-if organization-sso-auth-cache #(= (:organization-id %) organization-id)))
+
+(defn- wrap-nitrate-sso
+  "Enforce Nitrate organization SSO authentication for RPC handlers.
+
+   Resolves the organization/team context from request params:
+   1. Explicit :organization-id param identifies the organization directly
+   2. The team comes from the first available of: explicit :team-id, explicit
+      :project-id -> lookup project.team_id, explicit :file-id -> lookup file's
+      team via join, or the :id param dispatched by ::rpc/id-type metadata
+      (:team, :project, or :file)
+
+   Once the context is resolved, checks if the user is authorized within that organization's
+   SSO session using nitrate/sso-session-authorized?, against the organization when it is
+   known and against the team otherwise. The team is resolved either way, so the raised
+   error can carry it. Authorized results are cached by [profile-id cache-ref] for 15
+   minutes to avoid repeated lookups.
+
+   Only activates when:
+   - Nitrate flag is enabled
+   - Endpoint requires authentication (::auth true by default)
+   - Endpoint is not marked with ::nitrate/organization-sso false
+
+   Raises :nitrate-sso-required error if user is not authorized in the organization.
+   The error carries the resolved :organization-id and :team-id so the client can
+   restart the SSO flow (via :check-nitrate-sso) instead of reporting a plain
+   permission failure."
+  [_ f mdata]
+  (if (and (contains? cf/flags :admin-console)
+           (::auth mdata true) ;; only for endpoints that needs auth
+           (::nitrate/sso mdata true))
+    (fn [cfg params]
+      ;; Resolve team/project/file from explicit keys or from :id via metadata
+      (let [profile-id      (::profile-id params)
+            organization-id (uuid/coerce (:organization-id params))
+            id-type         (::id-type mdata)
+            id              (uuid/coerce (:id params))
+            team-id         (or (uuid/coerce (:team-id params))
+                                (when (= id-type :team) id))
+            project-id      (or (uuid/coerce (:project-id params))
+                                (when (= id-type :project) id))
+            file-id         (or (uuid/coerce (:file-id params))
+                                (when (= id-type :file) id))]
+        (if (and profile-id
+                 (or organization-id team-id project-id file-id))
+          (let [cache-ref  (or organization-id team-id project-id file-id)
+
+                cache-key  [profile-id cache-ref]
+                cached     (cache/get organization-sso-auth-cache cache-key)
+                result     (if (some? cached)
+                             cached
+                             ;; The team is resolved even when the organization is
+                             ;; already known: the client needs it to restart the
+                             ;; SSO flow without sending non-members through the
+                             ;; organization's identity provider.
+                             (let [team-id                  (or team-id
+                                                                (when project-id
+                                                                  (:team-id (db/get-by-id cfg :project project-id {:columns [:id :team-id]})))
+                                                                (when file-id
+                                                                  (:id (teams/get-team-for-file cfg file-id))))
+                                   request                  (-> (meta params) (get ::http/request))
+                                   {:keys [authorized sso]} (if organization-id
+                                                              (nitrate/sso-session-authorized? cfg organization-id nil request)
+                                                              (nitrate/sso-session-authorized? cfg nil team-id request))
+                                   entry                    {:authorized      authorized
+                                                             :organization-id (or (:organization-id sso) organization-id)
+                                                             :team-id         team-id}]
+                               (when authorized
+                                 (cache/get organization-sso-auth-cache cache-key (constantly entry)))
+                               entry))]
+            (if (:authorized result)
+              (f cfg params)
+              (ex/raise :type :authentication
+                        :code :nitrate-sso-required
+                        :organization-id (:organization-id result)
+                        :team-id (:team-id result)
+                        :hint "organization SSO authentication required")))
+          (f cfg params))))
+    f))
+
+(defn- wrap
   [cfg f mdata]
   (as-> f $
     (wrap-db-transaction cfg $ mdata)
@@ -212,21 +348,38 @@
     (wrap-audit cfg $ mdata)
     (wrap-spec-conform cfg $ mdata)
     (wrap-params-validation cfg $ mdata)
-    (wrap-authentication cfg $ mdata)))
+    (wrap-authentication cfg $ mdata)
+    (wrap-nitrate-sso cfg $ mdata)))
 
-(defn- wrap
+(defn- wrap-management
   [cfg f mdata]
-  (l/trc :hint "register method" :name (::sv/name mdata))
-  (let [f (wrap-all cfg f mdata)]
-    (partial f cfg)))
+  (as-> f $
+    (wrap-db-transaction cfg $ mdata)
+    (retry/wrap-retry cfg $ mdata)
+    (climit/wrap cfg $ mdata)
+    (wrap-metrics cfg $ mdata)
+    (wrap-audit cfg $ mdata)
+    (wrap-spec-conform cfg $ mdata)
+    (wrap-params-validation cfg $ mdata)
+    (wrap-authentication cfg $ mdata)
+    (wrap-nitrate-sso cfg $ mdata)))
+
+
 
 (defn- process-method
-  [cfg [vfn mdata]]
-  [(keyword (::sv/name mdata)) [mdata (wrap cfg vfn mdata)]])
+  [cfg wrap-fn [f mdata]]
+  (l/trc :hint "add method" :module (::module cfg) :type (::type cfg) :name (::sv/name mdata))
+  (let [f (wrap-fn cfg f mdata)
+        k (keyword (::sv/name mdata))]
+    [k [mdata (partial f cfg)]]))
 
-(defn- resolve-command-methods
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; API METHODS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn- resolve-methods
   [cfg]
-  (let [cfg (assoc cfg ::type "command" ::metrics-id :rpc-command-timing)]
+  (let [cfg (assoc cfg ::module "main" ::type "command" ::metrics-id :rpc-main-timing)]
     (->> (sv/scan-ns
           'app.rpc.commands.access-token
           'app.rpc.commands.audit
@@ -236,16 +389,18 @@
           'app.rpc.commands.binfile
           'app.rpc.commands.comments
           'app.rpc.commands.demo
+          'app.rpc.commands.error-reports
           'app.rpc.commands.files
           'app.rpc.commands.files-create
           'app.rpc.commands.files-share
-          'app.rpc.commands.files-temp
           'app.rpc.commands.files-update
           'app.rpc.commands.files-snapshot
           'app.rpc.commands.files-thumbnails
           'app.rpc.commands.ldap
           'app.rpc.commands.management
           'app.rpc.commands.media
+          'app.rpc.commands.nitrate
+          'app.rpc.commands.plugins
           'app.rpc.commands.profile
           'app.rpc.commands.projects
           'app.rpc.commands.search
@@ -254,7 +409,7 @@
           'app.rpc.commands.verify-token
           'app.rpc.commands.viewer
           'app.rpc.commands.webhooks)
-         (map (partial process-method cfg))
+         (map (partial process-method cfg wrap))
          (into {}))))
 
 (def ^:private schema:methods-params
@@ -262,6 +417,7 @@
    ::session/manager
    ::http.client/client
    ::db/pool
+   ::rds/pool
    ::mbus/msgbus
    ::sto/storage
    ::mtx/metrics
@@ -277,7 +433,52 @@
 (defmethod ig/init-key ::methods
   [_ cfg]
   (let [cfg (d/without-nils cfg)]
-    (resolve-command-methods cfg)))
+    (resolve-methods cfg)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; MANAGEMENT METHODS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn- resolve-management-methods
+  [cfg]
+  (let [cfg  (assoc cfg ::module "management" ::type "command" ::metrics-id :rpc-management-timing)
+        mods (cond->> (list 'app.rpc.management.exporter)
+               (contains? cf/flags :admin-console)
+               (cons 'app.rpc.management.nitrate))]
+
+    (->> (apply sv/scan-ns mods)
+         (map (partial process-method cfg wrap-management))
+         (into {}))))
+
+(def ^:private schema:management-methods-params
+  [:map {:title "management-methods-params"}
+   ::session/manager
+   ::http.client/client
+   ::db/pool
+   ::rds/pool
+   ::mbus/msgbus
+   ::sto/storage
+   ::mtx/metrics
+   ::setup/props])
+
+(defmethod ig/assert-key ::management-methods
+  [_ params]
+  (assert (sm/check schema:management-methods-params params)))
+
+(defmethod ig/init-key ::management-methods
+  [_ cfg]
+  (let [cfg (d/without-nils cfg)]
+    (resolve-management-methods cfg)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ROUTES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn- redirect
+  [href]
+  (fn [_]
+    {::yres/status 308
+     ::yres/headers {"location" (str href)}}))
 
 (def ^:private schema:methods
   [:map-of :keyword [:tuple :map ::sm/fn]])
@@ -289,14 +490,50 @@
 
 (defmethod ig/assert-key ::routes
   [_ params]
+  (assert (map? (::setup/shared-keys params)))
   (assert (db/pool? (::db/pool params)) "expect valid database pool")
-  (assert (some? (::setup/props params)))
   (assert (session/manager? (::session/manager params)) "expect valid session manager")
-  (assert (valid-methods? (::methods params)) "expect valid methods map"))
+  (assert (valid-methods? (::methods params)) "expect valid methods map")
+  (assert (valid-methods? (::management-methods params)) "expect valid methods map"))
 
 (defmethod ig/init-key ::routes
-  [_ {:keys [::methods] :as cfg}]
-  (let [methods (update-vals methods peek)]
-    [["/rpc" {:middleware [[session/authz cfg]
-                           [actoken/authz cfg]]}
-      ["/command/:type" {:handler (partial rpc-handler methods)}]]]))
+  [_ {:keys [::methods ::management-methods ::setup/shared-keys] :as cfg}]
+
+  (let [public-uri (cf/get :public-uri)]
+    ["/api"
+     ["/management"
+      ["/methods/:method-name"
+       {:middleware [[mw/shared-key-auth shared-keys]
+                     [session/authz cfg]]
+        :handler (make-rpc-handler management-methods)}]
+
+      (doc/routes :methods management-methods
+                  :label "management"
+                  :base-uri (u/join public-uri "/api/management")
+                  :description "MANAGEMENT API")]
+
+     ["/main"
+      ["/methods/:method-name"
+       {:middleware [[mw/cors]
+                     [sec/client-header-check]
+                     [session/authz cfg]
+                     [actoken/authz cfg]]
+        :handler (make-rpc-handler methods)}]
+
+      (doc/routes :methods methods
+                  :label "main"
+                  :base-uri (u/join public-uri "/api/main")
+                  :description "MAIN API")]
+
+     ;; BACKWARD COMPATIBILITY
+     ["/_doc" {:handler (redirect (u/join public-uri "/api/main/doc"))}]
+     ["/doc" {:handler (redirect (u/join public-uri "/api/main/doc"))}]
+     ["/openapi" {:handler (redirect (u/join public-uri "/api/main/doc/openapi"))}]
+     ["/openapi.join" {:handler (redirect (u/join public-uri "/api/main/doc/openapi.json"))}]
+
+     ["/rpc/command/:method-name"
+      {:middleware [[mw/cors]
+                    [sec/client-header-check]
+                    [session/authz cfg]
+                    [actoken/authz cfg]]
+       :handler (make-rpc-handler methods)}]]))

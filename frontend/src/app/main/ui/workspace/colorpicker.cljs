@@ -2,37 +2,44 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.colorpicker
   (:require-macros [app.main.style :as stl])
   (:require
-   [app.common.colors :as cc]
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.geom.matrix :as gmt]
    [app.common.geom.point :as gpt]
+   [app.common.types.color :as cc]
+   [app.common.types.fills :as types.fills]
+   [app.common.types.tokens-lib :as ctob]
    [app.config :as cfg]
-   [app.main.data.event :as-alias ev]
+   [app.main.data.event :as ev]
    [app.main.data.modal :as modal]
    [app.main.data.shortcuts :as dsc]
    [app.main.data.workspace.colors :as dc]
    [app.main.data.workspace.libraries :as dwl]
    [app.main.data.workspace.media :as dwm]
    [app.main.data.workspace.undo :as dwu]
+   [app.main.features :as features]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.file-uploader :refer [file-uploader]]
-   [app.main.ui.components.numeric-input :refer [numeric-input*]]
+   [app.main.ui.components.radio-buttons :refer [radio-buttons radio-button]]
    [app.main.ui.components.select :refer [select]]
-   [app.main.ui.ds.foundations.assets.icon :as ic]
+   [app.main.ui.ds.buttons.button :refer [button*]]
+   [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
+   [app.main.ui.ds.controls.checkbox :refer [checkbox*]]
+   [app.main.ui.ds.foundations.assets.icon :as i]
    [app.main.ui.ds.layout.tab-switcher :refer [tab-switcher*]]
-   [app.main.ui.icons :as i]
-   [app.main.ui.workspace.colorpicker.color-inputs :refer [color-inputs]]
-   [app.main.ui.workspace.colorpicker.gradients :refer [gradients]]
-   [app.main.ui.workspace.colorpicker.harmony :refer [harmony-selector]]
-   [app.main.ui.workspace.colorpicker.hsva :refer [hsva-selector]]
-   [app.main.ui.workspace.colorpicker.libraries :refer [libraries]]
+   [app.main.ui.hooks :as hooks]
+   [app.main.ui.workspace.colorpicker.color-inputs :refer [color-inputs*]]
+   [app.main.ui.workspace.colorpicker.color-tokens :refer [token-section*]]
+   [app.main.ui.workspace.colorpicker.gradients :refer [gradients*]]
+   [app.main.ui.workspace.colorpicker.harmony :refer [harmony-selector*]]
+   [app.main.ui.workspace.colorpicker.hsva :refer [hsva-selector*]]
+   [app.main.ui.workspace.colorpicker.libraries :refer [libraries*]]
    [app.main.ui.workspace.colorpicker.ramp :refer [ramp-selector*]]
    [app.main.ui.workspace.colorpicker.shortcuts :as sc]
    [app.util.dom :as dom]
@@ -40,8 +47,8 @@
    [app.util.timers :as ts]
    [cuerdas.core :as str]
    [okulary.core :as l]
-   [potok.v2.core :as ptk]
-   [rumext.v2 :as mf]))
+   [rumext.v2 :as mf]
+   [rumext.v2.util :as mfu]))
 
 ;; --- Refs
 
@@ -76,6 +83,15 @@
           hsl-from (cc/hsv->hsl [h 0.0 v])
           hsl-to (cc/hsv->hsl [h 1.0 v])
 
+          ;; HSL-mode gradients. For S: fix current lightness, sweep
+          ;; saturation 0 → 1. For L: fix current saturation, sweep
+          ;; lightness 0 → 0.5 (pure hue) → 1. All computed at the
+          ;; current hue.
+          [_ cur-hsl-s cur-hsl-l] (cc/rgb->hsl rgb)
+          hsl-sat-from  [h 0.0 cur-hsl-l]
+          hsl-sat-to    [h 1.0 cur-hsl-l]
+          lightness-mid [h cur-hsl-s 0.5]
+
           format-hsl (fn [[h s l]]
                        (str/fmt "hsl(%s, %s, %s)"
                                 h
@@ -84,15 +100,26 @@
       (dom/set-css-property! node "--color" (str/join ", " rgb))
       (dom/set-css-property! node "--hue-rgb" (str/join ", " hue-rgb))
       (dom/set-css-property! node "--saturation-grad-from" (format-hsl hsl-from))
-      (dom/set-css-property! node "--saturation-grad-to" (format-hsl hsl-to)))))
+      (dom/set-css-property! node "--saturation-grad-to" (format-hsl hsl-to))
+      (dom/set-css-property! node "--hsl-saturation-grad-from" (format-hsl hsl-sat-from))
+      (dom/set-css-property! node "--hsl-saturation-grad-to" (format-hsl hsl-sat-to))
+      (dom/set-css-property! node "--lightness-grad-mid" (format-hsl lightness-mid)))))
 
-(mf/defc colorpicker
-  {::mf/props :obj}
-  [{:keys [data disable-gradient disable-opacity disable-image on-change on-accept]}]
+(mf/defc colorpicker*
+  [{:keys [data disable-gradient disable-opacity disable-image on-change on-accept origin combined-tokens color-origin on-token-change tab applied-token]}]
   (let [state                  (mf/deref refs/colorpicker)
         node-ref               (mf/use-ref)
 
         should-update?         (mf/use-var true)
+        token-color            (contains? cfg/flags :token-color)
+        color-style*           (mf/use-state (d/nilv tab :direct-color))
+        color-style            (deref color-style*)
+        toggle-token-color
+        (mf/use-fn
+         (mf/deps color-style)
+         (fn []
+           (let [new-style (if (= :direct-color color-style) :token-color :direct-color)]
+             (reset! color-style* new-style))))
 
         ;; TODO: I think we need to put all this picking state under
         ;; the same object for avoid creating adhoc refs for each
@@ -110,8 +137,19 @@
                                      :linear :linear-gradient
                                      :radial :radial-gradient)
                                    :color))
-        active-color-tab       (mf/use-state (dc/get-active-color-tab))
-        drag?                  (mf/use-state false)
+
+        active-color-tab*      (hooks/use-persisted-state ::color-tab "ramp")
+        active-color-tab       (deref active-color-tab*)
+
+        ;; Inline HSB/HSL toggle inside the HSBA tab — shared between
+        ;; the slider selector (for labels) and the numeric inputs.
+        hsb-mode*              (hooks/use-persisted-state ::hsb-mode :hsb)
+        hsb-mode               (deref hsb-mode*)
+
+        drag?*                 (mf/use-state false)
+        drag?                  (deref drag?*)
+
+        type                   (if (= active-color-tab "hsva") :hsb :rgb)
 
         fill-image-ref         (mf/use-ref nil)
 
@@ -129,10 +167,11 @@
         on-fill-image-success
         (mf/use-fn
          (fn [image]
+           ;; FIXME: revisit
            (st/emit! (dc/update-colorpicker-color
                       {:image (-> (select-keys image [:id :width :height :mtype :name])
                                   (assoc :keep-aspect-ratio true))}
-                      (not @drag?)))))
+                      (not drag?)))))
 
         on-fill-image-click
         (mf/use-fn #(dom/click (mf/ref-val fill-image-ref)))
@@ -150,18 +189,14 @@
                  image              (-> (:image current-color)
                                         (assoc :keep-aspect-ratio keep-aspect-ratio?))]
 
-
              (st/emit!
               (dc/update-colorpicker-color {:image image} true)
-              (ptk/data-event ::ev/event {::ev/name "toggle-image-aspect-ratio"
-                                          ::ev/origin "workspace:colorpicker"
-                                          :checked keep-aspect-ratio?})))))
+              (ev/event {::ev/name "toggle-image-aspect-ratio"
+                         ::ev/origin "workspace:colorpicker"
+                         :checked keep-aspect-ratio?})))))
 
         on-change-tab
-        (mf/use-fn
-         (fn [tab]
-           (reset! active-color-tab tab)
-           (dc/set-active-color-tab! tab)))
+        (mf/use-fn #(reset! active-color-tab* %))
 
         handle-change-mode
         (mf/use-fn
@@ -174,15 +209,11 @@
 
         handle-change-color
         (mf/use-fn
-         (mf/deps current-color @drag?)
+         (mf/deps current-color drag?)
          (fn [color]
-           (when (or (not= (str/lower (:hex color)) (str/lower (:hex current-color)))
-                     (not= (:h color) (:h current-color))
-                     (not= (:s color) (:s current-color))
-                     (not= (:v color) (:v current-color)))
-             (let [recent-color (merge current-color color)
-                   recent-color (dc/materialize-color-components recent-color)]
-               (st/emit! (dc/update-colorpicker-color recent-color (not @drag?)))))))
+           (let [color (merge current-color color)
+                 color (dc/materialize-color-components color)]
+             (st/emit! (dc/update-colorpicker-color color (not drag?))))))
 
         handle-click-picker
         (mf/use-fn
@@ -200,10 +231,9 @@
          (fn [_ color]
            (if (and (some? (:color color)) (some? (:gradient data)))
              (handle-change-color {:hex (:color color) :alpha (:opacity color)})
-             (do
-               (st/emit!
-                (dwl/add-recent-color color)
-                (dc/apply-color-from-colorpicker color))
+             (let [color (d/without-qualified color)]
+               (st/emit! (dc/add-recent-color color)
+                         (dc/apply-color-from-colorpicker color))
                (on-change color)))))
 
         on-add-library-color
@@ -214,18 +244,18 @@
 
         on-start-drag
         (mf/use-fn
-         (mf/deps drag? node-ref)
+         (mf/deps drag?* node-ref)
          (fn []
            (reset! should-update? false)
-           (reset! drag? true)
+           (reset! drag?* true)
            (st/emit! (dwu/start-undo-transaction (mf/ref-val node-ref)))))
 
         on-finish-drag
         (mf/use-fn
-         (mf/deps drag? node-ref)
+         (mf/deps drag?* node-ref)
          (fn []
            (reset! should-update? true)
-           (reset! drag? false)
+           (reset! drag?* false)
            (st/emit! (dwu/commit-undo-transaction (mf/ref-val node-ref)))))
 
         on-color-accept
@@ -274,20 +304,15 @@
 
         handle-gradient-remove-stop
         (mf/use-fn
-         (mf/deps state)
-         (fn [stop]
-           (when (> (count (:stops state)) 2)
-             (when-let [index (d/index-of-pred (:stops state) #(= % stop))]
-               (st/emit! (dc/remove-gradient-stop index))))))
+         (fn [index]
+           (st/emit! (dc/remove-gradient-stop index))))
 
         handle-stop-edit-start
         (mf/use-fn
-         (fn []
-           (reset! should-update? false)))
+         #(reset! should-update? false))
 
         handle-stop-edit-finish
         (mf/use-fn
-         (mf/deps state)
          (fn []
            (reset! should-update? true)
 
@@ -333,58 +358,32 @@
                  (mapv #(assoc %2 :offset (:offset %1)) stops new-stops)]
              (st/emit! (dc/update-colorpicker-stops stops)))))
 
-        handle-change-gradient-opacity
-        (mf/use-fn
-         (fn [value]
-           (st/emit! (dc/update-colorpicker-gradient-opacity (/ value 100)))))
+        render-wasm?
+        (features/use-feature "render-wasm/v1")
 
         tabs
-        #js [#js {:aria-label (tr "workspace.libraries.colors.rgba")
-                  :icon ic/rgba
-                  :id "ramp"
-                  :content (mf/html (if picking-color?
-                                      [:div {:class (stl/css :picker-detail-wrapper)}
-                                       [:div {:class (stl/css :center-circle)}]
-                                       [:canvas#picker-detail {:class (stl/css :picker-detail) :width 256 :height 140}]]
-                                      [:> ramp-selector*
-                                       {:color current-color
-                                        :disable-opacity disable-opacity
-                                        :on-change handle-change-color
-                                        :on-start-drag on-start-drag
-                                        :on-finish-drag on-finish-drag}]))}
+        (mf/with-memo []
+          [{:aria-label (tr "workspace.libraries.colors.rgba")
+            :icon i/rgba
+            :id "ramp"}
+           {:aria-label "Harmony"
+            :icon i/rgba-complementary
+            :id "harmony"}
+           {:aria-label "HSBA"
+            :icon i/hsva
+            :id "hsva"}])
 
-             #js {:aria-label "Harmony"
-                  :icon ic/rgba-complementary
-                  :id "harmony"
-                  :content (mf/html (if picking-color?
-                                      [:div {:class (stl/css :picker-detail-wrapper)}
-                                       [:div {:class (stl/css :center-circle)}]
-                                       [:canvas#picker-detail {:class (stl/css :picker-detail) :width 256 :height 140}]]
-                                      [:& harmony-selector
-                                       {:color current-color
-                                        :disable-opacity disable-opacity
-                                        :on-change handle-change-color
-                                        :on-start-drag on-start-drag
-                                        :on-finish-drag on-finish-drag}]))}
-
-             #js {:aria-label "HSVA"
-                  :icon ic/hsva
-                  :id "hsva"
-                  :content (mf/html (if picking-color?
-                                      [:div {:class (stl/css :picker-detail-wrapper)}
-                                       [:div {:class (stl/css :center-circle)}]
-                                       [:canvas#picker-detail {:class (stl/css :picker-detail) :width 256 :height 140}]]
-                                      [:& hsva-selector
-                                       {:color current-color
-                                        :disable-opacity disable-opacity
-                                        :on-change handle-change-color
-                                        :on-start-drag on-start-drag
-                                        :on-finish-drag on-finish-drag}]))}]]
+        show-tokens? (contains? #{:fill :stroke-color :color-selection} color-origin)]
 
     ;; Initialize colorpicker state
     (mf/with-effect []
       (st/emit! (dc/initialize-colorpicker on-change active-fill-tab))
-      (partial st/emit! (dc/finalize-colorpicker)))
+      ;; Always deactivate picking mode on unmount so that :picking-color? never
+      ;; stays true if the modal closes for any reason other than the normal
+      ;; pointer-up path (e.g. ESC, navigation, programmatic hide).
+      (fn []
+        (st/emit! (dc/stop-picker)
+                  (dc/finalize-colorpicker))))
 
     ;; Update colorpicker with external color changes
     (mf/with-effect [data]
@@ -405,111 +404,158 @@
                                 :h h :s s :v v
                                 :alpha (/ alpha 255)}))))
 
-    [:div {:class (stl/css :colorpicker)
-           :ref node-ref
-           :style {:touch-action "none"}}
-     [:div {:class (stl/css :top-actions)}
-      [:div {:class (stl/css :top-actions-right)}
-       (when (= :gradient selected-mode)
-         [:div {:class (stl/css :opacity-input-wrapper)}
-          [:span {:class (stl/css :icon-text)} "%"]
-          [:> numeric-input*
-           {:value (-> data :opacity opacity->string)
-            :on-change handle-change-gradient-opacity
-            :default 100
-            :min 0
-            :max 100}]])
+    [:*
+     [:div {:class (stl/css :colorpicker)
+            :ref node-ref
+            :style {:touch-action "none"}}
+      [:div {:class (stl/css :top-actions)}
 
-       (when (or (not disable-gradient) (not disable-image))
-         [:div {:class (stl/css :select)}
-          [:& select
-           {:default-value selected-mode
-            :options options
-            :on-change handle-change-mode}]])]
+       [:div {:class (stl/css :top-actions-right)}
 
-      (when (not= selected-mode :image)
-        [:button {:class (stl/css-case :picker-btn true
-                                       :selected picking-color?)
-                  :on-click handle-click-picker}
-         i/picker])]
+        (when (and (= color-style :direct-color)
+                   (or (not disable-gradient) (not disable-image)))
+          [:div {:class (stl/css :select)}
+           [:& select
+            {:default-value selected-mode
+             :options options
+             :on-change handle-change-mode}]])
 
-     (when (= selected-mode :gradient)
-       [:& gradients
-        {:type (:type state)
-         :stops (:stops state)
-         :editing-stop (:editing-stop state)
-         :on-stop-edit-start handle-stop-edit-start
-         :on-stop-edit-finish handle-stop-edit-finish
-         :on-select-stop handle-change-gradient-selected-stop
-         :on-change-type handle-change-gradient-type
-         :on-change-stop handle-gradient-change-stop
-         :on-add-stop-auto handle-gradient-add-stop-auto
-         :on-add-stop-preview handle-gradient-add-stop-preview
-         :on-remove-stop handle-gradient-remove-stop
-         :on-rotate-stops handle-rotate-stops
-         :on-reverse-stops handle-reverse-stops
-         :on-reorder-stops handle-reorder-stops}])
+        (when (and (= origin :sidebar) show-tokens? token-color)
+          [:& radio-buttons {:selected color-style
+                             :on-change toggle-token-color
+                             :name "color-style"}
+           [:& radio-button {:icon i/swatches
+                             :value :direct-color
+                             :title (tr "labels.color")
+                             :id "opt-color"}]
+           [:& radio-button {:icon i/tokens
+                             :value :token-color
+                             :title (tr "workspace.colorpicker.color-tokens")
+                             :id "opt-token-color"}]])]
 
-     (if (= selected-mode :image)
-       (let [uri (cfg/resolve-file-media (:image current-color))
-             keep-aspect-ratio? (-> current-color :image :keep-aspect-ratio)]
-         [:div {:class (stl/css :select-image)}
-          [:div {:class (stl/css :content)}
-           (when (:image current-color)
-             [:img {:src uri}])]
+       (when (and (not= selected-mode :image)
+                  (= color-style :direct-color))
+         [:> icon-button* {:icon i/picker
+                           :variant "ghost"
+                           :aria-label (tr "workspace.colorpicker.color-picker")
+                           :aria-pressed picking-color?
+                           :class (stl/css :picker-btn)
+                           :on-click handle-click-picker}])
 
-          (when (some? (:image current-color))
-            [:div {:class (stl/css :checkbox-option)}
-             [:label {:for "keep-aspect-ratio"
-                      :class (stl/css-case  :global/checked keep-aspect-ratio?)}
-              [:span {:class (stl/css-case :global/checked keep-aspect-ratio?)}
-               (when keep-aspect-ratio?
-                 i/status-tick)]
-              (tr "media.keep-aspect-ratio")
-              [:input {:type "checkbox"
-                       :id "keep-aspect-ratio"
-                       :checked keep-aspect-ratio?
-                       :on-change handle-change-keep-aspect-ratio}]]])
-          [:button
-           {:class (stl/css :choose-image)
-            :title (tr "media.choose-image")
-            :aria-label (tr "media.choose-image")
-            :on-click on-fill-image-click}
-           (tr "media.choose-image")
-           [:& file-uploader
-            {:input-id "fill-image-upload"
-             :accept "image/jpeg,image/png"
-             :multi false
-             :ref fill-image-ref
-             :on-selected on-fill-image-selected}]]])
-       [:*
-        [:div {:class (stl/css :colorpicker-tabs)}
-         [:> tab-switcher* {:tabs tabs
-                            :default-selected "ramp"
-                            :on-change-tab on-change-tab}]]
+       (when (= color-style :token-color)
+         [:div {:class (stl/css :token-color-title)}
+          (tr "workspace.colorpicker.color-tokens")])]
 
-        [:& color-inputs
-         {:type (if (= @active-color-tab :hsva) :hsv :rgb)
-          :disable-opacity disable-opacity
-          :color current-color
-          :on-change handle-change-color}]
+      (if (= color-style :direct-color)
+        [:*
+         (when (= selected-mode :gradient)
+           [:> gradients*
+            {:type (:type state)
+             :stops (if render-wasm? (vec (take types.fills/MAX-GRADIENT-STOPS (:stops state))) (:stops state))
+             :editing-stop (:editing-stop state)
+             :on-stop-edit-start handle-stop-edit-start
+             :on-stop-edit-finish handle-stop-edit-finish
+             :on-select-stop handle-change-gradient-selected-stop
+             :on-change-type handle-change-gradient-type
+             :on-change-stop handle-gradient-change-stop
+             :on-add-stop-auto handle-gradient-add-stop-auto
+             :on-add-stop-preview handle-gradient-add-stop-preview
+             :on-remove-stop handle-gradient-remove-stop
+             :on-rotate-stops handle-rotate-stops
+             :on-reverse-stops handle-reverse-stops
+             :on-reorder-stops handle-reorder-stops}])
 
-        [:& libraries
-         {:state state
-          :current-color current-color
-          :disable-gradient disable-gradient
-          :disable-opacity disable-opacity
-          :disable-image disable-image
-          :on-select-color on-select-library-color
-          :on-add-library-color on-add-library-color}]])
+         (if (= selected-mode :image)
+           (let [uri (cfg/resolve-file-media (:image current-color))
+                 keep-aspect-ratio? (-> current-color :image :keep-aspect-ratio)]
+             [:div {:class (stl/css :select-image)}
+              [:div {:class (stl/css :content)}
+               (when (:image current-color)
+                 [:img {:src uri
+                        :class (stl/css :content-image)}])]
 
+              (when (some? (:image current-color))
+                [:div {:class (stl/css :checkbox-option)}
+                 [:> checkbox* {:id "keep-aspect-ratio"
+                                :checked keep-aspect-ratio?
+                                :on-change handle-change-keep-aspect-ratio
+                                :label (tr "media.keep-aspect-ratio")}]])
+
+              [:> button* {:class (stl/css :choose-image)
+                           :variant "secondary"
+                           :on-click on-fill-image-click}
+               (tr "media.choose-image")
+               [:& file-uploader
+                {:input-id "fill-image-upload"
+                 :accept dwm/accept-image-types
+                 :multi false
+                 :ref fill-image-ref
+                 :on-selected on-fill-image-selected}]]])
+
+           [:*
+            [:div {:class (stl/css :colorpicker-tabs)}
+             [:> tab-switcher* {:tabs tabs
+                                :selected active-color-tab
+                                :on-change on-change-tab}
+              (if picking-color?
+                [:div {:class (stl/css :picker-detail-wrapper)}
+                 [:div {:class (stl/css :center-circle)}]
+                 [:canvas#picker-detail {:class (stl/css :picker-detail) :width 256 :height 140}]]
+
+
+                (case active-color-tab
+                  "ramp"
+                  [:> ramp-selector*
+                   {:color current-color
+                    :disable-opacity disable-opacity
+                    :on-change handle-change-color
+                    :on-start-drag on-start-drag
+                    :on-finish-drag on-finish-drag}]
+
+                  "harmony"
+                  [:> harmony-selector*
+                   {:color current-color
+                    :disable-opacity disable-opacity
+                    :on-change handle-change-color
+                    :on-start-drag on-start-drag
+                    :on-finish-drag on-finish-drag}]
+
+                  "hsva"
+                  [:> hsva-selector*
+                   {:color current-color
+                    :disable-opacity disable-opacity
+                    :mode hsb-mode
+                    :on-change handle-change-color
+                    :on-start-drag on-start-drag
+                    :on-finish-drag on-finish-drag}]))]]
+
+            [:> color-inputs*
+             {:type type
+              :disable-opacity disable-opacity
+              :mode hsb-mode
+              :on-mode-change #(reset! hsb-mode* %)
+              :color current-color
+              :on-change handle-change-color}]
+
+            [:> libraries*
+             {:state state
+              :current-color current-color
+              :disable-gradient disable-gradient
+              :disable-opacity disable-opacity
+              :disable-image disable-image
+              :on-select-color on-select-library-color
+              :on-add-library-color on-add-library-color}]])]
+
+        [:> token-section* {:combined-tokens combined-tokens
+                            :on-token-change on-token-change
+                            :applied-token applied-token
+                            :color-origin color-origin}])]
      (when (fn? on-accept)
        [:div {:class (stl/css :actions)}
-        [:button {:class (stl/css-case
-                          :accept-color true
-                          :btn-disabled disabled-color-accept?)
-                  :on-click on-color-accept
-                  :disabled disabled-color-accept?}
+        [:> button* {:class (stl/css :accept-color)
+                     :variant "primary"
+                     :on-click on-color-accept
+                     :disabled disabled-color-accept?}
          (tr "workspace.libraries.colors.save-color")]])]))
 
 (defn calculate-position
@@ -522,32 +568,156 @@
         max-y   (- vh h)
         rulers? (mf/deref refs/rulers?)
         left-offset (if rulers? 40 18)
-        right-offset (+ w 40)]
-
+        right-offset (+ w 40)
+        top-offset (dm/str (- y 70) "px")
+        bottom-offset "1rem"
+        max-height-top (str "calc(100vh - " top-offset)
+        max-height-bottom (str "calc(100vh -" bottom-offset)]
     (cond
       (or (nil? x) (nil? y))
-      #js {:left "auto" :right "16rem" :top "4rem"}
+      #js {:left "auto" :right "16rem" :top "4rem" :maxHeight "calc(100vh - 4rem)"}
 
       (= position :left)
       (if (> y max-y)
         #js {:left (dm/str (- x right-offset) "px")
-             :bottom "1rem"}
+             :bottom bottom-offset
+             :maxHeight max-height-bottom}
         #js {:left (dm/str (- x right-offset) "px")
-             :top (dm/str (- y 70) "px")})
+             :top top-offset
+             :maxHeight max-height-top})
 
       (= position :right)
       (if (> y max-y)
         #js {:left (dm/str (+ x 80) "px")
-             :bottom "1rem"}
+             :bottom bottom-offset
+             :maxHeight max-height-bottom}
         #js {:left (dm/str (+ x 80) "px")
-             :top (dm/str (- y 70) "px")})
+             :top top-offset
+             :maxHeight max-height-top})
 
       :else
       (if (> y max-y)
         #js {:left (dm/str (+ x left-offset) "px")
-             :bottom "1rem"}
+             :bottom bottom-offset
+             :maxHeight max-height-bottom}
         #js {:left (dm/str (+ x left-offset) "px")
-             :top (dm/str (- y 70) "px")}))))
+             :top top-offset
+             :maxHeight max-height-top}))))
+
+(defn group-sets
+  "Groups sets by their parent path (everything before the last '/') if present.
+   The set name is always the last part of the path.
+
+   Input:
+   [{:set \"brand/subgroup/one\" :tokens [{:name \"background\"}]}
+    {:set \"brand/subgroup/two\" :tokens [{:name \"foreground\"}]}
+    {:set \"primitives\" :tokens [{:name \"blue-100\"}]}]
+
+   Output:
+   [{:group \"brand/subgroup\"
+     :sets  [\"one\" \"two\"]
+     :tokens [\"background\" \"foreground\"]}
+    {:group nil
+     :sets  [\"primitives\"]
+     :tokens [\"blue-100\"]}]"
+
+  [sets]
+  (->> sets
+       (group-by (fn [{:keys [set]}]
+                   (when (str/includes? set "/")
+                     (str/join "/" (butlast (str/split set #"/"))))))
+       (map (fn [[group grouped-sets]]
+              (if group
+                {:group group
+                 :sets  (map (fn [{:keys [id set]}]
+                               {:id id
+                                :name (last (str/split set #"/"))})
+                             grouped-sets)
+                 :tokens (->> grouped-sets
+                              (mapcat :tokens)
+                              (map :name)
+                              distinct)}
+                (map (fn [{:keys [id set tokens]}]
+                       {:group nil
+                        :sets [{:id id :name set}]
+                        :tokens (map :name tokens)})
+                     grouped-sets))))
+       flatten))
+
+(defn- combine-groups-with-resolved
+  "Replaces token names in grouped sets with their full resolved token objects.
+
+     Input:
+     - groups: [{:group \"brand\"
+                 :sets [\"light\" \"dark\"]
+                 :tokens [\"background\" \"foreground\"]} ...]
+     - resolved-tokens: [{:name \"background\" :type \"color\" :value \"{red-100}\" ...} ...]
+
+     Output:
+     [{:group \"brand\"
+       :sets [\"light\" \"dark\"]
+       :tokens [{:name \"background\" :type \"color\" :value \"{red-100}\" ...}
+                {:name \"foreground\" :type \"color\" :value \"{green-100}\" ...}]}]"
+
+  [groups resolved-tokens]
+  (let [token-map (into {} (map (juxt :name identity) resolved-tokens))]
+    (map (fn [{:keys [group sets tokens]}]
+           {:group group
+            :sets  sets
+            :tokens (->> tokens
+                         (map #(get token-map %))
+                         (remove #(or (nil? %)
+                                      (:errors %)
+                                      (nil? (:resolved-value %))))
+                         vec)})
+         groups)))
+
+(defn- filter-non-empty-sets
+  "Removes sets that have no tokens.
+
+   Input:
+   [{:set \"brand/light\" :tokens []}
+    {:set \"brand/dark\"  :tokens [{:name \"background\"}]}]
+
+   Output:
+   [{:set \"brand/dark\" :tokens [{:name \"background\"}]}]"
+  [sets]
+  (filter (fn [{:keys [tokens]}]
+            (some #(= (:type %) :color) tokens))
+          sets))
+
+(defn- add-tokens-to-sets
+  "Extracts set name and its tokens from raw set objects.
+
+     Input:
+     A vector of set objects (raw domain type), each compatible with:
+     {:id ... :name \"brand/light\" :tokens {...}}
+
+     Output:
+     A vector of simplified maps:
+     [{:set \"brand/light\" :tokens [{:name \"background\" ...} ...]}]"
+  [sets]
+  (map (fn [s]
+         {:set    (ctob/get-name s)
+          :id     (ctob/get-id s)
+          :tokens (vals (ctob/get-tokens- s))})  ;; TODO: this function should be moved to common.logic and refactored
+       sets))
+
+(defn- filter-active-sets
+  "Filters sets to only include those whose :set value is in active-set-names.
+
+     Input:
+     - sets: [{:set \"brand/light\" :tokens [...]},
+              {:set \"brand/dark\" :tokens [...]},
+              {:set \"primitivos\" :tokens [...]},
+              ...]
+     - active-set-names: #{\"brand/light\" \"primitivos\"}
+
+     Output:
+     [{:set \"brand/light\" :tokens [...]}
+      {:set \"primitivos\" :tokens [...]}]"
+  [sets active-set-names]
+  (filter #(contains? active-set-names (:set %)) sets))
 
 (mf/defc colorpicker-modal
   {::mf/register modal/components
@@ -557,14 +727,23 @@
            disable-gradient
            disable-opacity
            disable-image
+           active-tokens
            on-change
+           origin
+           color-origin
+           on-token-change
            on-close
+           tab
+           applied-token
            on-accept]}]
   (let [vport       (mf/deref viewport)
         dirty?      (mf/use-var false)
         last-change (mf/use-var nil)
         position    (d/nilv position :left)
         style       (calculate-position vport position x y (some? (:gradient data)))
+        active-tokens (if (object? active-tokens)
+                        (mfu/bean active-tokens)
+                        active-tokens)
 
         on-change'
         (mf/use-fn
@@ -575,22 +754,56 @@
              (reset! last-change new-data)
              (if (fn? on-change)
                (on-change new-data)
-               (st/emit! (dc/update-colorpicker new-data))))))]
+               (st/emit! (dc/update-colorpicker new-data))))))
+
+        tokens-lib
+        (mf/deref refs/tokens-lib)
+
+        active-sets-names
+        (mf/with-memo [tokens-lib]
+          (some-> tokens-lib
+                  (ctob/get-active-themes-set-names)))
+
+        active-tokens (if (delay? active-tokens)
+                        @active-tokens
+                        active-tokens)
+
+        color-tokens (:color active-tokens)
+
+        grouped-tokens-by-set
+        (mf/with-memo [tokens-lib active-sets-names color-tokens]
+          (some-> tokens-lib
+                  (ctob/get-sets)
+                  ;; Show highest-precedence (last-defined) sets first in the
+                  ;; picker; the Tokens panel itself keeps definition order.
+                  ;; https://github.com/penpot/penpot/issues/10552
+                  (reverse)
+                  (add-tokens-to-sets)
+                  (filter-active-sets active-sets-names)
+                  (filter-non-empty-sets)
+                  (group-sets)
+                  (combine-groups-with-resolved  color-tokens)))]
 
     (mf/with-effect []
-      (st/emit! (st/emit! (dsc/push-shortcuts ::colorpicker sc/shortcuts)))
-      #(do
-         (st/emit! (dsc/pop-shortcuts ::colorpicker))
-         (when (and @dirty? @last-change on-close)
-           (on-close @last-change))))
+      (st/emit! (st/emit! (dsc/push-shortcuts ::colorpicker sc/shortcuts :workspace)))
+      (fn []
+        (st/emit! (dsc/pop-shortcuts ::colorpicker))
+        (when (and @dirty? @last-change on-close)
+          (on-close @last-change))))
 
     [:div {:class (stl/css :colorpicker-tooltip)
            :data-testid "colorpicker"
            :style style}
 
-     [:& colorpicker {:data data
-                      :disable-gradient disable-gradient
-                      :disable-opacity disable-opacity
-                      :disable-image disable-image
-                      :on-change on-change'
-                      :on-accept on-accept}]]))
+     [:> colorpicker* {:data data
+                       :combined-tokens grouped-tokens-by-set
+                       :disable-gradient disable-gradient
+                       :disable-opacity disable-opacity
+                       :disable-image disable-image
+                       :on-token-change on-token-change
+                       :applied-token applied-token
+                       :on-change on-change'
+                       :origin origin
+                       :tab tab
+                       :color-origin color-origin
+                       :on-accept on-accept}]]))

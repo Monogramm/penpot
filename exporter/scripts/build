@@ -3,21 +3,44 @@
 set -ex
 
 export CURRENT_VERSION=$1;
-
-yarn install
-rm -rf target
-
 export NODE_ENV=production;
 
+corepack enable;
+corepack install || exit 1;
+pnpm install || exit 1;
+pnpm run build:wasm;
+
+WASM_SRC="resources/wasm";
+WASM_SHARED="src/app/wasm/shared.js";
+if [ ! -f "$WASM_SRC/render-wasm.wasm" ] || [ ! -f "$WASM_SHARED" ]; then
+    echo "ERROR: the render-wasm build did not produce:" >&2;
+    echo "  $WASM_SRC/render-wasm.wasm" >&2;
+    echo "  $WASM_SHARED" >&2;
+    exit 1;
+fi
+
+rm -rf target
+
 # Build the application
-clojure -M:dev:shadow-cljs release main;
+pnpm run build;
 
-# Remove source
-rm -rf target/app;
-
-# Copy package*.json files
-cp ../.yarnrc.yml target/;
-cp yarn.lock target/;
+cp pnpm-lock.yaml target/;
+cp pnpm-workspace.yaml target/;
 cp package.json target/;
+touch target/pnpm-workspace.yaml;
+
+mkdir -p target/$WASM_SRC;
+cp "$WASM_SRC/render-wasm.js" "$WASM_SRC/render-wasm.wasm" target/$WASM_SRC/;
+
+cat <<EOF | tee target/setup
+#/usr/bin/env bash
+set -e;
+corepack enable;
+corepack install;
+pnpm install
+pnpm exec playwright install chromium;
+EOF
+
+chmod +x target/setup;
 
 sed -i -re "s/\%version\%/$CURRENT_VERSION/g" ./target/app.js;

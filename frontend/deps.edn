@@ -1,12 +1,18 @@
 {:paths ["src" "vendor" "resources" "test"]
  :deps
- {penpot/common
+ {;; Carries `app.common.render-wasm.*`, shared with the headless exporter.
+  penpot/common
   {:local/root "../common"}
 
-  org.clojure/clojure {:mvn/version "1.12.0"}
+  org.clojure/clojure {:mvn/version "1.12.5"}
   binaryage/devtools {:mvn/version "RELEASE"}
-  metosin/reitit-core {:mvn/version "0.7.0"}
+  metosin/reitit-core {:mvn/version "0.10.1"}
   funcool/okulary {:mvn/version "2022.04.11-16"}
+
+  funcool/tubax
+  {:git/tag "v2025.11.28"
+   :git/sha "2d9a986"
+   :git/url "https://github.com/funcool/tubax.git"}
 
   funcool/potok2
   {:git/tag "v2.2"
@@ -15,13 +21,13 @@
    :exclusions [funcool/beicon2]}
 
   funcool/beicon2
-  {:git/tag "v2.2"
-   :git/sha "8744c66"
+  {:git/tag "v2.3"
+   :git/sha "df7058a"
    :git/url "https://github.com/funcool/beicon.git"}
 
   funcool/rumext
-  {:git/tag "v2.20"
-   :git/sha "7f5e1cd"
+  {:git/tag "v2.25"
+   :git/sha "27e5a1a"
    :git/url "https://github.com/funcool/rumext.git"}
 
   instaparse/instaparse {:mvn/version "1.5.0"}
@@ -41,14 +47,19 @@
 
   :dev
   {:extra-paths ["dev"]
+   :jvm-opts ["--sun-misc-unsafe-memory-access=allow"
+              "--enable-native-access=ALL-UNNAMED"]
+
    :extra-deps
-   {thheller/shadow-cljs {:mvn/version "2.28.18"}
+   {thheller/shadow-cljs {:mvn/version "3.5.0"}
     com.bhauman/rebel-readline {:mvn/version "RELEASE"}
     org.clojure/tools.namespace {:mvn/version "RELEASE"}
-    criterium/criterium {:mvn/version "RELEASE"}
-    cider/cider-nrepl {:mvn/version "0.48.0"}}}
+    criterium/criterium {:mvn/version "0.4.6"}}}
 
   :shadow-cljs
-  {:main-opts ["-m" "shadow.cljs.devtools.cli"]}
-
+  {:main-opts ["-m" "shadow.cljs.devtools.cli"]
+   :jvm-opts ["--sun-misc-unsafe-memory-access=allow"
+              "-Dpenpot.wasm.profile-marks=true"
+              "-XX:+UnlockExperimentalVMOptions"
+              "-XX:CompileCommand=blackhole,criterium.blackhole.Blackhole::consume"]}
   }}

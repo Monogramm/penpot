@@ -2,15 +2,16 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.rpc-project-test
   (:require
+   [app.common.time :as ct]
    [app.common.uuid :as uuid]
+   [app.config :as cf]
    [app.db :as db]
    [app.http :as http]
    [app.rpc :as-alias rpc]
-   [app.util.time :as dt]
    [backend-tests.helpers :as th]
    [clojure.test :as t]))
 
@@ -29,7 +30,7 @@
                 :team-id (:id team)
                 :name "test project"}
           out  (th/command! data)]
-        ;; (th/print-result! out)
+      ;; (th/print-result! out)
 
       (t/is (nil? (:error out)))
       (let [result (:result out)]
@@ -92,7 +93,7 @@
                 :id project-id}
           out  (th/command! data)]
 
-        ;; (th/print-result! out)
+      ;; (th/print-result! out)
       (t/is (nil? (:error out)))
       (t/is (nil? (:result out))))
 
@@ -104,7 +105,8 @@
       ;; (th/print-result! out)
       (t/is (nil? (:error out)))
       (let [result (:result out)]
-        (t/is (= 1 (count result)))))))
+        (t/is (= 1 (count (remove :deleted-at result))))
+        (t/is (= 2 (count result)))))))
 
 (t/deftest permissions-checks-create-project
   (let [profile1 (th/create-profile* 1)
@@ -178,7 +180,7 @@
 
     ;; project is not deleted because it does not meet all
     ;; conditions to be deleted.
-    (let [result (th/run-task! :objects-gc {:min-age 0})]
+    (let [result (th/run-task! :objects-gc {})]
       (t/is (= 0 (:processed result))))
 
     ;; query the list of projects
@@ -207,10 +209,11 @@
       ;; (th/print-result! out)
       (t/is (nil? (:error out)))
       (let [result (:result out)]
-        (t/is (= 1 (count result)))))
+        (t/is (= 2 (count result)))
+        (t/is (= 1 (count (remove :deleted-at result))))))
 
     ;; run permanent deletion (should be noop)
-    (let [result (th/run-task! :objects-gc {:min-age (dt/duration {:minutes 1})})]
+    (let [result (th/run-task! :objects-gc {})]
       (t/is (= 0 (:processed result))))
 
     ;; query the list of files of a after soft deletion
@@ -224,8 +227,9 @@
         (t/is (= 0 (count result)))))
 
     ;; run permanent deletion
-    (let [result (th/run-task! :objects-gc {:min-age 0})]
-      (t/is (= 1 (:processed result))))
+    (binding [ct/*clock* (ct/fixed-clock (ct/in-future {:days 8}))]
+      (let [result (th/run-task! :objects-gc {})]
+        (t/is (= 1 (:processed result)))))
 
     ;; query the list of files of a after hard deletion
     (let [data {::th/type :get-project-files
@@ -237,3 +241,24 @@
             error-data (ex-data error)]
         (t/is (th/ex-info? error))
         (t/is (= (:type error-data) :not-found))))))
+
+(t/deftest get-project-nonexistent
+  (let [prof (th/create-profile* 1 {:is-active true})
+        out  (th/command! {::th/type :get-project
+                           ::rpc/profile-id (:id prof)
+                           :id (uuid/random)})
+        err  (:error out)]
+    (t/is (th/ex-info? err))
+    (t/is (th/ex-of-type? err :not-found))))
+
+(t/deftest get-project-no-permission
+  (let [owner (th/create-profile* 1 {:is-active true})
+        other (th/create-profile* 2 {:is-active true})
+        proj  (th/create-project* 1 {:profile-id (:id owner)
+                                     :team-id (:default-team-id owner)})
+        out   (th/command! {::th/type :get-project
+                            ::rpc/profile-id (:id other)
+                            :id (:id proj)})
+        err   (:error out)]
+    (t/is (th/ex-info? err))
+    (t/is (th/ex-of-type? err :not-found))))

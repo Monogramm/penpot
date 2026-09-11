@@ -2,25 +2,37 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.common
   (:require-macros [app.main.style :as stl])
   (:require
-   [app.common.data.macros :as dm]
+   [app.main.data.workspace.tokens.application :as dwta]
+   [app.main.store :as st]
    [app.util.dom :as dom]
    [rumext.v2 :as mf]))
 
-(mf/defc advanced-options [{:keys [visible? class children]}]
+(mf/defc advanced-options*
+  [{:keys [class is-visible children]}]
   (let [ref (mf/use-ref nil)]
     (mf/use-effect
-     (mf/deps visible?)
+     (mf/deps is-visible)
      (fn []
        (when-let [node (mf/ref-val ref)]
-         (when visible?
+         (when is-visible
            (dom/scroll-into-view-if-needed! node)))))
-    (when visible?
-      [:div {:class (dm/str class " " (stl/css :advanced-options-wrapper))
+    (when is-visible
+      [:div {:class [class (stl/css :advanced-options-wrapper)]
              :ref ref}
        children])))
+
+(defn emit-value-or-token [value emit-value-fn ids attrs]
+  (if (or (string? value)
+          (number? value)
+          (nil? value))
+    (emit-value-fn value)
+    (st/emit!
+     (dwta/toggle-token {:token     (first value)
+                         :attrs     attrs
+                         :shape-ids ids}))))
 

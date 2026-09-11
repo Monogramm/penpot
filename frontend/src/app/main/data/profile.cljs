@@ -2,23 +2,25 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.data.profile
   (:require
    [app.common.data :as d]
-   [app.common.data.macros :as dm]
    [app.common.schema :as sm]
-   [app.common.spec :as us]
+   [app.common.types.profile :refer [schema:profile]]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.main.data.event :as ev]
    [app.main.data.media :as di]
+   [app.main.data.notifications :as ntf]
    [app.main.data.team :as-alias dtm]
+   [app.main.features :as features]
    [app.main.repo :as rp]
    [app.main.router :as rt]
    [app.plugins.register :as plugins.register]
-   [app.util.i18n :as i18n]
+   [app.util.http :as http]
+   [app.util.i18n :as i18n :refer [tr]]
    [app.util.storage :as storage]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
@@ -26,16 +28,6 @@
 (declare update-profile-props)
 
 ;; --- SCHEMAS
-
-(def ^:private
-  schema:profile
-  [:map {:title "Profile"}
-   [:id ::sm/uuid]
-   [:created-at {:optional true} :any]
-   [:fullname {:optional true} :string]
-   [:email {:optional true} :string]
-   [:lang {:optional true} :string]
-   [:theme {:optional true} :string]])
 
 (def check-profile
   (sm/check-fn schema:profile))
@@ -51,27 +43,35 @@
 (defn set-profile
   "Initialize profile state, only logged-in profile data should be
   passed to this event"
-  [{:keys [id] :as profile}]
-  (ptk/reify ::set-profile
-    IDeref
-    (-deref [_] profile)
+  [profile]
+  (let [profile (update profile :theme not-empty)
+        id      (:id profile)]
+    (ptk/reify ::set-profile
+      IDeref
+      (-deref [_] profile)
 
-    ptk/UpdateEvent
-    (update [_ state]
-      (-> state
-          (assoc :profile-id id)
-          (assoc :profile profile)))
+      ptk/UpdateEvent
+      (update [_ state]
+        (-> state
+            (assoc :profile-id id)
+            (assoc :profile profile)))
 
-    ptk/EffectEvent
-    (effect [_ state _]
-      (let [profile (:profile state)]
-        (swap! storage/user assoc :profile profile)
-        (i18n/set-locale! (:lang profile))
-        (plugins.register/init)))))
+      ptk/WatchEvent
+      (watch [_ state _]
+        (let [profile (:profile state)]
+          (->> (rx/from (i18n/set-locale (:lang profile)))
+               (rx/ignore))))
+
+      ptk/EffectEvent
+      (effect [_ state _]
+        (let [profile (:profile state)]
+          (swap! storage/user assoc :profile profile)
+          (plugins.register/init))))))
 
 (def profile-fetched?
   (ptk/type? ::profile-fetched))
 
+;; FIXME: make it as general purpose handler, not only on profile
 (defn- on-fetch-profile-exception
   [cause]
   (let [data (ex-data cause)]
@@ -84,12 +84,25 @@
         (rx/of (rt/nav-raw :href href)))
       (rx/throw cause))))
 
+(defn on-fetch-profile-success
+  [profile]
+  (if (and (contains? cf/flags :subscriptions)
+           (is-authenticated? profile))
+    (->> (rp/cmd! :get-subscription-usage {})
+         (rx/map (fn [{:keys [editors]}]
+                   (update-in profile [:props :subscription] assoc :editors editors)))
+         (rx/catch (fn [cause]
+                     (js/console.error "unexpected error on obtaining subscription usage" cause)
+                     (rx/of profile))))
+    (rx/of profile)))
+
 (defn fetch-profile
   []
   (ptk/reify ::fetch-profile
     ptk/WatchEvent
     (watch [_ _ _]
       (->> (rp/cmd! :get-profile)
+           (rx/mapcat on-fetch-profile-success)
            (rx/map (partial ptk/data-event ::profile-fetched))
            (rx/catch on-fetch-profile-exception)))))
 
@@ -109,6 +122,10 @@
 
 ;; --- Update Profile
 
+(defn profile-update-params
+  [profile]
+  (d/without-nils (select-keys profile [:fullname :lang :theme])))
+
 (defn persist-profile
   [& {:as opts}]
   (ptk/reify ::persist-profile
@@ -117,7 +134,7 @@
       (let [on-success (:on-success opts identity)
             on-error   (:on-error opts rx/throw)
             profile    (:profile state)
-            params     (select-keys profile [:fullname :lang :theme])]
+            params     (profile-update-params profile)]
         (->> (rp/cmd! :update-profile params)
              (rx/tap on-success)
              (rx/map set-profile)
@@ -129,25 +146,23 @@
   Props are ignored because there is a specific event for updating
   props"
   [profile]
-  (dm/assert!
-   "expected valid profile data"
-   (check-profile profile))
 
-  (ptk/reify ::update-profile
-    ptk/WatchEvent
-    (watch [_ state _]
-      (let [profile' (get state :profile)
-            profile  (d/deep-merge profile' (dissoc profile :props))]
+  (let [profile (check-profile (d/without-nils profile))]
+    (ptk/reify ::update-profile
+      ptk/WatchEvent
+      (watch [_ state _]
+        (let [profile' (get state :profile)
+              profile  (d/deep-merge profile' (dissoc profile :props))]
 
-        (rx/merge
-         (rx/of (set-profile profile))
+          (rx/merge
+           (rx/of (set-profile profile))
 
-         (when (not= (:theme profile)
-                     (:theme profile'))
-           (rx/of (ptk/data-event ::ev/event
-                                  {::ev/name "activate-theme"
-                                   ::ev/origin "settings"
-                                   :theme (:theme profile)}))))))))
+           (when (not= (:theme profile)
+                       (:theme profile'))
+             (rx/of (ev/event
+                     {::ev/name "activate-theme"
+                      ::ev/origin "settings"
+                      :theme (:theme profile)})))))))))
 
 ;; --- Toggle Theme
 
@@ -158,24 +173,37 @@
     (update [_ state]
       (update-in state [:profile :theme]
                  (fn [current]
-                   (if (= current "default")
-                     "light"
-                     "default"))))
+                   (let [current (cond
+                                   ;; NOTE: this is a workaround for
+                                   ;; the old data on the database
+                                   ;; where whe have `default` value
+                                   (= current "default")
+                                   "dark"
+
+                                   :else
+                                   current)]
+                     (case current
+                       "dark"   "light"
+                       "light"  "system"
+                       "system" "dark"
+                       ; Failsafe for missing data
+                       "dark")))))
 
     ptk/WatchEvent
     (watch [it state _]
       (let [profile (get state :profile)
             origin  (::ev/origin (meta it))]
-        (rx/of (ptk/data-event ::ev/event {:theme (:theme profile)
-                                           ::ev/name "activate-theme"
-                                           ::ev/origin origin})
+        (rx/of (ev/event {:theme (:theme profile)
+                          ::ev/name "activate-theme"
+                          ::ev/origin origin})
                (persist-profile))))))
 
 ;; --- Request Email Change
 
 (defn request-email-change
   [{:keys [email] :as data}]
-  (dm/assert! ::us/email email)
+  (assert (sm/email-string? email) "exepected a valid email")
+
   (ptk/reify ::request-email-change
     ev/Event
     (-data [_]
@@ -208,29 +236,30 @@
    ;; Social registered users don't have old-password
    [:password-old {:optional true} [:maybe :string]]])
 
+(def ^:private check-update-password
+  (sm/check-fn schema:update-password
+               :hint "expected valid parameters for update password"))
+
 (defn update-password
   [data]
-  (dm/assert!
-   "expected valid parameters"
-   (sm/check schema:update-password data))
+  (let [data (check-update-password data)]
+    (ptk/reify ::update-password
+      ev/Event
+      (-data [_] {})
 
-  (ptk/reify ::update-password
-    ev/Event
-    (-data [_] {})
-
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (let [{:keys [on-error on-success]
-             :or {on-error identity
-                  on-success identity}} (meta data)
-            params {:old-password (:password-old data)
-                    :password (:password-1 data)}]
-        (->> (rp/cmd! :update-profile-password params)
-             (rx/tap on-success)
-             (rx/catch (fn [err]
-                         (on-error err)
-                         (rx/empty)))
-             (rx/ignore))))))
+      ptk/WatchEvent
+      (watch [_ _ _]
+        (let [{:keys [on-error on-success]
+               :or {on-error identity
+                    on-success identity}} (meta data)
+              params {:old-password (:password-old data)
+                      :password (:password-1 data)}]
+          (->> (rp/cmd! :update-profile-password params)
+               (rx/tap on-success)
+               (rx/catch (fn [err]
+                           (on-error err)
+                           (rx/empty)))
+               (rx/ignore)))))))
 
 (def ^:private schema:update-notifications
   [:map {:title "NotificationsForm"}
@@ -238,25 +267,24 @@
    [:email-comments [::sm/one-of #{:all :partial :none}]]
    [:email-invites [::sm/one-of #{:all :none}]]])
 
+(def ^:private check-update-notifications-params
+  (sm/check-fn schema:update-notifications))
+
 (defn update-notifications
-  [data]
-  (dm/assert!
-   "expected valid parameters"
-   (sm/check schema:update-notifications data))
+  [options]
+  (let [options (check-update-notifications-params options)]
+    (ptk/reify ::update-notifications
+      ev/Event
+      (-data [_] {})
 
-  (ptk/reify ::update-notifications
-    ev/Event
-    (-data [_] {})
+      ptk/UpdateEvent
+      (update [_ state]
+        (update-in state [:profile :props] assoc :notifications options))
 
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (let [{:keys [on-error on-success]
-             :or {on-error identity
-                  on-success identity}} (meta data)]
-        (->> (rp/cmd! :update-profile-notifications data)
-             (rx/tap on-success)
-             (rx/catch #(do (on-error %) (rx/empty)))
-             (rx/ignore))))))
+      ptk/WatchEvent
+      (watch [_ _ _]
+        (->> (rp/cmd! :update-profile-notifications options)
+             (rx/map #(ntf/success (tr "dashboard.notifications.notifications-saved"))))))))
 
 (defn update-profile-props
   [props]
@@ -270,8 +298,13 @@
     ;; FIXME
     ptk/WatchEvent
     (watch [_ _ _]
-      (->> (rp/cmd! :update-profile-props {:props props})
-           (rx/map (constantly (refresh-profile)))))))
+      (let [refresh-profile (->> (rp/cmd! :update-profile-props {:props props})
+                                 (rx/map (constantly (refresh-profile))))
+            recompute       (when (contains? props :renderer)
+                              (rx/of (features/recompute-features)))]
+        (if recompute
+          (rx/concat recompute refresh-profile)
+          refresh-profile)))))
 
 (defn mark-onboarding-as-viewed
   ([] (mark-onboarding-as-viewed nil))
@@ -303,10 +336,7 @@
 
 (defn update-photo
   [file]
-  (dm/assert!
-   "expected a valid blob for `file` param"
-   (di/blob? file))
-
+  (assert (di/blob? file) "expected a blob instance on `update-photo`")
   (ptk/reify ::update-photo
     ev/Event
     (-data [_] {})
@@ -330,9 +360,26 @@
              (rx/map (constantly (refresh-profile)))
              (rx/catch on-error))))))
 
+(def delete-photo
+  (ptk/reify ::delete-photo
+    ev/Event
+    (-data [_] {})
+
+    ptk/UpdateEvent
+    (update [_ state]
+      (assoc-in state [:profile :photo-id] nil))
+
+    ptk/WatchEvent
+    (watch [_ _ _]
+      (->> (rp/cmd! :delete-profile-photo {})
+           (rx/map (constantly (refresh-profile)))
+           (rx/catch (fn [cause]
+                       (js/console.error "delete-photo failed" cause)
+                       (rx/of (refresh-profile))))))))
+
 (defn fetch-file-comments-users
   [{:keys [team-id]}]
-  (dm/assert! (uuid? team-id))
+  (assert (uuid? team-id) "expected a valid uuid for `team-id`")
   (letfn [(fetched [users state]
             (->> users
                  (d/index-by :id)
@@ -346,8 +393,18 @@
 
 ;; --- EVENT: request-account-deletion
 
-(def profile-deleted?
+(def profile-deleted-event?
   (ptk/type? ::profile-deleted))
+
+(defn- delete-subscription
+  []
+  (if (contains? cf/flags :subscriptions)
+    (->> (http/fetch {:uri "/payments/subscriptions/delete"
+                      :credentials "include"
+                      :method :get})
+         (rx/map (constantly nil))
+         (rx/catch #(rx/empty)))
+    (rx/empty)))
 
 (defn request-account-deletion
   [params]
@@ -356,13 +413,17 @@
     (watch [_ _ _]
       (let [{:keys [on-error on-success]
              :or {on-error rx/throw
-                  on-success identity}} (meta params)]
-        (->> (rp/cmd! :delete-profile {})
-             (rx/tap on-success)
-             (rx/map (fn [_]
-                       (ptk/data-event ::profile-deleted params)))
-             (rx/catch on-error)
-             (rx/delay-at-least 300))))))
+                  on-success identity}}
+            (meta params)]
+
+        (rx/concat
+         (delete-subscription)
+         (->> (rp/cmd! :delete-profile {})
+              (rx/tap on-success)
+              (rx/map (fn [_]
+                        (ptk/data-event ::profile-deleted params)))
+              (rx/catch on-error)
+              (rx/delay-at-least 300)))))))
 
 ;; --- EVENT: request-profile-recovery
 
@@ -371,23 +432,23 @@
   [:map {:title "request-profile-recovery" :closed true}
    [:email ::sm/email]])
 
+(def ^:private check-request-profile-recovery
+  (sm/check-fn schema:request-profile-recovery))
+
 (defn request-profile-recovery
   [data]
+  (let [data (check-request-profile-recovery data)]
+    (ptk/reify ::request-profile-recovery
+      ptk/WatchEvent
+      (watch [_ _ _]
+        (let [{:keys [on-error on-success]
+               :or {on-error rx/throw
+                    on-success identity}}
+              (meta data)]
 
-  (dm/assert!
-   "expected valid parameters"
-   (sm/check schema:request-profile-recovery data))
-
-  (ptk/reify ::request-profile-recovery
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (let [{:keys [on-error on-success]
-             :or {on-error rx/throw
-                  on-success identity}} (meta data)]
-
-        (->> (rp/cmd! :request-profile-recovery data)
-             (rx/tap on-success)
-             (rx/catch on-error))))))
+          (->> (rp/cmd! :request-profile-recovery data)
+               (rx/tap on-success)
+               (rx/catch on-error)))))))
 
 ;; --- EVENT: recover-profile (Password)
 
@@ -397,27 +458,33 @@
    [:password :string]
    [:token :string]])
 
+(def ^:private check-recover-profile
+  (sm/check-fn schema:recover-profile))
+
 (defn recover-profile
   [data]
-  (dm/assert!
-   "expected valid arguments"
-   (sm/check schema:recover-profile data))
-
-  (ptk/reify ::recover-profile
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (let [{:keys [on-error on-success]
-             :or {on-error rx/throw
-                  on-success identity}} (meta data)]
-        (->> (rp/cmd! :recover-profile data)
-             (rx/tap on-success)
-             (rx/catch on-error))))))
+  (let [data (check-recover-profile data)]
+    (ptk/reify ::recover-profile
+      ptk/WatchEvent
+      (watch [_ _ _]
+        (let [{:keys [on-error on-success]
+               :or {on-error identity
+                    on-success identity}} (meta data)]
+          (->> (rp/cmd! :recover-profile data)
+               (rx/tap on-success)
+               (rx/catch (fn [err]
+                           (on-error err)
+                           (rx/empty)))
+               (rx/ignore)))))))
 
 ;; --- EVENT: fetch-team-webhooks
 
 (defn access-tokens-fetched
   [access-tokens]
   (ptk/reify ::access-tokens-fetched
+    IDeref
+    (-deref [_] access-tokens)
+
     ptk/UpdateEvent
     (update [_ state]
       (assoc state :access-tokens access-tokens))))
@@ -432,7 +499,7 @@
 
 ;; --- EVENT: create-access-token
 
-(defn access-token-created
+(defn- access-token-created
   [access-token]
   (ptk/reify ::access-token-created
     ptk/UpdateEvent
@@ -440,24 +507,35 @@
       (assoc state :access-token-created access-token))))
 
 (defn create-access-token
-  [{:keys [] :as params}]
+  [params]
   (ptk/reify ::create-access-token
     ptk/WatchEvent
     (watch [_ _ _]
       (let [{:keys [on-success on-error]
              :or {on-success identity
-                  on-error rx/throw}} (meta params)]
+                  on-error rx/throw}}
+            (meta params)]
+
         (->> (rp/cmd! :create-access-token params)
-             (rx/map access-token-created)
              (rx/tap on-success)
+             (rx/mapcat (fn [token]
+                          (rx/of (access-token-created token)
+                                 (fetch-access-tokens))))
              (rx/catch on-error))))))
 
 ;; --- EVENT: delete-access-token
 
 (defn delete-access-token
   [{:keys [id] :as params}]
-  (us/assert! ::us/uuid id)
+  (assert (uuid? id) "expect valid token id")
+
   (ptk/reify ::delete-access-token
+    ptk/UpdateEvent
+    (update [_ state]
+      (update state :access-tokens
+              (fn [tokens]
+                (into [] (remove #(= id (:id %))) tokens))))
+
     ptk/WatchEvent
     (watch [_ _ _]
       (let [{:keys [on-success on-error]
@@ -466,4 +544,3 @@
         (->> (rp/cmd! :delete-access-token params)
              (rx/tap on-success)
              (rx/catch on-error))))))
-

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace
   (:require-macros [app.main.style :as stl])
@@ -14,6 +14,7 @@
    [app.main.data.plugins :as dpl]
    [app.main.data.workspace :as dw]
    [app.main.features :as features]
+   [app.main.fonts :as fonts]
    [app.main.refs :as refs]
    [app.main.router :as-alias rt]
    [app.main.store :as st]
@@ -23,42 +24,50 @@
    [app.main.ui.hooks.resize :refer [use-resize-observer]]
    [app.main.ui.modal :refer [modal-container*]]
    [app.main.ui.workspace.colorpicker]
+   [app.main.ui.workspace.components-debugger :refer [components-debugger*]]
    [app.main.ui.workspace.context-menu :refer [context-menu*]]
    [app.main.ui.workspace.coordinates :as coordinates]
    [app.main.ui.workspace.libraries]
    [app.main.ui.workspace.nudge]
-   [app.main.ui.workspace.palette :refer [palette]]
+   [app.main.ui.workspace.palette :refer [palette*]]
    [app.main.ui.workspace.plugins]
-   [app.main.ui.workspace.sidebar :refer [left-sidebar* right-sidebar*]]
-   [app.main.ui.workspace.sidebar.collapsable-button :refer [collapsed-button]]
+   [app.main.ui.workspace.sidebar :refer [sidebar*]]
    [app.main.ui.workspace.sidebar.history :refer [history-toolbox*]]
-   [app.main.ui.workspace.tokens.modals]
-   [app.main.ui.workspace.tokens.modals.themes]
+   [app.main.ui.workspace.tokens.export]
+   [app.main.ui.workspace.tokens.export.modal]
+   [app.main.ui.workspace.tokens.import]
+   [app.main.ui.workspace.tokens.import.modal]
+   [app.main.ui.workspace.tokens.management.forms.modals]
+   [app.main.ui.workspace.tokens.management.forms.rename-node-modal]
+   [app.main.ui.workspace.tokens.remapping-modal]
+   [app.main.ui.workspace.tokens.settings]
+   [app.main.ui.workspace.tokens.themes.create-modal]
    [app.main.ui.workspace.viewport :refer [viewport*]]
+   [app.main.ui.workspace.webgl-unavailable-modal]
    [app.util.debug :as dbg]
    [app.util.dom :as dom]
-   [app.util.globals :as globals]
    [app.util.i18n :as i18n :refer [tr]]
    [goog.events :as events]
    [okulary.core :as l]
    [rumext.v2 :as mf]))
 
-(defn- make-workspace-ready-ref
-  [file-id]
-  (l/derived (fn [state]
-               (and (= file-id (:workspace-ready state))
-                    (some? (dsh/lookup-file-data state file-id))))
-             st/state))
-
 (mf/defc workspace-content*
   {::mf/private true}
   [{:keys [file layout page wglobal]}]
+
   (let [palete-size (mf/use-state nil)
         selected    (mf/deref refs/selected-shapes)
-        page-id     (:id page)
+        page-id     (get page :id)
 
-        {:keys [vport] :as wlocal} (mf/deref refs/workspace-local)
+        vport       (mf/deref refs/workspace-vport)
         {:keys [options-mode]} wglobal
+
+
+        ;; FIXME: pass this down to viewport and reuse it from here
+        ;; instead of making an other deref on viewport for the same
+        ;; data
+        drawing
+        (mf/deref refs/workspace-drawing)
 
         colorpalette?  (:colorpalette layout)
         textpalette?   (:textpalette layout)
@@ -69,7 +78,8 @@
          (mf/deps vport)
          (fn [resize-type size]
            (when (and vport (not= size vport))
-             (st/emit! (dw/update-viewport-size resize-type size)))))
+             (st/emit! (dw/update-viewport-size resize-type size)
+                       (dw/sync-wasm-workspace-viewport)))))
 
         on-resize-palette
         (mf/use-fn
@@ -78,9 +88,9 @@
 
         node-ref (use-resize-observer on-resize)]
     [:*
-     (when (not hide-ui?)
-       [:& palette {:layout layout
-                    :on-change-palette-size on-resize-palette}])
+     (when (not ^boolean hide-ui?)
+       [:> palette* {:layout layout
+                     :on-change-size on-resize-palette}])
 
      [:section
       {:key (dm/str "workspace-" page-id)
@@ -89,7 +99,7 @@
 
       [:section {:class (stl/css :workspace-viewport)}
        (when (dbg/enabled? :coordinates)
-         [:& coordinates/coordinates {:colorpalette? colorpalette?}])
+         [:> coordinates/coordinates* {:is-colorpalette colorpalette?}])
 
        (when (dbg/enabled? :history-overlay)
          [:div {:class (stl/css :history-debug-overlay)}
@@ -99,7 +109,6 @@
        [:> viewport*
         {:file file
          :page page
-         :wlocal wlocal
          :wglobal wglobal
          :selected selected
          :layout layout
@@ -108,72 +117,98 @@
            @palete-size)}]]]
 
      (when-not hide-ui?
-       [:*
-        (if (:collapse-left-sidebar layout)
-          [:& collapsed-button]
-          [:> left-sidebar* {:layout layout
-                             :file file
-                             :page-id page-id}])
-        [:> right-sidebar* {:section options-mode
-                            :selected selected
-                            :layout layout
-                            :file file
-                            :page-id page-id}]])]))
+       [:> sidebar* {:layout layout
+                     ;; FIXME
+                     :file-id (get file :id)
+                     :page-id page-id
+                     :file file
+                     :selected selected
+                     :section options-mode
+                     :drawing-tool (get drawing :tool)}])]))
 
 (mf/defc workspace-loader*
   {::mf/private true}
   []
   [:> loader*  {:title (tr "labels.loading")
                 :class (stl/css :workspace-loader)
-                :overlay true}])
+                :overlay true
+                :file-loading true}])
 
-(mf/defc workspace-page*
+(defn- make-team-ref
+  [team-id]
+  (l/derived (fn [state]
+               (let [teams (get state :teams)]
+                 (get teams team-id)))
+             st/state))
+
+(defn- make-file-ref
+  [file-id]
+  (l/derived (fn [state]
+               ;; NOTE: for ensure ordering of execution, we need to
+               ;; wait the file initialization completly success until
+               ;; mark this file availablea and unlock the rendering
+               ;; of the following components
+               (when (= (get state :current-file-id) file-id)
+                 (let [files (get state :files)
+                       file  (get files file-id)]
+                   (-> file
+                       (dissoc :data)
+                       (assoc ::has-data (contains? file :data))))))
+             st/state
+             =))
+
+(defn- make-page-ref
+  [file-id page-id]
+  (l/derived (fn [state]
+               (let [current-page-id (get state :current-page-id)]
+                 ;; NOTE: for ensure ordering of execution, we need to
+                 ;; wait the page initialization completly success until
+                 ;; mark this file availablea and unlock the rendering
+                 ;; of the following components
+                 (when (= current-page-id page-id)
+                   (dsh/lookup-page state file-id page-id))))
+             st/state))
+
+(mf/defc workspace-inner*
   {::mf/private true}
-  [{:keys [page-id file layout wglobal]}]
-  (let [page-id (hooks/use-equal-memo page-id)
-        page    (mf/deref refs/workspace-page)]
+  [{:keys [page-id file-id file layout wglobal]}]
+  (let [page-ref (mf/with-memo [file-id page-id]
+                   (make-page-ref file-id page-id))
+        page     (mf/deref page-ref)]
 
     (mf/with-effect []
       (let [focus-out #(st/emit! (dw/workspace-focus-lost))
-            key       (events/listen globals/window "blur" focus-out)]
+            key       (events/listen js/window "blur" focus-out)]
         (partial events/unlistenByKey key)))
 
-    (mf/with-effect [page-id]
-      (if (some? page-id)
-        (st/emit! (dw/initialize-page page-id))
-        (st/emit! (dcm/go-to-workspace ::rt/replace true)))
-
+    (mf/with-effect [file-id page-id]
+      (st/emit! (dw/initialize-page file-id page-id))
       (fn []
-        (when (some? page-id)
-          (st/emit! (dw/finalize-page page-id)))))
+        (st/emit! (dw/finalize-page file-id page-id))))
 
     (if (some? page)
       [:> workspace-content* {:file file
                               :page page
                               :wglobal wglobal
                               :layout layout}]
-      [:& workspace-loader*])))
-
-
-(def ^:private ref:file-without-data
-  (l/derived (fn [file]
-               (dissoc file :data))
-             refs/file
-             =))
+      [:> workspace-loader*])))
 
 (mf/defc workspace*
-  {::mf/props :obj
-   ::mf/wrap [mf/memo]}
-  [{:keys [project-id file-id page-id layout-name]}]
+  {::mf/wrap [mf/memo]}
+  [{:keys [team-id project-id file-id page-id layout-name]}]
 
-  (let [file-id          (hooks/use-equal-memo file-id)
-        page-id          (hooks/use-equal-memo page-id)
-
-        layout           (mf/deref refs/workspace-layout)
+  (let [layout           (mf/deref refs/workspace-layout)
         wglobal          (mf/deref refs/workspace-global)
 
-        team             (mf/deref refs/team)
-        file             (mf/deref ref:file-without-data)
+        team-ref         (mf/with-memo [team-id]
+                           (make-team-ref team-id))
+        file-ref         (mf/with-memo [file-id]
+                           (make-file-ref file-id))
+
+        team             (mf/deref team-ref)
+        file             (mf/deref file-ref)
+
+        file-loaded?     (get file ::has-data)
 
         file-name        (:name file)
         permissions      (:permissions team)
@@ -181,17 +216,20 @@
         read-only?       (mf/deref refs/workspace-read-only?)
         read-only?       (or read-only? (not (:can-edit permissions)))
 
-        ready*           (mf/with-memo [file-id]
-                           (make-workspace-ready-ref file-id))
-        ready?           (mf/deref ready*)
-
         design-tokens?   (features/use-feature "design-tokens/v1")
+
+        wasm-renderer-enabled? (features/use-feature "render-wasm/v1")
+
+        first-frame-rendered?  (mf/use-state false)
 
         background-color (:background-color wglobal)]
 
     (mf/with-effect []
       (st/emit! (dps/initialize-persistence)
                 (dpl/update-plugins-permissions-peek)))
+
+    (mf/with-effect []
+      (fonts/prefetch-preview-sprite!))
 
     ;; Setting the layout preset by its name
     (mf/with-effect [layout-name]
@@ -201,27 +239,61 @@
       (when file-name
         (dom/set-html-title (tr "title.workspace" file-name))))
 
-    (mf/with-effect [file-id]
-      (st/emit! (dw/initialize-workspace file-id))
+    (mf/with-effect [team-id file-id]
+      (st/emit! (dw/initialize-workspace team-id file-id))
       (fn []
         (st/emit! ::dps/force-persist
-                  (dw/finalize-workspace file-id))))
+                  (dw/finalize-workspace team-id file-id))))
+
+    (mf/with-effect [file-id page-id file-loaded?]
+      (when (and file-loaded? (not page-id))
+        (st/emit! (dcm/go-to-workspace :file-id file-id ::rt/replace true))))
+
+    (mf/with-effect [file-id page-id]
+      (reset! first-frame-rendered? false))
+
+    (mf/with-effect []
+      (let [handle-wasm-render
+            (fn [_]
+              (reset! first-frame-rendered? true))
+            listener-key (events/listen js/document "penpot:wasm:render" handle-wasm-render)]
+        (fn []
+          (events/unlistenByKey listener-key))))
 
     [:> (mf/provider ctx/current-project-id) {:value project-id}
      [:> (mf/provider ctx/current-file-id) {:value file-id}
       [:> (mf/provider ctx/current-page-id) {:value page-id}
-       [:> (mf/provider ctx/components-v2) {:value true}
-        [:> (mf/provider ctx/design-tokens) {:value design-tokens?}
-         [:> (mf/provider ctx/workspace-read-only?) {:value read-only?}
-          [:> modal-container*]
-          [:section {:class (stl/css :workspace)
-                     :style {:background-color background-color
-                             :touch-action "none"}}
-           [:> context-menu*]
+       [:> (mf/provider ctx/design-tokens) {:value design-tokens?}
+        [:> (mf/provider ctx/workspace-read-only?) {:value read-only?}
+         [:> modal-container*]
+         [:> components-debugger*]
+         [:section {:class (stl/css :workspace)
+                    :style {:background-color background-color
+                            :touch-action "none"
+                            :position "relative"}}
+          [:> context-menu*]
+          (when (and file-loaded? page-id)
+            [:> workspace-inner*
+             {:page-id page-id
+              :file-id file-id
+              :file file
+              :wglobal wglobal
+              :layout layout}])
+          (when (or (not (and file-loaded? page-id))
+                    ;; in wasm renderer, extend the pixel loader until the first frame is rendered
+                    ;; but do not apply it when switching pages
+                    (and wasm-renderer-enabled?
+                         (not file-loaded?)
+                         (not @first-frame-rendered?)))
+            [:> workspace-loader*])]]]]]]))
 
-           (if ^boolean ready?
-             [:> workspace-page* {:page-id page-id
-                                  :file file
-                                  :wglobal wglobal
-                                  :layout layout}]
-             [:> workspace-loader*])]]]]]]]))
+(mf/defc workspace-page*
+  {::mf/lazy-load true}
+  [{:keys [file-id page-id] :as props}]
+  (let [file-id (hooks/use-equal-memo file-id)
+        page-id (hooks/use-equal-memo page-id)
+        props   (mf/spread-props props {:file-id file-id
+                                        :page-id page-id})]
+
+    (when (uuid? file-id)
+      [:> workspace* props])))

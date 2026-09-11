@@ -1,13 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { WorkspacePage } from "../pages/WorkspacePage";
-import { presenceFixture } from "../../data/workspace/ws-notifications";
+import { WasmWorkspacePage } from "../pages/WasmWorkspacePage";
+import { presenceFixture, joinFixture2, joinFixture3 } from "../../data/workspace/ws-notifications";
 
 test.beforeEach(async ({ page }) => {
-  await WorkspacePage.init(page);
+  await WasmWorkspacePage.init(page);
 });
 
 test("User loads worskpace with empty file", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
 
   await workspacePage.goToWorkspace();
@@ -15,10 +15,21 @@ test("User loads worskpace with empty file", async ({ page }) => {
   await expect(workspacePage.pageName).toHaveText("Page 1");
 });
 
+test("User opens a file with a bad page id", async ({ page }) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+
+  await workspacePage.goToWorkspace({
+    pageId: "badpage",
+  });
+
+  await expect(workspacePage.pageName).toHaveText("Page 1");
+});
+
 test("User receives presence notifications updates in the workspace", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
 
   await workspacePage.goToWorkspace();
@@ -29,8 +40,30 @@ test("User receives presence notifications updates in the workspace", async ({
   ).toHaveCount(2);
 });
 
+test("BUG 13058 - Presence list shows up to 3 user avatars", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+
+  await workspacePage.goToWorkspace();
+  await workspacePage.sendPresenceMessage(presenceFixture);
+  await workspacePage.sendPresenceMessage(joinFixture2);
+
+  await expect(
+    page.getByTestId("active-users-list").getByAltText("Princesa Leia"),
+  ).toHaveCount(3);
+
+  await workspacePage.sendPresenceMessage(joinFixture3);
+  await expect(
+    page.getByTestId("active-users-list").getByAltText("Princesa Leia"),
+  ).toHaveCount(2);
+
+  await expect(page.getByTestId("active-users-list").getByText("+2")).toBeVisible();
+});
+
 test("User draws a rect", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.mockRPC(
     "update-file?id=*",
@@ -41,13 +74,153 @@ test("User draws a rect", async ({ page }) => {
   await workspacePage.rectShapeButton.click();
   await workspacePage.clickWithDragViewportAt(128, 128, 200, 100);
 
-  const shape = await workspacePage.rootShape.locator("rect");
-  await expect(shape).toHaveAttribute("width", "200");
-  await expect(shape).toHaveAttribute("height", "100");
+  await workspacePage.hideUI();
+  await expect(workspacePage.canvas).toHaveScreenshot();
+});
+
+test("Selection size badge appears on selection and hides on deselect", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC(
+    /get\-file\?/,
+    "workspace/get-file-not-empty.json",
+  );
+
+  await workspacePage.goToWorkspace({
+    fileId: "6191cd35-bb1f-81f7-8004-7cc63d087374",
+    pageId: "6191cd35-bb1f-81f7-8004-7cc63d087375",
+  });
+
+  const badge = page.locator(".selection-size-badge");
+
+  await expect(badge).toHaveCount(0);
+
+  await workspacePage.clickLeafLayer("Rectangle");
+  await expect(badge).toBeVisible();
+
+  await workspacePage.page.keyboard.press("Escape");
+  await expect(badge).toHaveCount(0);
+});
+
+test("Selection size badge uses component color for component selection", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockGetFile("components/get-file-13267.json");
+
+  await workspacePage.goToWorkspace({
+    fileId: "e9c84e12-dd29-80fc-8007-86d559dced7f",
+    pageId: "e9c84e12-dd29-80fc-8007-86d559dced80",
+  });
+
+  await workspacePage.clickLeafLayer("A Component");
+
+  const badge = page.locator(".selection-size-badge");
+  await expect(badge).toBeVisible();
+  await expect(badge.locator("rect")).toHaveCSS("fill", "rgb(187, 151, 216)");
+  await expect(badge.locator("text")).toHaveCSS("fill", "rgb(255, 255, 255)");
+});
+
+test("Selection size badge shows unrotated dimensions for rotated single selection", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC(
+    /get\-file\?/,
+    "workspace/get-file-not-empty.json",
+  );
+  await workspacePage.mockRPC(
+    "update-file?id=*",
+    "workspace/update-file-create-rect.json",
+  );
+
+  await workspacePage.goToWorkspace({
+    fileId: "6191cd35-bb1f-81f7-8004-7cc63d087374",
+    pageId: "6191cd35-bb1f-81f7-8004-7cc63d087375",
+  });
+
+  await workspacePage.clickLeafLayer("Rectangle");
+
+  const badgeText = page.locator(".selection-size-badge text");
+  await expect(badgeText).toHaveText("126 x 134");
+
+  const rotationInput = workspacePage.rightSidebar.getByRole("textbox", {
+    name: "Rotation",
+  });
+  await rotationInput.fill("45");
+  await rotationInput.press("Enter");
+
+  await expect(rotationInput).toHaveValue("45");
+  await expect(badgeText).toHaveText("126 x 134");
+});
+
+test("Selection size badge shows dimensions for path shapes", async ({ page }) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC(
+    "update-file?id=*",
+    "workspace/update-file-empty.json",
+  );
+
+  await workspacePage.goToWorkspace();
+
+  // Workaround: hover viewport first to avoid nil mouse position crash
+  await workspacePage.viewport.hover();
+
+  // Draw a path with two segments; a single straight segment shows
+  // endpoint controls instead of the size badge
+  await workspacePage.pathButton.click();
+  await workspacePage.clickAt(779, 163);
+  await workspacePage.clickAt(951, 258);
+  await workspacePage.clickAt(1050, 163);
+
+  // Finish drawing (commits path, path enters edition mode)
+  await page.keyboard.press("Escape");
+
+  // Exit edition mode (path stays selected, badge becomes visible)
+  await page.keyboard.press("Escape");
+
+  const badgeText = page.locator(".selection-size-badge text");
+  await expect(badgeText).toBeVisible();
+  await expect(badgeText).toHaveText(/\d+\.?\d* x \d+\.?\d*/);
+});
+
+test("Selection size badge is hidden for straight line paths", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC(
+    "update-file?id=*",
+    "workspace/update-file-empty.json",
+  );
+
+  await workspacePage.goToWorkspace();
+
+  // Workaround: hover viewport first to avoid nil mouse position crash
+  await workspacePage.viewport.hover();
+
+  // Draw a path with a single straight segment
+  await workspacePage.pathButton.click();
+  await workspacePage.clickAt(779, 163);
+  await workspacePage.clickAt(951, 258);
+
+  // Finish drawing (commits path, path enters edition mode)
+  await page.keyboard.press("Escape");
+
+  // Exit edition mode (path stays selected)
+  await page.keyboard.press("Escape");
+
+  await expect(page.locator(".line-controls")).toBeVisible();
+  await expect(page.locator(".selection-size-badge")).toHaveCount(0);
 });
 
 test("User makes a group", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.mockRPC(
     /get\-file\?/,
@@ -63,14 +236,14 @@ test("User makes a group", async ({ page }) => {
     pageId: "6191cd35-bb1f-81f7-8004-7cc63d087375",
   });
   await workspacePage.clickLeafLayer("Rectangle");
-  await workspacePage.page.keyboard.press("Control+g");
+  await workspacePage.page.keyboard.press("ControlOrMeta+g");
   await workspacePage.expectSelectedLayer("Group");
 });
 
 test("Bug 7654 - Toolbar keeps toggling on and off on spacebar press", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.goToWorkspace();
 
@@ -80,10 +253,10 @@ test("Bug 7654 - Toolbar keeps toggling on and off on spacebar press", async ({
   await workspacePage.expectHiddenToolbarOptions();
 });
 
-test("Bug 7525 - User moves a scrollbar and no selciont rectangle appears", async ({
+test("Bug 7525 - User moves a scrollbar and no selection rectangle appears", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.mockRPC(
     /get\-file\?/,
@@ -99,8 +272,8 @@ test("Bug 7525 - User moves a scrollbar and no selciont rectangle appears", asyn
     pageId: "6191cd35-bb1f-81f7-8004-7cc63d087375",
   });
 
-  // Move created rect to a corner, in orther to get scrollbars
-  await workspacePage.panOnViewportAt(128, 128, 300, 300);
+  // Move created rect to a corner, in order to get scrollbars
+  await workspacePage.panOnViewportAt(128, 128, 600, 600);
 
   // Check scrollbars appear
   const horizontalScrollbar = workspacePage.horizontalScrollbar;
@@ -119,7 +292,7 @@ test("Bug 7525 - User moves a scrollbar and no selciont rectangle appears", asyn
 test("User adds a library and its automatically selected in the color palette", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.mockRPC(
     "link-file-to-library",
@@ -161,10 +334,53 @@ test("User adds a library and its automatically selected in the color palette", 
   ).toBeVisible();
 });
 
+test("Bug 10179 - Drag & drop doesn't add colors to the Recent Colors palette", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.goToWorkspace();
+  await workspacePage.moveButton.click();
+
+  await workspacePage.page.keyboard.press("Alt+p");
+
+  await expect(
+    workspacePage.palette.getByText(
+      "There are no color styles in your library yet",
+    ),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "#E8E9EA" }).click();
+  await expect(page.getByTestId("colorpicker")).toBeVisible();
+  const handler = await page.getByTestId("ramp-handler");
+  await expect(handler).toBeVisible();
+  const saturation_selection = await page.getByTestId(
+    "value-saturation-selector",
+  );
+  await expect(saturation_selection).toBeVisible();
+  const saturation_box = await saturation_selection.boundingBox();
+  const handler_box = await handler.boundingBox();
+  await page.mouse.move(
+    handler_box.x + handler_box.width,
+    handler_box.y + handler_box.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    saturation_box.x + saturation_box.width / 2,
+    saturation_box.y + saturation_box.height / 2,
+  );
+  await page.mouse.up();
+  await expect(
+    workspacePage.palette.getByText(
+      "There are no color styles in your library yet",
+    ),
+  ).not.toBeVisible();
+});
+
 test("Bug 7489 - Workspace-palette items stay hidden when opening with keyboard-shortcut", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.goToWorkspace();
 
@@ -181,7 +397,7 @@ test("Bug 7489 - Workspace-palette items stay hidden when opening with keyboard-
 test("Bug 8784 - Use keyboard arrow to move inside a text input does not change tabs", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile();
   await workspacePage.goToWorkspace();
   await workspacePage.pageName.click();
@@ -191,17 +407,9 @@ test("Bug 8784 - Use keyboard arrow to move inside a text input does not change 
 });
 
 test("Bug 9066 - Problem with grid layout", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
   await workspacePage.mockRPC(/get\-file\?/, "workspace/get-file-9066.json");
-  await workspacePage.mockRPC(
-    "get-file-fragment?file-id=*&fragment-id=e179d9df-de35-80bf-8005-2861e849b3f7",
-    "workspace/get-file-fragment-9066-1.json",
-  );
-  await workspacePage.mockRPC(
-    "get-file-fragment?file-id=*&fragment-id=e179d9df-de35-80bf-8005-2861e849785e",
-    "workspace/get-file-fragment-9066-2.json",
-  );
 
   await workspacePage.mockRPC(
     "update-file?id=*",
@@ -217,7 +425,7 @@ test("Bug 9066 - Problem with grid layout", async ({ page }) => {
   await workspacePage.clickToggableLayer("Group");
   await page.getByText("A", { exact: true }).click();
 
-  await workspacePage.rightSidebar.getByTestId("swap-component-btn").click();
+  await workspacePage.rightSidebar.getByTestId("component-pill-button").click();
 
   await page.getByTitle("C", { exact: true }).click();
 
@@ -227,7 +435,7 @@ test("Bug 9066 - Problem with grid layout", async ({ page }) => {
 });
 
 test("User have toolbar", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
   await workspacePage.goToWorkspace();
 
@@ -236,11 +444,11 @@ test("User have toolbar", async ({ page }) => {
 });
 
 test("User have edition menu entries", async ({ page }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
   await workspacePage.goToWorkspace();
 
-  await page.getByTitle("Main menu").click();
+  await page.getByRole("button", { name: "Main menu" }).click();
   await page.getByText("file").last().click();
 
   await expect(page.getByText("Add as Shared Library")).toBeVisible();
@@ -252,7 +460,7 @@ test("User have edition menu entries", async ({ page }) => {
 });
 
 test("Copy/paste properties", async ({ page, context }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
   await workspacePage.mockRPC(
     /get\-file\?/,
@@ -309,22 +517,74 @@ test("Copy/paste properties", async ({ page, context }) => {
 });
 
 test("[Taiga #9929] Paste text in workspace", async ({ page, context }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
   await workspacePage.goToWorkspace();
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate(() => navigator.clipboard.writeText("Lorem ipsum dolor"));
   await workspacePage.viewport.click({ button: "right" });
-  await page.getByText("PasteCtrlV").click();
+  await page.getByText(/^Paste/i).click();
   await workspacePage.viewport
     .getByRole("textbox")
     .getByText("Lorem ipsum dolor");
 });
 
+// I've skipped this test because it doesn't make sense with the new render.
+test.skip("[Taiga #9930] Zoom fit all doesn't fit all shapes", async ({
+  page,
+  context,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+  await workspacePage.mockRPC(/get\-file\?/, "workspace/get-file-9930.json");
+  await workspacePage.goToWorkspace({
+    fileId: "8f843b59-7fbb-81ce-8005-aa6d47ae3111",
+    pageId: "fb9798e7-a547-80ae-8005-9ffda4a13e2c",
+  });
+
+  const zoom = page.getByTitle("Zoom");
+  await zoom.click();
+
+  const zoomIn = page.getByRole("button", { name: "Zoom in" });
+  await zoomIn.click();
+  await zoomIn.click();
+  await zoomIn.click();
+
+  // Zoom fit all
+  await page.keyboard.press("Shift+1");
+  // Select all shapes to display selrect
+  await workspacePage.page.keyboard.press("ControlOrMeta+a");
+
+  const ids = [
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaeec59",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaf8d8a",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaf8d9e",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb053d9",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb09738",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb0f3fc",
+  ];
+
+  function contains(container, contained) {
+    return (
+      container.x <= contained.x &&
+      container.y <= contained.y &&
+      container.width >= contained.width &&
+      container.height >= contained.height
+    );
+  }
+
+  const viewportBoundingBox = await workspacePage.viewport.boundingBox();
+  for (const id of ids) {
+    const shape = page.locator(`.viewport-selrect`);
+    const shapeBoundingBox = await shape.boundingBox();
+    expect(contains(viewportBoundingBox, shapeBoundingBox)).toBeTruthy();
+  }
+});
+
 test("Bug 9877, user navigation to dashboard from header goes to blank page", async ({
   page,
 }) => {
-  const workspacePage = new WorkspacePage(page);
+  const workspacePage = new WasmWorkspacePage(page);
   await workspacePage.setupEmptyFile(page);
 
   await workspacePage.goToWorkspace();
@@ -336,4 +596,127 @@ test("Bug 9877, user navigation to dashboard from header goes to blank page", as
   await expect(popup).toHaveURL(
     /&project-id=c7ce0794-0992-8105-8004-38e630f7920b/,
   );
+});
+
+test("Bug 8371 - Flatten option is not visible in context menu", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+  await workspacePage.mockGetFile("workspace/get-file-8371.json");
+  await workspacePage.goToWorkspace({
+    fileId: "7ce7750c-3efe-8009-8006-bf390a415df2",
+    pageId: "7ce7750c-3efe-8009-8006-bf390a415df3",
+  });
+
+  const shape = workspacePage.page.locator(
+    `[id="shape-40c555bd-1810-809a-8006-bf3912728203"]`,
+  );
+
+  await workspacePage.clickLeafLayer("Union");
+  await workspacePage.page
+    .locator(".viewport-selrect")
+    .click({ button: "right" });
+  await expect(workspacePage.contextMenuForShape).toBeVisible();
+  await expect(
+    workspacePage.contextMenuForShape
+      .getByText("Flatten")
+      // there are hidden elements in the context menu (in submenus) with "Flatten" text
+      .filter({ visible: true }),
+  ).toBeVisible();
+});
+
+test("BUG 13415 - Grid layout overlay is not removed when deleting a board", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+  await workspacePage.mockGetFile("workspace/get-file-13415.json");
+  await workspacePage.mockRPC(
+    "update-file?id=*",
+    "workspace/update-file-13415.json",
+  );
+
+  await workspacePage.goToWorkspace();
+  await workspacePage.clickLeafLayer("Board");
+
+  const currentRenderCount = await workspacePage.getRenderCount();
+  await workspacePage.page.keyboard.press("Delete");
+
+  await workspacePage.waitForNextRender(currentRenderCount);
+  await workspacePage.hideUI();
+  await expect(workspacePage.canvas).toHaveScreenshot();
+});
+
+test("BUG 13822 - Problems with z-index", async ({
+  page
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockGetFile("workspace/get-file-13822.json");
+
+  await workspacePage.goToWorkspace({
+    fileId: "7fd33337-c651-80ae-8007-c37410926e0f",
+    pageId: "af41758c-e196-8138-8007-c36f805c3f6d",
+  });
+
+  await workspacePage.waitForFirstRenderWithoutUI();
+  await expect(workspacePage.canvas).toHaveScreenshot();
+});
+
+test("BUG 14239 - Fix default path thickness", async ({
+  page
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC("update-file?id=*", "workspace/update-file-empty.json");
+  await workspacePage.goToWorkspace();
+
+  // (Workaround a bug in which mouse position can be nil and path editor crashes
+  // if we click on the Path tool without hovering over the viewport first)
+  await workspacePage.viewport.hover();
+  // 1. Draw a path
+  await workspacePage.pathButton.click();
+  await workspacePage.clickAt(779, 163);
+  await workspacePage.clickAt(951, 258);
+  // 2. Close it
+  await page.keyboard.press("Escape");
+
+  await expect(workspacePage.rightSidebar.getByRole("textbox", { name: "Stroke width" })).toHaveValue("1");
+});
+
+test("Bug 14250 - User with viewer role can select a locked board with a grid", async ({
+  page,
+}) => {
+  const workspacePage = new WasmWorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.mockRPC("get-teams", "get-teams-role-viewer.json");
+  await workspacePage.mockRPC(
+    /get\-file\?/,
+    "workspace/get-file-14250.json",
+  );
+
+  await workspacePage.goToWorkspace();
+
+  // Select the board from the layer tree to reveal its position
+  // on the canvas via the selection rectangle overlay
+  await workspacePage.clickLeafLayer("Locked Board with Grid");
+  await page.waitForSelector(".viewport-selrect");
+
+  // Get the selection rectangle bounding box (page coordinates)
+  // and calculate its center relative to the viewport element
+  const selrectBox = await page.locator(".viewport-selrect").boundingBox();
+  const viewportBox = await workspacePage.viewport.boundingBox();
+
+  const centerX = selrectBox.x + selrectBox.width / 2 - viewportBox.x;
+  const centerY = selrectBox.y + selrectBox.height / 2 - viewportBox.y;
+
+  // Deselect by pressing Escape
+  await page.keyboard.press("Escape");
+
+  // Click on the canvas at the board's center
+  await workspacePage.clickAt(centerX, centerY);
+
+  // Verify the board is now selected in the layers bar
+  await workspacePage.expectSelectedLayer("Locked Board with Grid");
 });

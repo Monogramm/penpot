@@ -2,17 +2,20 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.renderer.svg
   (:require
-   ["svgo" :as svgo]
+   ["@penpot/svgo" :as svgo]
    ["xml-js" :as xml]
    [app.browser :as bw]
    [app.common.data :as d]
+   [app.common.exceptions :as ex]
    [app.common.logging :as l]
+   [app.common.types.color :as ctc]
    [app.common.uri :as u]
    [app.config :as cf]
+   [app.renderer.svg-gradient :as svg-gradient]
    [app.util.mime :as mime]
    [app.util.shell :as sh]
    [clojure.walk :as walk]
@@ -108,24 +111,40 @@
     {:width width
      :height height}))
 
+(defn- replace-internal-uris
+  "Replaces internal-uri references with public-uri in SVG output.
+   This ensures that font URLs and other resource references in the
+   exported SVG use the public-facing URI accessible to end users."
+  [svg-content]
+  (let [internal-uri (str (cf/get-internal-uri))
+        public-uri   (str (cf/get :public-uri))]
+    (if (and (not= internal-uri public-uri)
+             (str/includes? svg-content internal-uri))
+      (str/replace svg-content internal-uri public-uri)
+      svg-content)))
+
 (defn render
   [{:keys [page-id file-id share-id objects token scale type]} on-object]
   (letfn [(convert-to-ppm [pngpath]
             (let [ppmpath (str/concat pngpath "origin.ppm")]
               (l/trace :fn :convert-to-ppm :path ppmpath)
-              (-> (sh/run-cmd! (str "convert " pngpath " " ppmpath))
+              (-> (sh/run-cmd! "convert" pngpath ppmpath)
                   (p/then (constantly ppmpath)))))
 
           (trace-color-mask [pbmpath]
             (l/trace :fn :trace-color-mask :pbmpath pbmpath)
             (let [svgpath (str/concat pbmpath ".svg")]
-              (-> (sh/run-cmd! (str "potrace --flat -b svg " pbmpath " -o " svgpath))
+              (-> (sh/run-cmd! "potrace" "--flat" "-b" "svg" pbmpath "-o" svgpath)
                   (p/then (constantly svgpath)))))
 
           (generate-color-layer [ppmpath color]
+            (when-not (ctc/hex-color-string? color)
+              (ex/raise :type :validation
+                        :code :invalid-color
+                        :hint (str "invalid hex color: " color)))
             (l/trace :fn :generate-color-layer :ppmpath ppmpath :color color)
             (let [pbmpath (str/concat ppmpath ".mask-" (subs color 1) ".pbm")]
-              (-> (sh/run-cmd! (str/format "ppmcolormask \"%s\" %s" color ppmpath))
+              (-> (sh/run-cmd! "ppmcolormask" color ppmpath)
                   (p/then (fn [stdout]
                             (-> (sh/write-file! pbmpath stdout)
                                 (p/then (constantly pbmpath)))))
@@ -154,33 +173,11 @@
                 :else
                 (update node "attributes" assoc "fill" color))))
 
-          (get-stops [data]
-            (->> (get-in data ["gradient" "stops"])
-                 (mapv (fn [stop-data]
-                         {"type" "element"
-                          "name" "stop"
-                          "attributes" {"offset" (get stop-data "offset")
-                                        "stop-color" (get stop-data "color")
-                                        "stop-opacity" (get stop-data "opacity")}}))))
-
-          (data->gradient-def [id [color data]]
-            (let [id (str "gradient-" id "-" (subs color 1))]
-              (if (= type "linear")
-                {"type" "element"
-                 "name" "linearGradient"
-                 "attributes" {"id" id "x1" "0.5" "y1" "1" "x2" "0.5" "y2" "0"}
-                 "elements" (get-stops data)}
-
-                {"type" "element"
-                 "name" "radialGradient"
-                 "attributes" {"id" id "cx" "0.5" "cy" "0.5" "r" "0.5"}
-                 "elements" (get-stops data)})))
-
           (get-gradients [id mapping]
             (->> mapping
                  (filter (fn [[_color data]]
                            (= (get data "type") "gradient")))
-                 (mapv (partial data->gradient-def id))))
+                 (mapv (partial svg-gradient/data->gradient-def id))))
 
           (join-color-layers [{:keys [id x y width height mapping] :as node} layers]
             (l/trace :fn :join-color-layers :mapping mapping)
@@ -320,7 +317,9 @@
 
                       result  (if (contains? cf/flags :exporter-svgo)
                                 (svgo/optimize result svgo/defaultOptions)
-                                result)]
+                                result)
+
+                      result  (replace-internal-uris result)]
 
                 ;; (println "------- ORIGIN:")
                 ;; (cljs.pprint/pprint (xml->clj xmldata))
@@ -338,9 +337,10 @@
               ;; navigate to the page and perform basic setup
               (bw/nav! page (str uri))
               (bw/sleep page 1000) ; the good old fix with sleep
+              (bw/wait-for-fonts page)
 
               ;; take the screnshot of requested objects, one by one
-              (p/run! (partial render-object page) objects)
+              (p/run (partial render-object page) objects)
               nil))]
     (p/let [params {:file-id file-id
                     :page-id page-id
@@ -348,9 +348,9 @@
                     :render-embed true
                     :object-id (mapv :id objects)
                     :route "objects"}
-            uri    (-> (cf/get :public-uri)
-                       (assoc :path "/render.html")
+            uri    (-> (cf/get-internal-uri)
+                       (u/ensure-path-slash)
+                       (u/join "render.html")
                        (assoc :query (u/map->query-string params)))]
       (bw/exec! (prepare-options uri)
                 (partial render uri)))))
-

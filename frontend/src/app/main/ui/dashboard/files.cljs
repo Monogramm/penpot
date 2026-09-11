@@ -2,24 +2,26 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.dashboard.files
   (:require-macros [app.main.style :as stl])
   (:require
    [app.main.data.common :as dcm]
    [app.main.data.dashboard :as dd]
+   [app.main.data.dashboard.shortcuts :as sc]
    [app.main.data.event :as ev]
    [app.main.data.project :as dpj]
    [app.main.refs :as refs]
    [app.main.store :as st]
-   [app.main.ui.dashboard.grid :refer [grid]]
+   [app.main.ui.dashboard.grid :refer [grid*]]
    [app.main.ui.dashboard.inline-edition :refer [inline-edition]]
+   [app.main.ui.dashboard.layout-toggle :as lt :refer [layout-toggle*]]
    [app.main.ui.dashboard.pin-button :refer [pin-button*]]
    [app.main.ui.dashboard.project-menu :refer [project-menu*]]
    [app.main.ui.ds.product.empty-placeholder :refer [empty-placeholder*]]
    [app.main.ui.hooks :as hooks]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [app.util.keyboard :as kbd]
@@ -27,12 +29,11 @@
    [rumext.v2 :as mf]))
 
 (def ^:private menu-icon
-  (i/icon-xref :menu (stl/css :menu-icon)))
+  (deprecated-icon/icon-xref :menu (stl/css :menu-icon)))
 
 (mf/defc header*
-  {::mf/props :obj
-   ::mf/private true}
-  [{:keys [project create-fn can-edit]}]
+  {::mf/private true}
+  [{:keys [project create-fn can-edit layout on-change]}]
   (let [project-id (:id project)
 
         local
@@ -73,7 +74,8 @@
                      (dd/clear-selected-files))))]
 
 
-    [:header {:class (stl/css :dashboard-header) :data-testid "dashboard-header"}
+    [:header {:class (stl/css :dashboard-header)
+              :data-testid "dashboard-header"}
      (if (:is-default project)
        [:div#dashboard-drafts-title {:class (stl/css :dashboard-title)}
         [:h1 (tr "labels.drafts")]]
@@ -86,7 +88,8 @@
                        (when-not (str/empty? name)
                          (st/emit! (-> (dd/rename-project (assoc project :name name))
                                        (with-meta {::ev/origin "project"}))))
-                       (swap! local assoc :edition false)))}]
+                       (swap! local assoc :edition false)))
+           :max-length 250}]
          [:div {:class (stl/css :dashboard-title)}
           [:h1 {:on-double-click on-edit
                 :data-testid "project-title"
@@ -94,6 +97,9 @@
            (:name project)]]))
 
      [:div {:class (stl/css :dashboard-header-actions)}
+      [:> layout-toggle* {:layout layout
+                          :on-change on-change}]
+
       (when ^boolean can-edit
         [:a {:class (stl/css :btn-secondary :btn-small :new-file)
              :tab-index "0"
@@ -127,12 +133,11 @@
                            :left (- (:x (:menu-pos @local)) 180)
                            :top (:y (:menu-pos @local))
                            :on-edit on-edit
-                           :on-menu-close on-menu-close
+                           :on-close on-menu-close
                            :on-import on-import}])]]))
 
 (mf/defc files-section*
-  {::mf/props :obj}
-  [{:keys [project team]}]
+  [{:keys [project team layout on-layout-change]}]
   (let [files            (mf/deref refs/files)
         project-id       (get project :id)
 
@@ -142,7 +147,6 @@
                                 (sort-by :modified-at)
                                 (reverse)))
 
-
         can-edit?          (-> team :permissions :can-edit)
         project-id         (:id project)
         is-draft-proyect   (:is-default project)
@@ -150,8 +154,13 @@
         [rowref limit]     (hooks/use-dynamic-grid-item-width)
 
         file-count         (or (count files) 0)
+
+        loading?           (and (some? (:count project))
+                                (not= (:count project) file-count))
+
         empty-state-viewer (and (not can-edit?)
-                                (= 0 file-count))
+                                (= 0 file-count)
+                                (not loading?))
 
         selected-files     (mf/deref refs/selected-files)
 
@@ -169,7 +178,7 @@
            (let [mdata  {:on-success on-file-created}
                  params {:project-id (:id project)}]
              (st/emit! (-> (dd/create-file (with-meta params mdata))
-                           (with-meta {::ev/origin origin}))))))]
+                           (with-meta {::ev/origin origin :has-files (> file-count 0)}))))))]
 
     (mf/with-effect [project]
       (when project
@@ -182,11 +191,15 @@
       (st/emit! (dpj/fetch-files project-id)
                 (dd/clear-selected-files)))
 
+    (hooks/use-shortcuts ::dashboard sc/shortcuts-drafts-libraries :dashboard)
+
     [:*
      [:> header* {:team team
                   :can-edit can-edit?
                   :project project
-                  :create-fn create-file}]
+                  :create-fn create-file
+                  :layout layout
+                  :on-change on-layout-change}]
      [:section {:class (stl/css :dashboard-container :no-bg)
                 :ref rowref}
       (if empty-state-viewer
@@ -198,11 +211,11 @@
                                 :subtitle (if is-draft-proyect
                                             (tr "dashboard.empty-placeholder-drafts-subtitle")
                                             (tr "dashboard.empty-placeholder-files-subtitle"))}]
-        [:& grid {:project project
-                  :files files
-                  :selected-files selected-files
-                  :can-edit can-edit?
-                  :origin :files
-                  :create-fn create-file
-                  :limit limit}])]]))
-
+        [:> grid* {:project project
+                   :files (if loading? nil files)
+                   :selected-files selected-files
+                   :can-edit can-edit?
+                   :origin :files
+                   :create-fn create-file
+                   :limit limit
+                   :layout layout}])]]))

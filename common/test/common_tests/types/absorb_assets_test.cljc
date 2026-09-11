@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns common-tests.types.absorb-assets-test
   (:require
@@ -12,12 +12,12 @@
    [app.common.test-helpers.files :as thf]
    [app.common.test-helpers.ids-map :as thi]
    [app.common.test-helpers.shapes :as ths]
-   [app.common.text :as txt]
-   [app.common.types.colors-list :as ctcl]
    [app.common.types.component :as ctk]
    [app.common.types.components-list :as ctkl]
    [app.common.types.file :as ctf]
+   [app.common.types.library :as ctl]
    [app.common.types.pages-list :as ctpl]
+   [app.common.types.text :as txt]
    [app.common.types.typographies-list :as ctyl]
    [clojure.test :as t]))
 
@@ -54,7 +54,7 @@
     (t/is (= (count components') 1))
 
     (t/is (ctk/instance-of? copy-root' (:id file') (:id component')))
-    (t/is (ctk/is-main-of? main-root' copy-root' true))
+    (t/is (ctk/is-main-of? main-root' copy-root'))
     (t/is (ctk/main-instance-of? (:id main-root') (:id (second pages')) component'))))
 
 (t/deftest absorb-colors
@@ -80,7 +80,7 @@
         _ (thf/validate-file! file')
 
         ;; Get
-        colors' (ctcl/colors-seq (ctf/file-data file'))
+        colors' (vals (ctl/get-colors (ctf/file-data file')))
         shape1' (ths/get-shape file' :shape1)
         fill'   (first (:fills shape1'))]
 

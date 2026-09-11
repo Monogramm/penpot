@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.refs
   "A collection of derived refs."
@@ -17,6 +17,8 @@
    [app.main.data.helpers :as dsh]
    [app.main.data.workspace.tokens.selected-set :as dwts]
    [app.main.store :as st]
+   [app.main.streams :as ms]
+   [beicon.v2.core :as rx]
    [okulary.core :as l]))
 
 ;; ---- Global refs
@@ -30,12 +32,14 @@
 (def profile
   (l/derived (l/key :profile) st/state))
 
+(def custom-shortcuts
+  (l/derived (fn [state] (get-in state [:profile :props :custom-shortcuts])) st/state))
+
+(def current-page-id
+  (l/derived (l/key :current-page-id) st/state))
+
 (def team
-  (l/derived (fn [state]
-               (let [team-id (:current-team-id state)
-                     teams   (:teams state)]
-                 (get teams team-id)))
-             st/state))
+  (l/derived dsh/lookup-team st/state))
 
 (def project
   (l/derived (fn [state]
@@ -83,10 +87,35 @@
   files (without the content, only summary)"
   (l/derived :shared-files st/state))
 
+(defn select-libraries
+  "Find between all the given files, those who are libraries of the file-id.
+   Also include the file-id file itself.
+   Return a map of id -> library."
+  [files file-id]
+  (persistent!
+   (reduce-kv (fn [result id file]
+                (if (or (= id file-id)
+                        (= (:library-of file) file-id))
+                  (assoc! result id file)
+                  result))
+              (transient {})
+              files)))
+
+;; NOTE: for performance reasons, prefer derefing refs/files and then
+;; use with-memo mechanism with `select-libraries` this will avoid
+;; executing the select-libraries reduce-kv on each state change and
+;; only execute it when files are changed. This ref exists for
+;; backward compatibility with the code, but it is considered
+;; DEPRECATED and all new code should not use it and old code should
+;; be gradually migrated to more efficient approach
 (def libraries
-  "A derived state that contanins the currently loaded shared libraries
-  with all its content; including the current file"
-  (l/derived :files st/state))
+  "A derived state that contains the currently loaded shared
+  libraries with all its content; including the current file"
+  (l/derived (fn [state]
+               (let [files   (get state :files)
+                     file-id (get state :current-file-id)]
+                 (select-libraries files file-id)))
+             st/state))
 
 (defn extract-selected-files
   [files selected]
@@ -122,33 +151,43 @@
 (def workspace-global
   (l/derived :workspace-global st/state))
 
+(def mcp
+  (l/derived :mcp st/state))
+
 (def workspace-drawing
   (l/derived :workspace-drawing st/state))
 
-;; TODO: rename to workspace-selected (?)
-;; Don't use directly from components, this is a proxy to improve performance of selected-shapes
+(def workspace-tokens
+  "All tokens related ephimeral state"
+  (l/derived :workspace-tokens st/state))
+
+(def workspace-selrect
+  (let [a (atom nil)]
+    (rx/sub! ms/workspace-selrect #(reset! a %))
+    a))
+
+;; WARNING: Don't use directly from components, this is a proxy to
+;; improve performance of selected-shapes and
 (def ^:private selected-shapes-data
   (l/derived
    (fn [state]
      (let [objects  (dsh/lookup-page-objects state)
            selected (dm/get-in state [:workspace-local :selected])]
        {:objects objects :selected selected}))
-   st/state (fn [v1 v2]
-              (and (identical? (:objects v1) (:objects v2))
-                   (= (:selected v1) (:selected v2))))))
+   st/state
+   (fn [v1 v2]
+     (and (identical? (:objects v1) (:objects v2))
+          (= (:selected v1) (:selected v2))))))
 
 (def selected-shapes
   (l/derived
    (fn [{:keys [objects selected]}]
-     (dsh/process-selected-shapes objects selected))
-   selected-shapes-data))
+     (dsh/process-selected objects selected))
+   selected-shapes-data =))
 
 (defn make-selected-ref
   [id]
   (l/derived #(contains? % id) selected-shapes))
-
-(def highlighted-shapes
-  (l/derived :highlighted workspace-local))
 
 (def export-in-progress?
   (l/derived :export-in-progress? export))
@@ -183,6 +222,9 @@
 (def selected-edition
   (l/derived :edition workspace-local))
 
+(def workspace-edit-path
+  (l/derived :edit-path workspace-local))
+
 (def current-transform
   (l/derived :transform workspace-local))
 
@@ -197,6 +239,9 @@
 
 (def inspect-expanded
   (l/derived :inspect-expanded workspace-local))
+
+(def workspace-vport
+  (l/derived :vport workspace-local))
 
 (def vbox
   (l/derived :vbox workspace-local))
@@ -213,6 +258,10 @@
 ;; page item that it is being edited
 (def editing-page-item
   (l/derived :page-item workspace-local))
+
+;; set of pages selected in the sitemap (multi-selection)
+(def selected-pages
+  (l/derived :selected-pages workspace-local))
 
 (def current-hover-ids
   (l/derived :hover-ids context-menu))
@@ -264,14 +313,15 @@
 (def workspace-page-flows
   (l/derived #(-> % :flows not-empty) workspace-page))
 
+(def workspace-page-guides
+  (l/derived :guides workspace-page))
+
 (defn workspace-page-object-by-id
   [page-id shape-id]
   (l/derived #(dsh/lookup-shape % page-id shape-id) st/state =))
 
-;; TODO: Looks like using the `=` comparator can be pretty expensive
-;; on large pages, we are using this for some reason?
 (def workspace-page-objects
-  (l/derived dsh/lookup-page-objects st/state =))
+  (l/derived dsh/lookup-page-objects st/state identical?))
 
 (def workspace-read-only?
   (l/derived :read-only? workspace-global))
@@ -339,71 +389,63 @@
   (l/derived :workspace-v2-editor-state st/state))
 
 (def workspace-modifiers
-  (l/derived :workspace-modifiers st/state =))
+  (l/derived :workspace-modifiers st/state))
 
-(def workspace-modifiers-with-objects
+(def workspace-wasm-editor-styles
+  (l/derived :workspace-wasm-editor-styles st/state))
+
+(def workspace-wasm-modifiers
+  (let [a (atom nil)]
+    (rx/sub! ms/wasm-modifiers #(reset! a %))
+    a))
+
+(def ^:private workspace-modifiers-with-objects
   (l/derived
    (fn [state]
-     {:modifiers (:workspace-modifiers state)
+     {:modifiers (get state :workspace-modifiers)
       :objects   (dsh/lookup-page-objects state)})
    st/state
    (fn [a b]
-     (and (= (:modifiers a) (:modifiers b))
+     (and (identical? (:modifiers a) (:modifiers b))
           (identical? (:objects a) (:objects b))))))
 
 (def workspace-frame-modifiers
   (l/derived
    (fn [{:keys [modifiers objects]}]
-     (->> modifiers
-          (reduce
-           (fn [result [id modifiers]]
-             (let [shape (get objects id)
-                   frame-id (:frame-id shape)]
-               (cond
-                 (cph/frame-shape? shape)
-                 (assoc-in result [id id] modifiers)
+     (reduce (fn [result [id modifiers]]
+               (let [shape (get objects id)
+                     frame-id (:frame-id shape)]
+                 (cond
+                   (cph/frame-shape? shape)
+                   (assoc-in result [id id] modifiers)
 
-                 (some? frame-id)
-                 (assoc-in result [frame-id id] modifiers)
+                   (some? frame-id)
+                   (assoc-in result [frame-id id] modifiers)
 
-                 :else
-                 result)))
-           {})))
+                   :else
+                   result)))
+             {}
+             modifiers))
    workspace-modifiers-with-objects))
 
 (defn workspace-modifiers-by-frame-id
   [frame-id]
   (l/derived #(get % frame-id) workspace-frame-modifiers =))
 
+(def workspace-clipboard-style
+  (l/derived :clipboard-style workspace-global))
+
 (defn select-bool-children [id]
   (l/derived #(dsh/select-bool-children % id) st/state =))
 
-(def selected-data
-  (l/derived #(let [selected (dsh/lookup-selected %)
-                    objects (dsh/lookup-page-objects %)]
-                (hash-map :selected selected
-                          :objects objects))
-             st/state =))
-
 (defn is-child-selected?
   [id]
-  (letfn [(selector [{:keys [selected objects]}]
-            (let [children (cph/get-children-ids objects id)]
-              (some #(contains? selected %) children)))]
-    (l/derived selector selected-data =)))
-
-(def selected-objects
-  (letfn [(selector [{:keys [selected objects]}]
-            (into [] (keep (d/getf objects)) selected))]
-    (l/derived selector selected-data =)))
-
-(def selected-shapes-with-children
-  (letfn [(selector [{:keys [selected objects]}]
-            (let [xform (comp (remove nil?)
-                              (mapcat #(cph/get-children-ids objects %)))
-                  shapes (into selected xform selected)]
-              (mapv (d/getf objects) shapes)))]
-    (l/derived selector selected-data =)))
+  (l/derived
+   (fn [{:keys [selected objects]}]
+     (let [children (cph/get-children-ids objects id)]
+       (some #(contains? selected %) children)))
+   selected-shapes-data
+   =))
 
 (def workspace-focus-selected
   (l/derived :workspace-focus-selected st/state))
@@ -428,18 +470,18 @@
   (l/derived (d/nilf ctob/get-theme-groups) tokens-lib))
 
 (defn workspace-token-theme
-  [group name]
+  [id]
   (l/derived
    (fn [lib]
      (when lib
-       (ctob/get-theme lib group name)))
+       (ctob/get-theme lib id)))
    tokens-lib))
 
 (def workspace-token-theme-tree-no-hidden
   (l/derived (fn [lib]
                (or
                 (some-> lib
-                        (ctob/delete-theme ctob/hidden-token-theme-group ctob/hidden-token-theme-name)
+                        (ctob/delete-theme ctob/hidden-theme-id)
                         (ctob/get-theme-tree))
                 []))
              tokens-lib))
@@ -448,10 +490,10 @@
   (l/derived #(or (some-> % ctob/get-themes) []) tokens-lib))
 
 (def workspace-token-themes-no-hidden
-  (l/derived #(remove ctob/hidden-temporary-theme? %) workspace-token-themes))
+  (l/derived #(remove ctob/hidden-theme? %) workspace-token-themes))
 
-(def workspace-selected-token-set-name
-  (l/derived dwts/get-selected-token-set-name st/state))
+(def selected-token-set-id
+  (l/derived (l/key :selected-token-set-id) workspace-tokens))
 
 (def workspace-ordered-token-sets
   (l/derived #(or (some-> % ctob/get-sets) []) tokens-lib))
@@ -462,6 +504,9 @@
 (def workspace-active-theme-paths
   (l/derived (d/nilf ctob/get-active-theme-paths) tokens-lib))
 
+(def workspace-all-tokens-map
+  (l/derived (d/nilf ctob/get-all-tokens-map) tokens-lib))
+
 (defn token-sets-at-path-all-active
   [group-path]
   (l/derived
@@ -471,23 +516,20 @@
    tokens-lib))
 
 (def workspace-active-theme-paths-no-hidden
-  (l/derived #(disj % ctob/hidden-token-theme-path) workspace-active-theme-paths))
+  (l/derived #(disj % ctob/hidden-theme-path) workspace-active-theme-paths))
 
-(def workspace-active-set-names
-  (l/derived (d/nilf ctob/get-active-themes-set-names) tokens-lib))
-
+;; FIXME: deprecated, it should not be implemented with ref (still used in form)
 (def workspace-active-theme-sets-tokens
-  (l/derived #(or (some-> % ctob/get-active-themes-set-tokens) {}) tokens-lib))
+  (l/derived #(or (some-> % ctob/get-tokens-in-active-sets) {}) tokens-lib))
 
-(def workspace-selected-token-set-token
-  (fn [token-name]
+(def workspace-token-in-selected-set
+  (fn [token-id]
     (l/derived
-     #(dwts/get-selected-token-set-token % token-name)
+     #(dwts/get-token-in-selected-set % token-id)
      st/state)))
 
-(def workspace-selected-token-set-tokens
-  (l/derived #(or (dwts/get-selected-token-set-tokens %) {}) st/state))
-
+(def workspace-all-tokens-in-selected-set
+  (l/derived #(or (dwts/get-all-tokens-in-selected-set %) {}) st/state))
 
 (def plugins-permissions-peek
   (l/derived (fn [state]
@@ -548,8 +590,9 @@
   [object-id]
   (l/derived
    (fn [state]
-     (some-> (dm/get-in state [:thumbnails object-id])
-             (cf/resolve-media)))
+     (when-let [entry (dm/get-in state [:thumbnails object-id])]
+       (cond-> entry
+         (:uri entry) (update :uri cf/resolve-media))))
    st/state))
 
 (def workspace-text-modifier
@@ -618,3 +661,12 @@
 
 (def persistence-state
   (l/derived (comp :status :persistence) st/state))
+
+(def progress
+  (l/derived :progress st/state))
+
+(def access-tokens
+  (l/derived :access-tokens st/state))
+
+(def access-token-created
+  (l/derived :access-token-created st/state))

@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.ds.foundations.typography.heading
   (:require-macros
@@ -26,8 +26,7 @@
    [:typography [:and :string [:fn #(valid-typography? (dm/str %))]]]])
 
 (mf/defc heading*
-  {::mf/props :obj
-   ::mf/schema schema:heading}
+  {::mf/schema schema:heading}
   [{:keys [level typography class children] :rest props}]
 
   (let [level (or level "1")

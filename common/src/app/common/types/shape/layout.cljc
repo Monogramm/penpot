@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.types.shape.layout
   (:require
@@ -14,22 +14,22 @@
    [app.common.schema :as sm]
    [app.common.uuid :as uuid]))
 
-;; :layout                 ;; :flex, :grid in the future
-;; :layout-flex-dir        ;; :row, :row-reverse, :column, :column-reverse
-;; :layout-gap-type        ;; :simple, :multiple
-;; :layout-gap             ;; {:row-gap number , :column-gap number}
+;; :layout                  ;; :flex, :grid in the future
+;; :layout-flex-dir         ;; :row, :row-reverse, :column, :column-reverse
+;; :layout-gap-type         ;; :simple, :multiple
+;; :layout-gap              ;; {:row-gap number , :column-gap number}
 
-;; :layout-align-items     ;; :start :end :center :stretch
-;; :layout-align-content   ;; :start :center :end :space-between :space-around :space-evenly :stretch (by default)
+;; :layout-align-items      ;; :start :end :center :stretch
+;; :layout-align-content    ;; :start :center :end :space-between :space-around :space-evenly :stretch (by default)
 ;; :layout-justify-items    ;; :start :center :end :space-between :space-around :space-evenly
-;; :layout-justify-content ;; :start :center :end :space-between :space-around :space-evenly
-;; :layout-wrap-type       ;; :wrap, :nowrap
-;; :layout-padding-type    ;; :simple, :multiple
-;; :layout-padding         ;; {:p1 num :p2 num :p3 num :p4 num} number could be negative
+;; :layout-justify-content  ;; :start :center :end :space-between :space-around :space-evenly
+;; :layout-wrap-type        ;; :wrap, :nowrap
+;; :layout-padding-type     ;; :simple, :multiple
+;; :layout-padding          ;; {:p1 num :p2 num :p3 num :p4 num} number could be negative
 
-;; layout-grid-rows        ;; vector of grid-track
-;; layout-grid-columns     ;; vector of grid-track
-;; layout-grid-cells       ;; map of id->grid-cell
+;; layout-grid-rows         ;; vector of grid-track
+;; layout-grid-columns      ;; vector of grid-track
+;; layout-grid-cells        ;; map of id->grid-cell
 
 ;; ITEMS
 ;; :layout-item-margin      ;; {:m1 0 :m2 0 :m3 0 :m4 0}
@@ -42,7 +42,6 @@
 ;; :layout-item-min-w       ;; num
 ;; :layout-item-absolute    ;; boolean
 ;; :layout-item-z-index     ;; int
-
 
 (def layout-types
   #{:flex :grid})
@@ -74,49 +73,6 @@
 (def justify-items-types
   #{:start :end :center :stretch})
 
-(def layout-item-props
-  [:layout-item-margin
-   :layout-item-margin-type
-   :layout-item-h-sizing
-   :layout-item-v-sizing
-   :layout-item-max-h
-   :layout-item-min-h
-   :layout-item-max-w
-   :layout-item-min-w
-   :layout-item-absolute
-   :layout-item-z-index])
-
-(sm/register!
- ^{::sm/type ::layout-attrs}
- [:map {:title "LayoutAttrs"}
-  [:layout {:optional true} [::sm/one-of layout-types]]
-  [:layout-flex-dir {:optional true} [::sm/one-of flex-direction-types]]
-  [:layout-gap {:optional true}
-   [:map
-    [:row-gap {:optional true} ::sm/safe-number]
-    [:column-gap {:optional true} ::sm/safe-number]]]
-  [:layout-gap-type {:optional true} [::sm/one-of gap-types]]
-  [:layout-wrap-type {:optional true} [::sm/one-of wrap-types]]
-  [:layout-padding-type {:optional true} [::sm/one-of padding-type]]
-  [:layout-padding {:optional true}
-   [:map
-    [:p1 ::sm/safe-number]
-    [:p2 ::sm/safe-number]
-    [:p3 ::sm/safe-number]
-    [:p4 ::sm/safe-number]]]
-  [:layout-justify-content {:optional true} [::sm/one-of justify-content-types]]
-  [:layout-justify-items {:optional true} [::sm/one-of justify-items-types]]
-  [:layout-align-content {:optional true} [::sm/one-of align-content-types]]
-  [:layout-align-items {:optional true} [::sm/one-of align-items-types]]
-
-  [:layout-grid-dir {:optional true} [::sm/one-of grid-direction-types]]
-  [:layout-grid-rows {:optional true}
-   [:vector {:gen/max 2} ::grid-track]]
-  [:layout-grid-columns {:optional true}
-   [:vector {:gen/max 2} ::grid-track]]
-  [:layout-grid-cells {:optional true}
-   [:map-of {:gen/max 5} ::sm/uuid ::grid-cell]]])
-
 ;; Grid types
 (def grid-track-types
   #{:percent :flex :auto :fixed})
@@ -130,29 +86,59 @@
 (def grid-cell-justify-self-types
   #{:auto :start :center :end :stretch})
 
-(sm/register!
- ^{::sm/type ::grid-cell}
- [:map {:title "GridCell"}
-  [:id ::sm/uuid]
-  [:area-name {:optional true} :string]
-  [:row ::sm/safe-int]
-  [:row-span ::sm/safe-int]
-  [:column ::sm/safe-int]
-  [:column-span ::sm/safe-int]
-  [:position {:optional true} [::sm/one-of grid-position-types]]
-  [:align-self {:optional true} [::sm/one-of grid-cell-align-self-types]]
-  [:justify-self {:optional true} [::sm/one-of grid-cell-justify-self-types]]
-  [:shapes
-   [:vector {:gen/max 1} ::sm/uuid]]])
+(def ^:private schema:grid-cell
+  [:map {:title "GridCell"}
+   [:id ::sm/uuid]
+   [:area-name {:optional true} :string]
+   [:row ::sm/safe-int]
+   [:row-span ::sm/safe-int]
+   [:column ::sm/safe-int]
+   [:column-span ::sm/safe-int]
+   [:position {:optional true} [::sm/one-of grid-position-types]]
+   [:align-self {:optional true} [::sm/one-of grid-cell-align-self-types]]
+   [:justify-self {:optional true} [::sm/one-of grid-cell-justify-self-types]]
+   [:shapes
+    [:vector {:gen/max 1} ::sm/uuid]]])
 
-(sm/register!
- ^{::sm/type ::grid-track}
- [:map {:title "GridTrack"}
-  [:type [::sm/one-of grid-track-types]]
-  [:value {:optional true} [:maybe ::sm/safe-number]]])
+(def ^:private schema:grid-track
+  [:map {:title "GridTrack"}
+   [:type [::sm/one-of grid-track-types]]
+   [:value {:optional true} [:maybe ::sm/safe-number]]])
 
-(def check-grid-track!
-  (sm/check-fn ::grid-track))
+(def schema:layout-attrs
+  [:map {:title "LayoutAttrs"}
+   [:layout {:optional true} [::sm/one-of layout-types]]
+   [:layout-flex-dir {:optional true} [::sm/one-of flex-direction-types]]
+   [:layout-gap {:optional true}
+    [:map
+     [:row-gap {:optional true} ::sm/safe-number]
+     [:column-gap {:optional true} ::sm/safe-number]]]
+   [:layout-gap-type {:optional true} [::sm/one-of gap-types]]
+   [:layout-wrap-type {:optional true} [::sm/one-of wrap-types]]
+   [:layout-padding-type {:optional true} [::sm/one-of padding-type]]
+   [:layout-padding {:optional true}
+    [:map
+     [:p1 ::sm/safe-number]
+     [:p2 ::sm/safe-number]
+     [:p3 ::sm/safe-number]
+     [:p4 ::sm/safe-number]]]
+   [:layout-justify-content {:optional true} [::sm/one-of justify-content-types]]
+   [:layout-justify-items {:optional true} [::sm/one-of justify-items-types]]
+   [:layout-align-content {:optional true} [::sm/one-of align-content-types]]
+   [:layout-align-items {:optional true} [::sm/one-of align-items-types]]
+   [:layout-grid-dir {:optional true} [::sm/one-of grid-direction-types]]
+   [:layout-grid-rows {:optional true}
+    [:vector {:gen/max 2} schema:grid-track]]
+   [:layout-grid-columns {:optional true}
+    [:vector {:gen/max 2} schema:grid-track]]
+   [:layout-grid-cells {:optional true}
+    [:map-of {:gen/max 5} ::sm/uuid schema:grid-cell]]])
+
+(def ^:private check-grid-track
+  (sm/check-fn schema:grid-track))
+
+(def layout-attrs
+  (sm/keys schema:layout-attrs))
 
 ;; LAYOUT CHILDREN
 
@@ -168,25 +154,27 @@
 (def item-align-self-types
   #{:start :end :center :stretch})
 
-(sm/register!
- ^{::sm/type ::layout-child-attrs}
- [:map {:title "LayoutChildAttrs"}
-  [:layout-item-margin-type {:optional true} [::sm/one-of item-margin-types]]
-  [:layout-item-margin {:optional true}
-   [:map
-    [:m1 {:optional true} ::sm/safe-number]
-    [:m2 {:optional true} ::sm/safe-number]
-    [:m3 {:optional true} ::sm/safe-number]
-    [:m4 {:optional true} ::sm/safe-number]]]
-  [:layout-item-max-h {:optional true} ::sm/safe-number]
-  [:layout-item-min-h {:optional true} ::sm/safe-number]
-  [:layout-item-max-w {:optional true} ::sm/safe-number]
-  [:layout-item-min-w {:optional true} ::sm/safe-number]
-  [:layout-item-h-sizing {:optional true} [::sm/one-of item-h-sizing-types]]
-  [:layout-item-v-sizing {:optional true} [::sm/one-of item-v-sizing-types]]
-  [:layout-item-align-self {:optional true} [::sm/one-of item-align-self-types]]
-  [:layout-item-absolute {:optional true} :boolean]
-  [:layout-item-z-index {:optional true} ::sm/safe-number]])
+(def schema:layout-child-attrs
+  [:map {:title "LayoutChildAttrs"}
+   [:layout-item-margin-type {:optional true} [::sm/one-of item-margin-types]]
+   [:layout-item-margin {:optional true}
+    [:map
+     [:m1 {:optional true} ::sm/safe-number]
+     [:m2 {:optional true} ::sm/safe-number]
+     [:m3 {:optional true} ::sm/safe-number]
+     [:m4 {:optional true} ::sm/safe-number]]]
+   [:layout-item-max-h {:optional true} ::sm/safe-number]
+   [:layout-item-min-h {:optional true} ::sm/safe-number]
+   [:layout-item-max-w {:optional true} ::sm/safe-number]
+   [:layout-item-min-w {:optional true} ::sm/safe-number]
+   [:layout-item-h-sizing {:optional true} [::sm/one-of item-h-sizing-types]]
+   [:layout-item-v-sizing {:optional true} [::sm/one-of item-v-sizing-types]]
+   [:layout-item-align-self {:optional true} [::sm/one-of item-align-self-types]]
+   [:layout-item-absolute {:optional true} :boolean]
+   [:layout-item-z-index {:optional true} ::sm/safe-number]])
+
+(def layout-child-attrs
+  (sm/keys schema:layout-child-attrs))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; SCHEMAS
@@ -194,8 +182,6 @@
 
 (def valid-layouts
   #{:flex :grid})
-
-(sm/register! ::layout [::sm/one-of valid-layouts])
 
 (defn flex-layout?
   ([objects id]
@@ -276,7 +262,7 @@
         (or (nil? current) (= current-id parent-id))
         false
 
-        (cfh/frame-shape? current-id)
+        (cfh/frame-shape? current)
         (:layout current)
 
         :else
@@ -360,6 +346,22 @@
     (if (= :simple layout-padding-type)
       (+ pad-top pad-top)
       (+ pad-top pad-bottom))))
+
+(defn padding-type-for
+  "`:simple` when top≈bottom and left≈right, `:multiple` otherwise (nil sides = 0)."
+  [{:keys [p1 p2 p3 p4]}]
+  (if (and (mth/close? (d/nilv p1 0) (d/nilv p3 0))
+           (mth/close? (d/nilv p2 0) (d/nilv p4 0)))
+    :simple
+    :multiple))
+
+(defn margin-type-for
+  "`:simple` when top≈bottom and left≈right, `:multiple` otherwise (nil sides = 0)."
+  [{:keys [m1 m2 m3 m4]}]
+  (if (and (mth/close? (d/nilv m1 0) (d/nilv m3 0))
+           (mth/close? (d/nilv m2 0) (d/nilv m4 0)))
+    :simple
+    :multiple))
 
 (defn child-min-width
   [child]
@@ -531,7 +533,7 @@
   ([objects id]
    (item-absolute? (get objects id)))
   ([shape]
-   (true? (:layout-item-absolute shape))))
+   (true? (get shape :layout-item-absolute))))
 
 (defn position-absolute?
   ([objects id]
@@ -755,9 +757,7 @@
   ([type parent value]
    (add-grid-track type parent value nil))
   ([type parent value index]
-   (dm/assert!
-    "expected a valid grid definition for `value`"
-    (check-grid-track! value))
+   (assert (check-grid-track value))
 
    (let [[tracks-prop tracks-prop-other prop prop-other prop-span prop-span-other]
          (if (= type :column)
@@ -888,6 +888,42 @@
         (remove-cell-areas-after :column index)
         (add-grid-column value (inc index))
         (duplicate-cells :column index (inc index) ids-map)
+        (assign-cells objects))))
+
+(defn duplicate-row-at
+  "Duplicate source row and insert the copy at target-index (0-indexed).
+   Like `duplicate-row` but inserts at an arbitrary position.
+   Note: after add-grid-row, if target <= source the source cells shift
+   by +1, so we must adjust the from-index for duplicate-cells."
+  [shape objects source-index target-index ids-map]
+  (let [value          (dm/get-in shape [:layout-grid-rows source-index])
+        ;; After inserting at target-index, cells at rows >= (inc target-index)
+        ;; get shifted +1. If target <= source, the source row shifts.
+        adjusted-source (if (<= target-index source-index)
+                          (inc source-index)
+                          source-index)]
+    (-> shape
+        (remove-cell-areas-after :row source-index)
+        (add-grid-row value target-index)
+        (duplicate-cells :row adjusted-source target-index ids-map)
+        (assign-cells objects))))
+
+(defn duplicate-column-at
+  "Duplicate source column and insert the copy at target-index (0-indexed).
+   Like `duplicate-column` but inserts at an arbitrary position.
+   Note: after add-grid-column, if target <= source the source cells shift
+   by +1, so we must adjust the from-index for duplicate-cells."
+  [shape objects source-index target-index ids-map]
+  (let [value          (dm/get-in shape [:layout-grid-columns source-index])
+        ;; After inserting at target-index, cells at columns >= (inc target-index)
+        ;; get shifted +1. If target <= source, the source column shifts.
+        adjusted-source (if (<= target-index source-index)
+                          (inc source-index)
+                          source-index)]
+    (-> shape
+        (remove-cell-areas-after :column source-index)
+        (add-grid-column value target-index)
+        (duplicate-cells :column adjusted-source target-index ids-map)
         (assign-cells objects))))
 
 (defn make-remove-cell
@@ -1054,7 +1090,7 @@
           (maybe-remove?)))))
 
 (defn check-deassigned-cells
-  "Clean the cells whith shapes that are no longer in the layout"
+  "Clean the cells with shapes that are no longer in the layout"
   [parent objects]
 
   (let [child-set (set (:shapes parent))
@@ -1307,9 +1343,9 @@
   "Push the shapes into the row/column cell and moves the rest"
   [parent shape-ids row column]
 
-  (let [cells (vec (get-cells parent {:sort? true}))
+  (let [parent (-> parent (free-cell-shapes shape-ids))
+        cells (vec (get-cells parent {:sort? true}))
         [start-index start-cell] (seek-indexed-cell cells row column)]
-
     (if (some? start-cell)
       (let [;; start-index => to-index is the range where the shapes inserted will be added
             to-index (min (+ start-index (count shape-ids)) (dec (count cells)))]
@@ -1455,7 +1491,7 @@
         (update-in [:layout-grid-cells id-from]
                    assoc
                    :shapes (:shapes cell-to)
-                   :podition (:position cell-to))
+                   :position (:position cell-to))
         (update-in [:layout-grid-cells id-to]
                    assoc
                    :shapes (:shapes cell-from)
@@ -1489,20 +1525,37 @@
       (some? target-cell)
       (add-children-to-cell ids objects [(:row target-cell) (:column target-cell)]))))
 
+(defn- refill-slots
+  "Fill matching positions in `shapes` from `ordered`, preserving other indices.
+  `ordered` must contain exactly the ids accepted by `slot?`."
+  [shapes slot? ordered]
+  (loop [shapes  (seq shapes)
+         ordered (seq ordered)
+         result  (transient [])]
+    (if (nil? shapes)
+      (persistent! result)
+      (let [id (first shapes)]
+        (if (slot? id)
+          (recur (next shapes) (next ordered) (conj! result (first ordered)))
+          (recur (next shapes) ordered (conj! result id)))))))
+
 (defn reorder-grid-children
+  "Order cell children by grid position while preserving the indices of
+  hidden and absolute-positioned children."
   [parent]
-  (let [cells (get-cells parent {:sort? true})
+  (let [cells  (get-cells parent {:sort? true})
         child? (set (:shapes parent))
-        new-shapes
-        (into (d/ordered-set)
+
+        in-cell-ids
+        (into []
               (comp (keep (comp first :shapes))
-                    (filter child?))
-              cells)
-
-        ;; Add the children that are not in cells (absolute positioned for example)
-        new-shapes (into new-shapes (:shapes parent))]
-
-    (assoc parent :shapes (into [] (reverse new-shapes)))))
+                    (filter child?)
+                    (distinct))
+              cells)]
+    ;; :shapes is ordered in reverse relative to the visual cell order
+    (assoc parent :shapes (refill-slots (:shapes parent)
+                                        (set in-cell-ids)
+                                        (reverse in-cell-ids)))))
 
 (defn cells-by-row
   ([parent index]
@@ -1642,11 +1695,11 @@
   "Given target cells update with source cells while trying to keep target as
   untouched as possible"
   [target-cells source-cells omit-touched?]
-  (if (not omit-touched?)
-    source-cells
-
-    (letfn [(get-data [cells id]
-              (dissoc (get cells id) :shapes :row :column :row-span :column-span))]
+  (if omit-touched?
+    (letfn [(merge-cells [source-cell target-cell]
+              (-> source-cell
+                  (d/patch-object
+                   (dissoc target-cell :row :column :row-span :column-span))))]
       (let [deleted-cells
             (into #{}
                   (filter #(not (contains? source-cells %)))
@@ -1654,15 +1707,22 @@
 
             touched-cells
             (into #{}
-                  (filter #(and
-                            (not (contains? deleted-cells %))
-                            (not= (get-data source-cells %)
-                                  (get-data target-cells %))))
+                  (filter #(not (contains? deleted-cells %)))
                   (keys target-cells))]
 
         (->> touched-cells
              (reduce
               (fn [cells id]
                 (-> cells
-                    (d/update-when id d/patch-object (get-data target-cells id))))
-              source-cells))))))
+                    (d/update-when id merge-cells (get target-cells id))))
+              source-cells))))
+    source-cells))
+
+(defn toggle-fix-if-auto
+  "Changes the sizing to fix if it's fill"
+  [shape]
+  (cond-> shape
+    (= (:layout-item-h-sizing shape) :fill)
+    (assoc :layout-item-h-sizing :fix)
+    (= (:layout-item-v-sizing shape) :fill)
+    (assoc :layout-item-v-sizing :fix)))

@@ -2,23 +2,21 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.handlers.export-frames
   (:require
-   [app.common.logging :as l]
    [app.common.spec :as us]
-   [app.handlers.export-shapes :refer [prepare-exports]]
+   [app.handlers.export-shapes :refer [count-objects headless-exports? prepare-exports]]
    [app.handlers.resources :as rsc]
-   [app.redis :as redis]
+   [app.jobs :as jobs]
+   [app.jobs.utils :as job.utils]
    [app.renderer :as rd]
    [app.util.shell :as sh]
    [cljs.spec.alpha :as s]
    [cuerdas.core :as str]
    [promesa.core :as p]))
 
-(declare ^:private handle-export)
-(declare ^:private create-pdf)
 (declare ^:private join-pdf)
 (declare ^:private move-file)
 
@@ -26,6 +24,7 @@
 (s/def ::file-id ::us/uuid)
 (s/def ::page-id ::us/uuid)
 (s/def ::object-id ::us/uuid)
+(s/def ::is-wasm ::us/boolean)
 
 (s/def ::export
   (s/keys :req-un [::file-id ::page-id ::object-id ::name]))
@@ -35,100 +34,56 @@
 
 (s/def ::params
   (s/keys :req-un [::exports]
-          :opt-un [::name]))
+          :opt-un [::name ::is-wasm]))
 
-(defn handler
-  [{:keys [:request/auth-token] :as exchange} {:keys [exports] :as params}]
-  ;; NOTE: we need to have the `:type` prop because the exports
-  ;; datastructure preparation uses it for creating the groups.
-  (let [exports  (-> (map #(assoc % :type :pdf :scale 1 :suffix "") exports)
-                     (prepare-exports auth-token))]
-    (handle-export exchange (assoc params :exports exports))))
-
-(defn handle-export
-  [exchange {:keys [exports wait name profile-id] :as params}]
-  (let [total       (count exports)
-        topic       (str profile-id)
-        resource    (rsc/create :pdf (or name (-> exports first :name)))
-
-        on-progress (fn [{:keys [done]}]
-                      (when-not wait
-                        (let [data {:type :export-update
-                                    :resource-id (:id resource)
-                                    :name (:name resource)
-                                    :filename (:filename resource)
-                                    :status "running"
-                                    :total total
-                                    :done done}]
-                          (redis/pub! topic data))))
-
-        on-complete (fn []
-                      (when-not wait
-                        (let [data {:type :export-update
-                                    :resource-id (:id resource)
-                                    :name (:name resource)
-                                    :filename (:filename resource)
-                                    :status "ended"}]
-                          (redis/pub! topic data))))
-
-        on-error    (fn [cause]
-                      (l/error :hint "unexpected error on frames exportation" :cause cause)
-                      (if wait
-                        (p/rejected cause)
-                        (let [data {:type :export-update
-                                    :resource-id (:id resource)
-                                    :name (:name resource)
-                                    :filename (:filename resource)
-                                    :status "error"
-                                    :cause (ex-message cause)}]
-                          (redis/pub! topic data))))
-
-        proc        (create-pdf :resource resource
-                                :exports exports
-                                :on-progress on-progress
-                                :on-complete on-complete
-                                :on-error on-error)]
-    (if wait
-      (p/then proc #(assoc exchange :response/body (dissoc % :path)))
-      (assoc exchange :response/body (dissoc resource :path)))))
-
-(defn create-pdf
-  [& {:keys [resource exports on-progress on-complete on-error]
-      :or {on-progress (constantly nil)
-           on-complete (constantly nil)
-           on-error    p/rejected}}]
-
-  (let [file-id   (-> exports first :file-id)
-        result    (atom [])
+(defn- run-export
+  [job auth-token resource {:keys [exports is-wasm file-id]}]
+  (let [rendered (atom [])
 
         on-object
-        (fn [{:keys [path] :as object}]
-          (let [res (swap! result conj path)]
-            (on-progress {:done (count res)})))]
+        (fn [{:keys [path] :as _object}]
+          (job.utils/track! (:id job) path)
+          (jobs/progress! job (count (swap! rendered conj path))))
 
-    (-> (p/loop [exports (seq exports)]
-          (when-let [export (first exports)]
-            (p/do
-              (rd/render export on-object)
-              (p/recur (rest exports)))))
+        exports
+        (map #(assoc % :is-wasm is-wasm :job-id (:id job)) exports)]
 
-        (p/then (fn [_] (deref result)))
-        (p/then (partial join-pdf file-id))
-        (p/then (partial move-file resource))
-        (p/then (constantly resource))
-        (p/then (fn [resource]
-                  (-> (sh/stat (:path resource))
-                      (p/then #(merge resource %)))))
-        (p/catch on-error)
-        (p/finally (fn [_ cause]
-                     (when-not cause
-                       (on-complete)))))))
+    (job.utils/track! (:id job) (:path resource))
+    (->> (rd/with-scope exports
+           (fn [render]
+             (jobs/check-cancelled! job)
+             (->> exports
+                  (map (fn [export] (render export on-object)))
+                  (p/all))))
+         (p/fmap (fn [_] @rendered))
+         (p/mcat (partial join-pdf job file-id))
+         (p/mcat (partial move-file resource))
+         (p/fmap (constantly resource))
+         (p/mcat (partial rsc/upload-resource auth-token))
+         (p/mcat (fn [resource]
+                   (->> (sh/stat (:path resource))
+                        (p/fmap #(merge resource %)))))
+         (p/fmap (fn [resource] (dissoc resource :path))))))
+
+(defn prepare
+  [auth-token {:keys [exports name is-wasm] :as _params}]
+  (let [exports  (-> (map #(assoc % :type :pdf :scale 1 :suffix "") exports)
+                     (prepare-exports auth-token is-wasm))
+        resource (rsc/create :pdf (or name (-> exports first :name)))
+        file-id  (-> exports first :file-id)]
+    {:resource resource
+     :total (count-objects exports)
+     :headless (headless-exports? exports is-wasm)
+     :run (fn [job] (run-export job auth-token resource
+                                {:exports exports
+                                 :is-wasm is-wasm
+                                 :file-id file-id}))}))
 
 (defn- join-pdf
-  [file-id paths]
-  (p/let [prefix (str/concat "penpot.tmp.pdfunite." file-id ".")
-          path   (sh/tempfile :prefix prefix :suffix ".pdf")]
-    (sh/run-cmd! (str "pdfunite " (str/join " " paths) " " path))
+  [job file-id paths]
+  (p/let [prefix (str/concat "penpot.pdfunite." file-id ".")
+          path   (job.utils/track! (:id job) (sh/tempfile :prefix prefix :suffix ".pdf"))]
+    (apply sh/run-cmd! "pdfunite" (conj (vec paths) path))
     path))
 
 (defn- move-file

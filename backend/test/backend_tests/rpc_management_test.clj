@@ -2,14 +2,16 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns backend-tests.rpc-management-test
   (:require
+   [app.binfile.common :as bfc]
    [app.common.features :as cfeat]
    [app.common.pprint :as pp]
    [app.common.types.shape :as cts]
    [app.common.uuid :as uuid]
+   [app.config :as cf]
    [app.db :as db]
    [app.http :as http]
    [app.rpc :as-alias rpc]
@@ -18,7 +20,9 @@
    [backend-tests.storage-test :refer [configure-storage-backend]]
    [buddy.core.bytes :as b]
    [clojure.test :as t]
-   [datoteka.fs :as fs]))
+   [cuerdas.core :as str]
+   [datoteka.fs :as fs]
+   [datoteka.io :as io]))
 
 (t/use-fixtures :once th/state-init)
 (t/use-fixtures :each th/database-reset)
@@ -38,7 +42,43 @@
     (t/is (nil? (:error out)))
     (:result out)))
 
-;; TODO: migrate to commands
+(t/deftest upload-tempfile-returns-fresh-object-for-same-content
+  (let [profile (th/create-profile* 1 {:is-active true})
+        path    (fs/create-tempfile :dir "/tmp/penpot" :prefix "test-upload-tempfile-")
+        _       (io/write* path "content")
+        params  {::th/type :upload-tempfile
+                 ::rpc/profile-id (:id profile)
+                 :content {:filename "export.png"
+                           :path path
+                           :mtype "image/png"
+                           :size 7}}
+        config  (assoc cf/config :public-uri "https://example.com/penpot")
+        out1    (binding [cf/config config]
+                  (th/management-command! params))
+        out2    (binding [cf/config config]
+                  (th/management-command! params))]
+    (t/is (nil? (:error out1)))
+    (t/is (nil? (:error out2)))
+    (t/is (str/starts-with? (str (get-in out1 [:result :uri]))
+                            "https://example.com/penpot/assets/by-id/"))
+    (t/is (not= (get-in out1 [:result :id])
+                (get-in out2 [:result :id])))))
+
+(t/deftest upload-tempfile-rejects-html-content-type
+  ;; N2-13: upload-tempfile must reject non-allowed content types
+  (let [profile (th/create-profile* 1 {:is-active true})
+        path    (fs/create-tempfile :dir "/tmp/penpot" :prefix "test-upload-tempfile-")
+        _       (io/write* path "<script>alert(1)</script>")
+        params  {::th/type :upload-tempfile
+                 ::rpc/profile-id (:id profile)
+                 :content {:filename "evil.html"
+                           :path path
+                           :mtype "text/html"
+                           :size 27}}
+        out     (th/management-command! params)]
+    (t/is (some? (:error out)))
+    (t/is (= :validation (th/ex-type (:error out))))
+    (t/is (= :media-type-not-allowed (th/ex-code (:error out))))))
 
 (t/deftest duplicate-file
   (let [storage (-> (:app.storage/storage th/*system*)
@@ -82,7 +122,6 @@
       ;; Check that result is correct
       (t/is (nil? (:error out)))
       (let [result (:result out)]
-
         ;; Check that the returned result is a file but has different id
         ;; and different name.
         (t/is (= "file 1 (copy)" (:name result)))
@@ -233,15 +272,7 @@
           ;; check that the both files are equivalent
           (doseq [[fa fb] (map vector p1-files p2-files)]
             (t/is (not= (:id fa) (:id fb)))
-            (t/is (= (:name fa) (:name fb)))
-
-            (when (= (:id fa) (:id file1))
-              (t/is (false? (b/equals? (:data fa)
-                                       (:data fb)))))
-
-            (when (= (:id fa) (:id file2))
-              (t/is (false? (b/equals? (:data fa)
-                                       (:data fb)))))))))))
+            (t/is (= (:name fa) (:name fb)))))))))
 
 (t/deftest duplicate-project-with-deleted-files
   (let [storage (-> (:app.storage/storage th/*system*)
@@ -297,15 +328,7 @@
           ;; check that the both files are equivalent
           (doseq [[fa fb] (map vector (rest p1-files) p2-files)]
             (t/is (not= (:id fa) (:id fb)))
-            (t/is (= (:name fa) (:name fb)))
-
-            (when (= (:id fa) (:id file1))
-              (t/is (false? (b/equals? (:data fa)
-                                       (:data fb)))))
-
-            (when (= (:id fa) (:id file2))
-              (t/is (false? (b/equals? (:data fa)
-                                       (:data fb)))))))))))
+            (t/is (= (:name fa) (:name fb)))))))))
 
 (t/deftest move-file-on-same-team
   (let [profile  (th/create-profile* 1 {:is-active true})

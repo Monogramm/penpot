@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options
   (:require-macros [app.main.style :as stl])
@@ -12,92 +12,188 @@
    [app.common.files.helpers :as cfh]
    [app.common.geom.shapes :as gsh]
    [app.common.types.shape.layout :as ctl]
+   [app.main.data.helpers :as dsh]
    [app.main.data.workspace :as udw]
    [app.main.data.workspace.common :as dwc]
+   [app.main.data.workspace.path.helpers :as path.helpers]
+   [app.main.data.workspace.path.state :as path.state]
+   [app.main.features :as features]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.context :as ctx]
    [app.main.ui.ds.layout.tab-switcher :refer [tab-switcher*]]
-   [app.main.ui.viewer.inspect.right-sidebar :as hrs]
-   [app.main.ui.workspace.sidebar.options.menus.align :refer [align-options]]
-   [app.main.ui.workspace.sidebar.options.menus.bool :refer [bool-options]]
-   [app.main.ui.workspace.sidebar.options.menus.component :refer [component-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.exports :refer [exports-menu]]
+   [app.main.ui.inspect.right-sidebar :as hrs]
+   [app.main.ui.workspace.sidebar.debug-shape-info :refer [debug-shape-info*]]
+   [app.main.ui.workspace.sidebar.options.drawing :as drawing]
+   [app.main.ui.workspace.sidebar.options.menus.align :refer [align-options*]]
+   [app.main.ui.workspace.sidebar.options.menus.bool :refer [bool-options*]]
+   [app.main.ui.workspace.sidebar.options.menus.component :refer [component-menu*]]
    [app.main.ui.workspace.sidebar.options.menus.grid-cell :as grid-cell]
-   [app.main.ui.workspace.sidebar.options.menus.interactions :refer [interactions-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.interactions :refer [interactions-menu*]]
    [app.main.ui.workspace.sidebar.options.menus.layout-container :as layout-container]
    [app.main.ui.workspace.sidebar.options.page :as page]
    [app.main.ui.workspace.sidebar.options.shapes.bool :as bool]
    [app.main.ui.workspace.sidebar.options.shapes.circle :as circle]
    [app.main.ui.workspace.sidebar.options.shapes.frame :as frame]
    [app.main.ui.workspace.sidebar.options.shapes.group :as group]
-   [app.main.ui.workspace.sidebar.options.shapes.image :as image]
    [app.main.ui.workspace.sidebar.options.shapes.multiple :as multiple]
    [app.main.ui.workspace.sidebar.options.shapes.path :as path]
    [app.main.ui.workspace.sidebar.options.shapes.rect :as rect]
    [app.main.ui.workspace.sidebar.options.shapes.svg-raw :as svg-raw]
    [app.main.ui.workspace.sidebar.options.shapes.text :as text]
+   [app.util.debug :as dbg]
    [app.util.i18n :as i18n :refer [tr]]
+   [okulary.core :as l]
    [rumext.v2 :as mf]))
 
 ;; --- Options
 
-(mf/defc shape-options*
-  {::mf/wrap [#(mf/throttle % 60)]}
-  [{:keys [shape shapes-with-children page-id file-id shared-libs] :as props}]
+(mf/defc single-shape-options*
+  {::mf/private true}
+  [{:keys [shape page-id file-id libraries] :rest props}]
   (let [shape-type (dm/get-prop shape :type)
         shape-id   (dm/get-prop shape :id)
 
+        wasm-modifiers (mf/deref refs/workspace-wasm-modifiers)
         modifiers  (mf/deref refs/workspace-modifiers)
-        modifiers  (dm/get-in modifiers [shape-id :modifiers])
 
-        shape      (gsh/transform-shape shape modifiers)]
+        shape
+        (if (features/active-feature? @st/state "render-wasm/v1")
+          (let [wasm-modifiers (into {} wasm-modifiers)]
+            (gsh/apply-transform shape (get wasm-modifiers shape-id)))
+          (gsh/transform-shape shape (dm/get-in modifiers [shape-id :modifiers])))
 
-    [:*
-     (case shape-type
-       :frame   [:> frame/options* props]
-       :group   [:& group/options {:shape shape :shape-with-children shapes-with-children :file-id file-id :shared-libs shared-libs}]
-       :text    [:& text/options {:shape shape  :file-id file-id :shared-libs shared-libs}]
-       :rect    [:& rect/options {:shape shape}]
-       :circle  [:& circle/options {:shape shape}]
-       :path    [:& path/options {:shape shape}]
-       :image   [:& image/options {:shape shape}]
-       :svg-raw [:& svg-raw/options {:shape shape}]
-       :bool    [:& bool/options {:shape shape}]
-       nil)
-     [:& exports-menu
-      {:ids [(:id shape)]
-       :values (select-keys shape [:exports])
-       :shape shape
-       :page-id page-id
-       :file-id file-id}]]))
+        props      (mf/spread-props props {:shape shape :file-id file-id :page-id page-id :libraries libraries})]
 
-(mf/defc specialized-panel
-  {::mf/wrap [mf/memo]}
+    (case shape-type
+      :frame   [:> frame/options* props]
+      :group   [:> group/options* props]
+      :text    [:> text/options* {:shape shape :file-id file-id :page-id page-id :libraries libraries}]
+      :rect    [:> rect/options* {:shape shape :file-id file-id :page-id page-id}]
+      :circle  [:> circle/options* {:shape shape :file-id file-id :page-id page-id}]
+      :path    [:> path/options* {:shape shape :file-id file-id :page-id page-id}]
+      :svg-raw [:> svg-raw/options* {:shape shape :file-id file-id :page-id page-id}]
+      :bool    [:> bool/options* {:shape shape :file-id file-id :page-id page-id}]
+      nil)))
+
+(mf/defc shape-options*
+  {::mf/wrap [#(mf/throttle % 200)]
+   ::mf/private true}
+  [{:keys [shapes shapes-with-children selected page-id file-id libraries]}]
+  (if (= 1 (count selected))
+    [:> single-shape-options*
+     {:page-id page-id
+      :file-id file-id
+      :libraries libraries
+      :shape (first shapes)
+      :shapes-with-children shapes-with-children}]
+    [:> multiple/options*
+     {:shapes-with-children shapes-with-children
+      :shapes shapes
+      :page-id page-id
+      :file-id file-id
+      :libraries libraries}]))
+
+(mf/defc specialized-panel*
+  {::mf/private true}
   [{:keys [panel]}]
   (when (= (:type panel) :component-swap)
-    [:& component-menu {:shapes (:shapes panel) :swap-opened? true}]))
+    [:> component-menu* {:shapes (:shapes panel) :is-swap-opened true}]))
 
 (mf/defc design-menu*
-  {::mf/wrap [mf/memo]}
-  [{:keys [selected objects page-id file-id selected-shapes shapes-with-children]}]
-  (let [sp-panel             (mf/deref refs/specialized-panel)
-        drawing              (mf/deref refs/workspace-drawing)
-        shared-libs          (mf/deref refs/libraries)
-        edition              (mf/deref refs/selected-edition)
-        edit-grid?           (ctl/grid-layout? objects edition)
-        grid-edition         (mf/deref refs/workspace-grid-edition)
-        selected-cells       (->> (dm/get-in grid-edition [edition :selected])
-                                  (map #(dm/get-in objects [edition :layout-grid-cells %])))]
+  {::mf/private true}
+  [{:keys [selected objects page-id file-id shapes]}]
+  (let [sp-panel (mf/deref refs/specialized-panel)
+        drawing  (mf/deref refs/workspace-drawing)
+        edition  (mf/deref refs/selected-edition)
+
+        edit-path
+        (mf/deref refs/workspace-edit-path)
+
+        edit-path-state
+        (path.state/current-edit-state edit-path edition)
+
+        path-editing?
+        (path.state/editing? edit-path edition)
+
+        path-content
+        (dm/get-in drawing [:object :content])
+
+        selected-nodes
+        (:nodes (:selection edit-path-state))
+
+        ;; Coincident commands are one node, so count positions.
+        path-node-count
+        (mf/with-memo [path-content selected-nodes]
+          (path.helpers/selected-node-count path-content {:nodes selected-nodes}))
+
+        files
+        (mf/deref refs/files)
+
+        libraries
+        (mf/with-memo [files file-id]
+          (refs/select-libraries files file-id))
+
+        edit-grid?
+        (mf/with-memo [objects edition]
+          (ctl/grid-layout? objects edition))
+
+        grid-edition
+        (mf/deref refs/workspace-grid-edition)
+
+        selected-cells
+        (->> (dm/get-in grid-edition [edition :selected])
+             (map #(dm/get-in objects [edition :layout-grid-cells %])))
+
+        shapes-with-children*
+        (mf/use-state nil)
+
+        _ (mf/use-effect
+           (mf/deps selected objects shapes)
+           (fn []
+             (reset! shapes-with-children* nil)
+             (let [result
+                   (loop [queue   (into #queue [] selected)
+                          visited selected]
+                     (if-let [id (peek queue)]
+                       (let [shape    (get objects id)
+                             children (:shapes shape)]
+                         (if (seq children)
+                           (let [new-children (remove visited children)]
+                             (recur (into (pop queue) new-children)
+                                    (into visited new-children)))
+                           (recur (pop queue) visited)))
+                       (sequence (keep (d/getf objects)) visited)))]
+               (reset! shapes-with-children* result))))
+
+        shapes-with-children
+        (deref shapes-with-children*)
+
+        total-selected
+        (count selected)]
 
     [:div {:class (stl/css :element-options :design-options)}
-     [:& align-options]
-     [:& bool-options]
+     [:> align-options* {:shapes shapes
+                         :objects objects
+                         :path-edit? path-editing?
+                         :node-count path-node-count}]
+     (when-not path-editing?
+       [:> bool-options* {:total-selected total-selected
+                          :shapes shapes
+                          :shapes-with-children shapes-with-children}])
 
      (cond
-       (and edit-grid? (d/not-empty? selected-cells))
-       [:& grid-cell/options
+       ;; Show path-specific options during node editing.
+       path-editing?
+       [:> path/path-edition-options*
         {:shape (get objects edition)
+         :file-id file-id
+         :page-id page-id}]
+
+       (and edit-grid? (d/not-empty? selected-cells))
+       [:> grid-cell/options*
+        {:shape-id (-> (get objects edition)
+                       :id)
          :cells selected-cells}]
 
        edit-grid?
@@ -105,124 +201,147 @@
         {:ids [edition]
          :values (get objects edition)}]
 
-       (not (nil? sp-panel))
-       [:& specialized-panel {:panel sp-panel}]
+       (some? sp-panel)
+       [:> specialized-panel* {:panel sp-panel}]
 
        (d/not-empty? drawing)
-       [:> shape-options*
-        {:shape (:object drawing)
-         :page-id page-id
-         :file-id file-id
-         :shared-libs shared-libs}]
+       [:> drawing/drawing-options*
+        {:drawing-state drawing}]
 
-       (= 0 (count selected))
-       [:& page/options]
-
-       (= 1 (count selected))
-       [:> shape-options*
-        {:shape (first selected-shapes)
-         :page-id page-id
-         :file-id file-id
-         :shared-libs shared-libs
-         :shapes-with-children shapes-with-children}]
+       (zero? total-selected)
+       [:> page/options*]
 
        :else
-       [:& multiple/options
-        {:shapes-with-children shapes-with-children
-         :shapes selected-shapes
+       [:> shape-options*
+        {:shapes shapes
+         :shapes-with-children shapes-with-children
          :page-id page-id
          :file-id file-id
-         :shared-libs shared-libs}])]))
+         :selected selected
+         :libraries libraries}])]))
+
+(mf/defc inspect-tab*
+  {::mf/private true}
+  [{:keys [objects shapes] :as props}]
+  (let [frame
+        (cfh/get-frame objects (first shapes))
+
+        props
+        (mf/spread-props props
+                         {:frame frame
+                          :from :workspace})]
+
+    [:> hrs/right-sidebar* props]))
+
+(defn- generate-options-tabs
+  []
+  (cond-> [{:label (tr "workspace.options.design")
+            :id "design"}
+           {:label (tr "workspace.options.prototype")
+            :id "prototype"}
+           {:label (tr "workspace.options.inspect")
+            :id "inspect"}]
+    (dbg/enabled? :shape-panel)
+    (conj {:label "Debug"
+           :id "debug"})))
+
+(defn- on-option-tab-change
+  [mode]
+  (let [mode (keyword mode)]
+    (st/emit! (udw/set-options-mode mode))
+    (if (= mode :inspect)
+      (st/emit! :interrupt (dwc/set-workspace-read-only true))
+      (st/emit! :interrupt (dwc/set-workspace-read-only false)))))
 
 (mf/defc options-content*
-  {::mf/memo true
-   ::mf/private true}
-  [{:keys [selected shapes shapes-with-children page-id file-id on-change-section on-expand]}]
-  (let [objects              (mf/deref refs/workspace-page-objects)
-        permissions          (mf/use-ctx ctx/permissions)
+  {::mf/private true}
+  [{:keys [objects selected page-id file-id on-change-section on-expand]}]
+  (let [permissions
+        (mf/use-ctx ctx/permissions)
+        render-context-lost? (mf/deref refs/render-context-lost?)
 
-        selected-shapes      (into [] (keep (d/getf objects)) selected)
-        first-selected-shape (first selected-shapes)
-        shape-parent-frame   (cfh/get-frame objects (:frame-id first-selected-shape))
+        options-mode
+        (mf/deref refs/options-mode-global)
 
-        options-mode         (mf/deref refs/options-mode-global)
+        ;; dbg/state is an okulary atom; deref'ing it makes this component
+        ;; re-render when debug options change (e.g. :shape-panel toggle)
+        ;; so the tabs list is regenerated reactively without a page reload.
+        dbg-state
+        (mf/deref dbg/state)
 
-        on-change-tab
-        (fn [options-mode]
-          (let [options-mode (keyword options-mode)]
-            (st/emit! (udw/set-options-mode options-mode))
-            (if (= options-mode :inspect)
-              (st/emit! :interrupt (dwc/set-workspace-read-only true))
-              (st/emit! :interrupt (dwc/set-workspace-read-only false)))))
+        shapes
+        (mf/with-memo [selected objects]
+          (sequence (keep (d/getf objects)) selected))
 
-        design-content
-        (mf/html [:> design-menu*
-                  {:selected selected
-                   :objects objects
-                   :page-id page-id
-                   :file-id file-id
-                   :selected-shapes selected-shapes
-                   :shapes-with-children shapes-with-children}])
+        options-tabs
+        (generate-options-tabs)]
 
-        inspect-content
-        (mf/html [:div {:class (stl/css :element-options :inspect-options)}
-                  [:& hrs/right-sidebar {:page-id           page-id
-                                         :objects           objects
-                                         :file-id           file-id
-                                         :frame             shape-parent-frame
-                                         :shapes            selected-shapes
-                                         :on-change-section on-change-section
-                                         :on-expand         on-expand
-                                         :from              :workspace}]])
-
-        interactions-content
-        (mf/html [:div {:class (stl/css :element-options :interaction-options)}
-                  [:& interactions-menu {:shape (first shapes)}]])
-
-
-        tabs
-        (if (:can-edit permissions)
-          #js [#js {:label (tr "workspace.options.design")
-                    :id "design"
-                    :content design-content}
-
-               #js {:label (tr "workspace.options.prototype")
-                    :id "prototype"
-                    :content interactions-content}
-
-               #js {:label (tr "workspace.options.inspect")
-                    :id "inspect"
-                    :content inspect-content}]
-          #js [#js {:label (tr "workspace.options.inspect")
-                    :id "inspect"
-                    :content inspect-content}])]
-
-    (mf/with-effect [permissions]
-      (when-not (:can-edit permissions)
-        (on-change-tab :inspect)))
+    (mf/use-effect
+     (mf/deps dbg-state)
+     (fn []
+       (if (contains? dbg-state :shape-panel)
+         ;; shape-panel was just enabled: select the debug tab
+         (on-option-tab-change "debug")
+         ;; shape-panel was just disabled: if debug tab is active, go back to design
+         (when (= options-mode :debug)
+           (on-option-tab-change "design")))))
 
     [:div {:class (stl/css :tool-window)}
-     [:> tab-switcher* {:tabs tabs
-                        :default-selected "info"
-                        :on-change-tab on-change-tab
-                        :selected (name options-mode)
-                        :class (stl/css :options-tab-switcher)}]]))
+     (if (and (:can-edit permissions) (not render-context-lost?))
+       [:> tab-switcher* {:tabs options-tabs
+                          :on-change on-option-tab-change
+                          :selected (name options-mode)
+                          :class (stl/css :options-tab-switcher)}
+        (case options-mode
+          :prototype
+          [:div {:class (stl/css :element-options :interaction-options)}
+           [:> interactions-menu* {:shape (first shapes)}]]
 
-;; TODO: this need optimizations, selected-objects and
-;; selected-objects-with-children are derefed always but they only
-;; need on multiple selection in majority of cases
+          :inspect
+          [:div {:class (stl/css :element-options :inspect-options)}
+           [:> inspect-tab* {:page-id page-id
+                             :file-id file-id
+                             :objects objects
+                             :selected selected
+                             :shapes shapes
+                             :on-change-section on-change-section
+                             :on-expand on-expand}]]
+
+          :design
+          [:> design-menu* {:selected selected
+                            :objects objects
+                            :page-id page-id
+                            :file-id file-id
+                            :shapes shapes}]
+
+          :debug
+          [:> debug-shape-info*])]
+
+       [:div {:class (stl/css :element-options :inspect-options :read-only)}
+        [:> inspect-tab* {:page-id page-id
+                          :file-id file-id
+                          :objects objects
+                          :selected selected
+                          :shapes shapes
+                          :on-change-section on-change-section
+                          :on-expand on-expand}]])]))
+
+(defn- make-page-objects-ref
+  [file-id page-id]
+  (l/derived #(dsh/lookup-page-objects % file-id page-id) st/state))
 
 (mf/defc options-toolbox*
   {::mf/memo true}
-  [{:keys [section selected on-change-section on-expand]}]
-  (let [page-id              (mf/use-ctx ctx/current-page-id)
-        file-id              (mf/use-ctx ctx/current-file-id)
-        shapes               (mf/deref refs/selected-objects)
-        shapes-with-children (mf/deref refs/selected-shapes-with-children)]
+  [{:keys [page-id file-id section selected on-change-section on-expand]}]
+  (let [objects-ref
+        (mf/with-memo [page-id file-id]
+          (make-page-objects-ref file-id page-id))
 
-    [:> options-content* {:shapes shapes
+        objects
+        (mf/deref objects-ref)]
+
+    [:> options-content* {:objects objects
                           :selected selected
-                          :shapes-with-children shapes-with-children
                           :file-id file-id
                           :page-id page-id
                           :section section

@@ -2,13 +2,15 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.rpc.commands.search
   (:require
+   [app.common.data.macros :as dm]
    [app.common.schema :as sm]
    [app.db :as db]
    [app.rpc :as-alias rpc]
+   [app.rpc.commands.teams :as teams]
    [app.rpc.doc :as-alias doc]
    [app.util.services :as sv]))
 
@@ -19,7 +21,7 @@
       inner join team_profile_rel as tpr on (tpr.team_id = p.team_id)
       where tpr.profile_id = ?
         and p.team_id = ?
-        and (p.deleted_at is null or p.deleted_at > now())
+        and (p.deleted_at is null)
         and (tpr.is_admin = true or
              tpr.is_owner = true or
              tpr.can_edit = true)
@@ -29,7 +31,7 @@
       inner join project_profile_rel as ppr on (ppr.project_id = p.id)
       where ppr.profile_id = ?
         and p.team_id = ?
-        and (p.deleted_at is null or p.deleted_at > now())
+        and (p.deleted_at is null)
         and (ppr.is_admin = true or
              ppr.is_owner = true or
              ppr.can_edit = true)
@@ -47,7 +49,7 @@
      left join file_thumbnail as ft on (ft.file_id = f.id and ft.revn = f.revn)
     inner join projects as pr on (f.project_id = pr.id)
     where f.name ilike ('%' || ? || '%')
-      and (f.deleted_at is null or f.deleted_at > now())
+      and (f.deleted_at is null)
     order by f.created_at asc")
 
 (defn search-files
@@ -66,11 +68,13 @@
 (def ^:private schema:search-files
   [:map {:title "search-files"}
    [:team-id ::sm/uuid]
-   [:search-term {:optional true} :string]])
+   [:search-term {:optional true} [:string {:max 250}]]])
 
 (sv/defmethod ::search-files
   {::doc/added "1.17"
    ::doc/module :files
    ::sm/params schema:search-files}
   [{:keys [::db/pool]} {:keys [::rpc/profile-id team-id search-term]}]
-  (some->> search-term (search-files pool profile-id team-id)))
+  (dm/with-open [conn (db/open pool)]
+    (teams/check-read-permissions! conn profile-id team-id)
+    (some->> search-term (search-files conn profile-id team-id))))

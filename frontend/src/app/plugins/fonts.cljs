@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.plugins.fonts
   (:require
@@ -32,7 +32,7 @@
   (obj/type-of? p "FontProxy"))
 
 (defn font-proxy
-  [{:keys [id family name variants] :as font}]
+  [plugin-id {:keys [id family name variants] :as font}]
   (when (some? font)
     (let [default-variant (fonts/get-default-variant font)]
       (obj/reify {:name "FontProxy"}
@@ -55,39 +55,45 @@
         (fn [text variant]
           (cond
             (not (shape/shape-proxy? text))
-            (u/display-not-valid :applyToText text)
+            (u/not-valid plugin-id :applyToText text)
 
             (not (r/check-permission (obj/get text "$plugin") "content:write"))
-            (u/display-not-valid :applyToText "Plugin doesn't have 'content:write' permission")
+            (u/not-valid plugin-id :applyToText "Plugin doesn't have 'content:write' permission")
+
+            (not (u/page-active? (obj/get text "$page")))
+            (u/not-valid plugin-id :applyToText "Cannot modify a page that is not currently active")
 
             :else
-            (let [id (obj/get text "$id")
-                  values {:font-id id
-                          :font-family family
-                          :font-style (d/nilv (obj/get variant "fontStyle") (:style default-variant))
-                          :font-variant-id (d/nilv (obj/get variant "fontVariantId") (:id default-variant))
-                          :font-weight (d/nilv (obj/get variant "fontWeight") (:wegith default-variant))}]
-              (st/emit! (dwt/update-attrs id values)))))
-
-        :applyToRange
-        (fn [range variant]
-          (cond
-            (not (text/text-range-proxy? range))
-            (u/display-not-valid :applyToRange range)
-
-            (not (r/check-permission (obj/get range "$plugin") "content:write"))
-            (u/display-not-valid :applyToRange "Plugin doesn't have 'content:write' permission")
-
-            :else
-            (let [id    (obj/get range "$id")
-                  start (obj/get range "start")
-                  end   (obj/get range "end")
+            (let [text-id (obj/get text "$id")
                   values {:font-id id
                           :font-family family
                           :font-style (d/nilv (obj/get variant "fontStyle") (:style default-variant))
                           :font-variant-id (d/nilv (obj/get variant "fontVariantId") (:id default-variant))
                           :font-weight (d/nilv (obj/get variant "fontWeight") (:weight default-variant))}]
-              (st/emit! (dwt/update-text-range id start end values)))))))))
+              (st/emit! (dwt/update-attrs text-id values)))))
+
+        :applyToRange
+        (fn [range variant]
+          (cond
+            (not (text/text-range-proxy? range))
+            (u/not-valid plugin-id :applyToRange range)
+
+            (not (r/check-permission (obj/get range "$plugin") "content:write"))
+            (u/not-valid plugin-id :applyToRange "Plugin doesn't have 'content:write' permission")
+
+            (not (u/page-active? (obj/get range "$page")))
+            (u/not-valid plugin-id :applyToRange "Cannot modify a page that is not currently active")
+
+            :else
+            (let [range-id (obj/get range "$id")
+                  start (obj/get range "$start")
+                  end   (obj/get range "$end")
+                  values {:font-id id
+                          :font-family family
+                          :font-style (d/nilv (obj/get variant "fontStyle") (:style default-variant))
+                          :font-variant-id (d/nilv (obj/get variant "fontVariantId") (:id default-variant))
+                          :font-weight (d/nilv (obj/get variant "fontWeight") (:weight default-variant))}]
+              (st/emit! (dwt/update-text-range range-id start end values)))))))))
 
 (defn fonts-subcontext
   [plugin-id]
@@ -98,53 +104,53 @@
     {:get
      (fn []
        (format/format-array
-        font-proxy
+        (partial font-proxy plugin-id)
         (vals @fonts/fontsdb)))}
 
     :findById
     (fn [id]
       (cond
         (not (string? id))
-        (u/display-not-valid :findbyId id)
+        (u/not-valid plugin-id :findbyId id)
 
         :else
         (->> (vals @fonts/fontsdb)
              (d/seek #(str/includes? (str/lower (:id %)) (str/lower id)))
-             (font-proxy))))
+             (font-proxy plugin-id))))
 
     :findByName
     (fn [name]
       (cond
         (not (string? name))
-        (u/display-not-valid :findByName name)
+        (u/not-valid plugin-id :findByName name)
 
         :else
         (->> (vals @fonts/fontsdb)
              (d/seek #(str/includes? (str/lower (:name %)) (str/lower name)))
-             (font-proxy))))
+             (font-proxy plugin-id))))
 
     :findAllById
     (fn [id]
       (cond
         (not (string? id))
-        (u/display-not-valid :findAllById name)
+        (u/not-valid plugin-id :findAllById name)
 
         :else
         (format/format-array
          (fn [font]
            (when (str/includes? (str/lower (:id font)) (str/lower id))
-             (font-proxy font)))
+             (font-proxy plugin-id font)))
          (vals @fonts/fontsdb))))
 
     :findAllByName
     (fn [name]
       (cond
         (not (string? name))
-        (u/display-not-valid :findAllByName name)
+        (u/not-valid plugin-id :findAllByName name)
 
         :else
         (format/format-array
          (fn [font]
            (when (str/includes? (str/lower (:name font)) (str/lower name))
-             (font-proxy font)))
+             (font-proxy plugin-id font)))
          (vals @fonts/fontsdb))))))

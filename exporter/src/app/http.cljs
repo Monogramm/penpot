@@ -2,19 +2,20 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.http
   (:require
-   ["cookies" :as Cookies]
-   ["http" :as http]
-   ["inflation" :as inflate]
-   ["raw-body" :as raw-body]
-   ["stream" :as stream]
+   ["cookies$default" :as Cookies]
+   ["inflation$default" :as inflate]
+   ["node:http" :as http]
+   ["node:stream$default" :as stream]
+   ["raw-body$default" :as raw-body]
    [app.common.logging :as l]
    [app.common.transit :as t]
    [app.config :as cf]
    [app.handlers :as handlers]
+   [app.router :as router]
    [cuerdas.core :as str]
    [lambdaisland.uri :as u]
    [promesa.core :as p]))
@@ -94,7 +95,7 @@
                size (js/Buffer.byteLength data "utf-8")]
            (-> exchange
                (assoc :response/body data)
-               (assoc :response/status 200)
+               (assoc :response/status (or status 200))
                (update :response/headers assoc "content-type" "application/transit+json")
                (update :response/headers assoc "content-length" size)))
 
@@ -159,7 +160,7 @@
 
 (defn init
   []
-  (let [handler (-> handlers/handler
+  (let [handler (-> (router/create handlers/handler)
                     (wrap-health)
                     (wrap-auth "auth-token")
                     (wrap-response-format)
@@ -169,6 +170,7 @@
                     (wrap-error handlers/on-error))
         server  (create-server handler)
         port    (cf/get :http-server-port 6061)]
+
     (.listen server port)
     (l/info :hint "welcome to penpot"
             :module "exporter"

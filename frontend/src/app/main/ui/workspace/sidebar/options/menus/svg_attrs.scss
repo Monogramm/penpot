@@ -2,73 +2,79 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
-// Copyright (c) KALEIDOS INC
+// Copyright (c) KALEIDOS SUBSIDIARY SL
 
-@import "refactor/common-refactor.scss";
+@use "refactor/common-refactor.scss" as deprecated;
 
 .element-set {
   margin: 0;
 }
 
 .title-spacing-svg-attrs {
-  padding-left: $s-2;
+  padding-left: deprecated.$s-2;
   margin: 0;
 }
 
 .element-set-content {
-  @include flexColumn;
-  margin: $s-4 0 0 0;
+  @include deprecated.flex-column;
+
+  margin: deprecated.$s-4 0 0 0;
 }
 
 .attr-content {
   display: flex;
-  gap: $s-4;
+  gap: deprecated.$s-4;
 }
 
 .attr-name {
-  @include bodySmallTypography;
-  @include twoLineTextEllipsis;
-  width: $s-88;
-  margin: auto $s-4;
+  @include deprecated.body-small-typography;
+  @include deprecated.two-line-text-ellipsis;
+
+  width: deprecated.$s-88;
+  margin: auto deprecated.$s-4;
   margin-right: 0;
   display: inline-block;
   color: var(--title-foreground-color);
 }
 
 .attr-input {
-  @extend .input-element;
-  @include bodySmallTypography;
-  width: $s-124;
+  @extend %input-element;
+  @include deprecated.body-small-typography;
+
+  width: deprecated.$s-124;
 }
 
 .attr-actions {
   display: flex;
-  gap: $s-4;
+  gap: deprecated.$s-4;
 }
 
 .attr-action-btn {
-  @extend .button-tertiary;
-  width: $s-28;
-  height: $s-32;
+  @extend %button-tertiary;
+
+  width: deprecated.$s-28;
+  height: deprecated.$s-32;
+
   svg {
-    @extend .button-icon;
+    @extend %button-icon;
   }
 }
 
 .attr-nested-content {
   display: grid;
-  row-gap: $s-4;
+  row-gap: deprecated.$s-4;
 }
 
 .attr-title {
-  @include bodySmallTypography;
-  font-size: $fs-10;
+  @include deprecated.body-small-typography;
+
+  font-size: deprecated.$fs-10;
   text-transform: uppercase;
-  margin-inline-start: $s-4;
+  margin-inline-start: deprecated.$s-4;
   color: var(--color-foreground-primary);
 }
 
 .attr-row {
   display: flex;
-  gap: $s-4;
+  gap: deprecated.$s-4;
 }

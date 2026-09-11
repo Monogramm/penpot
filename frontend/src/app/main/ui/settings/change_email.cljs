@@ -2,7 +2,7 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.settings.change-email
   (:require-macros [app.main.style :as stl])
@@ -14,7 +14,7 @@
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.forms :as fm]
-   [app.main.ui.icons :as i]
+   [app.main.ui.icons :as deprecated-icon]
    [app.main.ui.notifications.context-notification :refer [context-notification]]
    [app.util.i18n :as i18n :refer [tr]]
    [beicon.v2.core :as rx]
@@ -59,7 +59,7 @@
    [:map {:title "EmailChangeForm"}
     [:email-1 ::sm/email]
     [:email-2 ::sm/email]]
-   [:fn {:error/code "errors.invalid-email-confirmation"
+   [:fn {:error/fn #(tr "errors.invalid-email-confirmation")
          :error/field :email-2}
     (fn [data]
       (let [email-1 (:email-1 data)
@@ -73,8 +73,6 @@
   (let [profile (mf/deref refs/profile)
         form    (fm/use-form :schema schema:email-change-form
                              :initial profile)
-        on-close
-        (mf/use-fn #(st/emit! (modal/hide)))
 
         on-submit
         (mf/use-fn
@@ -91,7 +89,7 @@
               :data-testid "change-email-title"}
          (tr "modals.change-email.title")]
         [:button {:class (stl/css :modal-close-btn)
-                  :on-click on-close} i/close]]
+                  :on-click modal/hide!} deprecated-icon/close]]
 
        [:div {:class (stl/css :modal-content)}
         [:& context-notification

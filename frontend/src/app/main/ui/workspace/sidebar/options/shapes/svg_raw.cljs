@@ -2,39 +2,35 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.main.ui.workspace.sidebar.options.shapes.svg-raw
   (:require
-   [app.common.colors :as cc]
    [app.common.data :as d]
+   [app.common.data.macros :as dm]
+   [app.common.types.color :as cc]
    [app.common.types.shape.layout :as ctl]
    [app.main.refs :as refs]
-   [app.main.ui.hooks :as hooks]
-   [app.main.ui.workspace.sidebar.options.menus.blur :refer [blur-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.constraints :refer [constraint-attrs constraints-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.fill :refer [fill-attrs fill-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.blur :refer [blur-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.constraints :refer [constraint-attrs constraints-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.exports :refer [exports-menu* exports-attrs]]
+   [app.main.ui.workspace.sidebar.options.menus.fill :as fill]
    [app.main.ui.workspace.sidebar.options.menus.grid-cell :as grid-cell]
-   [app.main.ui.workspace.sidebar.options.menus.layout-container :refer [layout-container-flex-attrs layout-container-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.layout-item :refer [layout-item-attrs layout-item-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.layout-container :refer [layout-container-flex-attrs layout-container-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.layout-item :refer [layout-item-attrs layout-item-menu*]]
    [app.main.ui.workspace.sidebar.options.menus.measures :refer [measure-attrs measures-menu*]]
-   [app.main.ui.workspace.sidebar.options.menus.shadow :refer [shadow-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.stroke :refer [stroke-attrs stroke-menu]]
-   [app.main.ui.workspace.sidebar.options.menus.svg-attrs :refer [svg-attrs-menu]]
+   [app.main.ui.workspace.sidebar.options.menus.shadow :refer [shadow-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.stroke :refer [stroke-attrs stroke-menu*]]
+   [app.main.ui.workspace.sidebar.options.menus.svg-attrs :refer [svg-attrs-menu*]]
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
 
 ;; This is a list of svg tags that can be grouped in shape-container
 ;; this allows them to have gradients, shadows and masks
-(def svg-elements #{:svg :g :circle :ellipse :image :line :path :polygon :polyline :rect :symbol :text :textPath})
+(def ^:private svg-elements
+  #{:svg :g :circle :ellipse :image :line :path :polygon :polyline :rect :symbol :text :textPath})
 
-(defn hex->number [_] 1)
-
-(defn shorthex->longhex [hex]
-  (let [[_ r g b] hex]
-    (str "#" r r g g b b)))
-
-(defn parse-color [color]
+(defn- parse-color [color]
   (try
     (cond
       (or (not color) (= color "none")) nil
@@ -51,9 +47,8 @@
       (.error js/console "Error parsing color" e)
       nil)))
 
-
-(defn get-fill-values [shape]
-  (let [fill-values (select-keys shape fill-attrs)
+(defn- get-fill-values [shape]
+  (let [fill-values (select-keys shape fill/fill-attrs)
         color       (-> (or (get-in shape [:content :attrs :fill])
                             (get-in shape [:content :attrs :style :fill]))
                         (parse-color))
@@ -64,7 +59,7 @@
                       fill-values)]
     fill-values))
 
-(defn get-stroke-values [shape]
+(defn- get-stroke-values [shape]
   (let [stroke-values (select-keys shape stroke-attrs)
         color         (-> (or (get-in shape [:content :attrs :stroke])
                               (get-in shape [:content :attrs :style :stroke]))
@@ -92,81 +87,129 @@
                         stroke-values)]
     stroke-values))
 
-(mf/defc options
-  {::mf/wrap [mf/memo]}
-  [{:keys [shape] :as props}]
+(mf/defc options*
+  [{:keys [shape file-id page-id]}]
 
-  (let [ids [(:id shape)]
-        type (:type shape)
+  (let [id     (dm/get-prop shape :id)
+        type   (dm/get-prop shape :type)
+        ids    (mf/with-memo [id] [id])
+        shapes (mf/with-memo [shape] [shape])
 
-        {:keys [tag] :as content} (:content shape)
-        measure-values (select-keys shape measure-attrs)
-        constraint-values (select-keys shape constraint-attrs)
-        fill-values    (get-fill-values shape)
-        stroke-values  (get-stroke-values shape)
-        layout-item-values (select-keys shape layout-item-attrs)
-        layout-container-values (select-keys shape layout-container-flex-attrs)
+        applied-tokens
+        (get shape :applied-tokens)
 
-        is-layout-child-ref (mf/use-memo (mf/deps ids) #(refs/is-layout-child? ids))
-        is-layout-child? (mf/deref is-layout-child-ref)
+        {:keys [tag] :as content}
+        (get shape :content)
 
-        is-flex-parent-ref (mf/use-memo (mf/deps ids) #(refs/flex-layout-child? ids))
-        is-flex-parent? (mf/deref is-flex-parent-ref)
+        fill-values
+        (mf/with-memo [shape]
+          (get-fill-values shape))
 
-        is-grid-parent-ref (mf/use-memo (mf/deps ids) #(refs/grid-layout-child? ids))
-        is-grid-parent? (mf/deref is-grid-parent-ref)
+        stroke-values
+        (mf/with-memo [shape]
+          (get-stroke-values shape))
 
-        is-layout-child-absolute? (ctl/item-absolute? shape)
+        measure-values
+        (select-keys shape measure-attrs)
 
-        ids (hooks/use-equal-memo ids)
-        parents-by-ids-ref (mf/use-memo (mf/deps ids) #(refs/parents-by-ids ids))
-        parents (mf/deref parents-by-ids-ref)]
+        constraint-values
+        (select-keys shape constraint-attrs)
+
+        layout-item-values
+        (select-keys shape layout-item-attrs)
+
+        layout-container-values
+        (select-keys shape layout-container-flex-attrs)
+
+        is-layout-child-ref
+        (mf/with-memo [ids]
+          (refs/is-layout-child? ids))
+
+        is-layout-child?
+        (mf/deref is-layout-child-ref)
+
+        is-flex-parent-ref
+        (mf/with-memo [ids]
+          (refs/flex-layout-child? ids))
+
+        is-flex-parent?
+        (mf/deref is-flex-parent-ref)
+
+        is-grid-parent-ref
+        (mf/with-memo [ids]
+          (refs/grid-layout-child? ids))
+
+        is-grid-parent?
+        (mf/deref is-grid-parent-ref)
+
+        is-layout-child-absolute?
+        (ctl/item-absolute? shape)
+
+        parents-by-ids-ref
+        (mf/with-memo [ids]
+          (refs/parents-by-ids ids))
+
+        parents
+        (mf/deref parents-by-ids-ref)]
 
     (when (contains? svg-elements tag)
       [:*
        [:> measures-menu* {:ids ids
                            :type type
+                           :applied-tokens applied-tokens
                            :values measure-values
-                           :shape shape}]
+                           :shapes shapes}]
 
-       [:& layout-container-menu
+       [:> layout-container-menu*
         {:type type
          :ids [(:id shape)]
          :values layout-container-values
+         :applied-tokens applied-tokens
          :multiple false}]
 
        (when (and (= (count ids) 1) is-layout-child? is-grid-parent?)
-         [:& grid-cell/options
-          {:shape (first parents)
+         [:> grid-cell/options*
+          {:shape-id (-> (first parents)
+                         :id)
            :cell (ctl/get-cell-by-shape-id (first parents) (first ids))}])
 
        (when is-layout-child?
-         [:& layout-item-menu
+         [:> layout-item-menu*
           {:ids ids
            :type type
            :values layout-item-values
-           :is-layout-child? true
-           :is-flex-parent? is-flex-parent?
-           :is-grid-parent? is-grid-parent?
+           :is-layout-child true
+           :is-flex-parent is-flex-parent?
+           :is-grid-parent is-grid-parent?
+           :applied-tokens applied-tokens
            :shape shape}])
 
        (when (or (not ^boolean is-layout-child?) ^boolean is-layout-child-absolute?)
-         [:& constraints-menu {:ids ids
-                               :values constraint-values}])
+         [:> constraints-menu* {:ids ids
+                                :values constraint-values}])
 
-       [:& fill-menu {:ids ids
-                      :type type
-                      :values fill-values}]
+       [:> fill/fill-menu*
+        {:ids ids
+         :type type
+         :values fill-values
+         :applied-tokens applied-tokens}]
 
-       [:& stroke-menu {:ids ids
-                        :type type
-                        :values stroke-values}]
+       [:> stroke-menu* {:ids ids
+                         :type type
+                         :values stroke-values
+                         :applied-tokens applied-tokens}]
 
-       [:& shadow-menu {:ids ids
-                        :values (select-keys shape [:shadow])}]
+       [:> shadow-menu* {:ids ids :values (get shape :shadow)}]
 
-       [:& blur-menu {:ids ids
-                      :values (select-keys shape [:blur])}]
+       [:> blur-menu* {:ids ids
+                       :values (select-keys shape [:blur :background-blur])}]
 
-       [:& svg-attrs-menu {:ids ids
-                           :values (select-keys shape [:svg-attrs])}]])))
+       [:> svg-attrs-menu* {:ids ids
+                            :values (select-keys shape [:svg-attrs])}]
+       [:> exports-menu* {:type type
+                          :ids ids
+                          :shapes shapes
+                          :values (select-keys shape exports-attrs)
+                          :page-id page-id
+                          :file-id file-id}]])))
+

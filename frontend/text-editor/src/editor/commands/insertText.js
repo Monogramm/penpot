@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright (c) KALEIDOS INC
+ * Copyright (c) KALEIDOS SUBSIDIARY SL
  */
 
 /**
@@ -25,8 +25,8 @@ export function insertText(event, editor, selectionController) {
   } else {
     if (selectionController.isMultiParagraph) {
       return selectionController.replaceParagraphs(event.data);
-    } else if (selectionController.isMultiInline) {
-      return selectionController.replaceInlines(event.data);
+    } else if (selectionController.isMultiTextSpan) {
+      return selectionController.replaceTextSpans(event.data);
     } else if (selectionController.isTextSame) {
       return selectionController.replaceText(event.data);
     }

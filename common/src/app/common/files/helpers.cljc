@@ -2,14 +2,13 @@
 ;; License, v. 2.0. If a copy of the MPL was not distributed with this
 ;; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ;;
-;; Copyright (c) KALEIDOS INC
+;; Copyright (c) KALEIDOS SUBSIDIARY SL
 
 (ns app.common.files.helpers
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.geom.shapes.common :as gco]
-   [app.common.schema :as sm]
    [app.common.uuid :as uuid]
    [clojure.set :as set]
    [clojure.walk :as walk]
@@ -73,9 +72,11 @@
        (= :bool (dm/get-prop shape :type))))
 
 (defn text-shape?
-  [shape]
-  (and (some? shape)
-       (= :text (dm/get-prop shape :type))))
+  ([shape]
+   (and (some? shape)
+        (= :text (dm/get-prop shape :type))))
+  ([objects id]
+   (text-shape? (get objects id))))
 
 (defn rect-shape?
   [shape]
@@ -118,6 +119,12 @@
   ([shape]
    (d/not-empty? (:shapes shape))))
 
+(defn has-layout?
+  "Returns true if the provided shape has a layout assigned"
+  [objects id]
+  (let [shape (get objects id)]
+    (boolean (and shape (:layout shape)))))
+
 (defn group-like-shape?
   ([objects id]
    (group-like-shape? (get objects id)))
@@ -128,13 +135,41 @@
 
 ;; ---- ACCESSORS
 
-(defn get-children-ids
+(defn get-selected-type
+  "Returns the type of the shape if only one, or :multiple if more
+  than one"
+  [objects selected]
+  (if (= 1 (count selected))
+    (let [shape (get objects (first selected))]
+      (:type shape))
+    :multiple))
+
+(defn get-shape-type
+  "Returns the type of the shape, or 'root' if it's Root Frame, always
+  as string"
   [objects id]
-  (letfn [(get-children-ids-rec [id processed]
-            (when (not (contains? processed id))
-              (when-let [shapes (-> (get objects id) :shapes (some-> vec))]
-                (into shapes (mapcat #(get-children-ids-rec % (conj processed id))) shapes))))]
-    (get-children-ids-rec id #{})))
+  (let [shape (get objects id)]
+    (if (root? shape)
+      :root
+      (dm/get-prop shape :type))))
+
+(defn get-children-ids
+  "Returns the ids of all the descendants of the shape identified
+  by the id. Optionally, you can pass an ignore function to indicate
+  when to ignore a descendant (and all its descendants)"
+  ([objects id]
+   (get-children-ids objects id {}))
+  ([objects id {:keys [ignore-children-fn]
+                ;;ignore-children-fn should receive a shape and return a boolean
+                :or {ignore-children-fn (constantly false)}}]
+   (letfn [(get-children-ids-rec [id processed]
+             (when-not (contains? processed id)
+               (when-let [shapes (as-> (get objects id) $
+                                   (:shapes $)
+                                   (remove ignore-children-fn $)
+                                   (some-> $ vec))]
+                 (into shapes (mapcat #(get-children-ids-rec % (conj processed id))) shapes))))]
+     (get-children-ids-rec id #{}))))
 
 (defn get-children-ids-with-self
   [objects id]
@@ -201,7 +236,7 @@
         result))))
 
 (defn get-parent-seq
-  "Returns a vector of parents of the specified shape."
+  "Returns a lazy seq of parents of the specified shape."
   ([objects shape-id]
    (get-parent-seq objects (get objects shape-id) shape-id))
 
@@ -284,6 +319,22 @@
       :else
       (get-root-frame objects (:frame-id frame)))))
 
+(defn get-parent-frame
+  "Similar to `get-frame, but always return the parent frame. When root
+  frame is provided, then itself is returned."
+  [objects shape-or-id]
+  (cond
+    (map? shape-or-id)
+    (get objects (dm/get-prop shape-or-id :frame-id))
+
+    (= uuid/zero shape-or-id)
+    (get objects uuid/zero)
+
+    :else
+    (some->> shape-or-id
+             (get objects)
+             (get-frame objects))))
+
 (defn valid-frame-target?
   [objects parent-id shape-id]
   (let [shape (get objects shape-id)]
@@ -304,7 +355,8 @@
         prt (get objects pid)
         shapes (:shapes prt)
         pos (d/index-of shapes id)]
-    (if (= 0 pos) nil (nth shapes (dec pos)))))
+    (when (and (some? pos) (pos? pos))
+      (nth shapes (dec pos)))))
 
 (defn get-immediate-children
   "Retrieve resolved shape objects that are immediate children
@@ -377,15 +429,15 @@
 
 (defn components-nesting-loop?
   "Check if a nesting loop would be created if the given shape is moved below the given parent"
-  [objects shape-id parent-id]
-  (let [xf-get-component-id (keep :component-id)
-
-        children            (get-children-with-self objects shape-id)
-        child-components    (into #{} xf-get-component-id children)
-
-        parents             (get-parents-with-self objects parent-id)
-        parent-components   (into #{} xf-get-component-id parents)]
-    (seq (set/intersection child-components parent-components))))
+  ([objects shape-id parent-id]
+   (let [children (get-children-with-self objects shape-id)
+         parents  (get-parents-with-self objects parent-id)]
+     (components-nesting-loop? children parents)))
+  ([children parents]
+   (let [xf-get-component-id (keep :component-id)
+         child-components    (into #{} xf-get-component-id children)
+         parent-components   (into #{} xf-get-component-id parents)]
+     (seq (set/intersection child-components parent-components)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ALGORITHMS & TRANSFORMATIONS FOR SHAPES
@@ -400,31 +452,57 @@
                    elements)]
     (into #{} (keep :name) elements)))
 
-(defn- extract-numeric-suffix
-  [basename]
-  (if-let [[_ p1 p2] (re-find #"(.*) ([0-9]+)$" basename)]
-    [p1 (+ 1 (d/parse-integer p2))]
-    [basename 1]))
+(defn- name-seq
+  "Creates a lazy, infinite sequence of names starting with `base-name`,
+   followed by variants with suffixes applied. The sequence follows this pattern:
+   - `base-name`
+   - `(str base-name (suffix-fn 1))`
+   - `(str base-name (suffix-fn 2))`
+   - `(str base-name (suffix-fn 3))`, etc."
+  [base-name suffix-fn]
+  (cons base-name
+        (map #(str/concat base-name (suffix-fn %))
+             (iterate inc 1))))
 
 (defn generate-unique-name
-  "A unique name generator"
-  [used basename]
+  "Generates a unique name by selecting the first available name from a generated sequence.
+   The sequence consists of `base-name` and its variants, avoiding conflicts with `existing-names`.
+
+   Parameters:
+   - `base-name` - string used as the base for name generation.
+   - `existing-names` - a collection of existing names to check for uniqueness.
+   - Options:
+     - `:suffix-fn` - a function that generates suffixes, given an integer (default: `get-suffix`).
+     - `:immediate-suffix?` - if `true`, the base name is considered taken, and suffixing starts immediately.
+
+   Returns:
+   - A unique name not present in `existing-names`."
+  [base-name existing-names & {:keys [suffix-fn immediate-suffix? suffix]}]
   (dm/assert!
    "expected a set of strings"
-   (sm/check-set-of-strings! used))
+   (coll? existing-names))
 
   (dm/assert!
    "expected a string for `basename`."
-   (string? basename))
+   (string? base-name))
+  (let [suffix-fn (if suffix-fn
+                    suffix-fn
+                    (if suffix
+                      (fn [copy-count]
+                        (str/concat "-"
+                                    suffix
+                                    (when (> copy-count 1)
+                                      (str "-" copy-count))))
+                      (fn [copy-count]
+                        (str/concat " " copy-count))))
 
-  (if-not (contains? used basename)
-    basename
-    (let [[prefix initial] (extract-numeric-suffix basename)]
-      (loop [counter initial]
-        (let [candidate (str prefix " " counter)]
-          (if (contains? used candidate)
-            (recur (inc counter))
-            candidate))))))
+        existing-name-set (cond-> (set existing-names)
+                            immediate-suffix? (conj base-name))
+        names (name-seq base-name suffix-fn)]
+
+    (->> names
+         (remove #(contains? existing-name-set %))
+         first)))
 
 (defn walk-pages
   "Go through all pages of a file and apply a function to each one"
@@ -449,20 +527,25 @@
           ids))
 
 (defn clean-loops
-  "Clean a list of ids from circular references."
+  "Clean a list of ids from circular references. Optimized fast-path for single selections."
   [objects ids]
-  (let [parent-selected?
-        (fn [id]
-          (let [parents (get-parent-ids objects id)]
-            (some ids parents)))
+  (if (<= (count ids) 1)
+    ;; For single selection, there can't be circularity; return as ordered-set.
+    (into (d/ordered-set) ids)
+    (let [ids-set (if (set? ids) ids (set ids))
+          parent-selected?
+          (fn [id]
+            ;; Stop early as soon as we find any selected parent
+            (let [parents (get-parent-ids objects id)]
+              (some #(contains? ids-set %) parents)))
 
-        add-element
-        (fn [result id]
-          (cond-> result
-            (not (parent-selected? id))
-            (conj id)))]
+          add-element
+          (fn [result id]
+            (cond-> result
+              (not (parent-selected? id))
+              (conj id)))]
 
-    (reduce add-element (d/ordered-set) ids)))
+      (reduce add-element (d/ordered-set) ids))))
 
 (defn- indexed-shapes
   "Retrieves a vector with the indexes for each element in the layer
@@ -570,10 +653,9 @@
       (into xform:collect-media-refs (vals (:components data)))
       (into (keys (:media data)))))
 
-(defn relink-media-refs
-  "A function responsible to analyze all file data and replace the
-  old :component-file reference with the new ones, using the provided
-  file-index."
+(defn relink-refs
+  "A function responsible to analyze the file data or shape for references
+  and apply lookup-index on it."
   [data lookup-index]
   (letfn [(process-map-form [form]
             (cond-> form
@@ -585,6 +667,9 @@
               ;; Relink paths with fill image
               (map? (:fill-image form))
               (update-in [:fill-image :id] lookup-index)
+
+              (map? (:stroke-image form))
+              (update-in [:stroke-image :id] lookup-index)
 
               ;; This covers old shapes and the new :fills.
               (uuid? (:fill-color-ref-file form))
@@ -615,121 +700,8 @@
     (walk/postwalk process-form data)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; SHAPES ORGANIZATION (PATH MANAGEMENT)
+;; SHAPES ORGANIZATION
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn split-path
-  "Decompose a string in the form 'one / two / three' into
-  a vector of strings, normalizing spaces."
-  [path]
-  (let [xf (comp (map str/trim)
-                 (remove str/empty?))]
-    (->> (str/split path "/")
-         (into [] xf))))
-
-(defn join-path
-  "Regenerate a path as a string, from a vector."
-  [path-vec]
-  (str/join " / " path-vec))
-
-(defn join-path-with-dot
-  "Regenerate a path as a string, from a vector."
-  [path-vec]
-  (str/join "\u00A0\u2022\u00A0" path-vec))
-
-(defn clean-path
-  "Remove empty items from the path."
-  [path]
-  (->> (split-path path)
-       (join-path)))
-
-(defn parse-path-name
-  "Parse a string in the form 'group / subgroup / name'.
-  Retrieve the path and the name in separated values, normalizing spaces."
-  [path-name]
-  (let [path-name-split (split-path path-name)
-        path (str/join " / " (butlast path-name-split))
-        name (or (last path-name-split) "")]
-    [path name]))
-
-(defn merge-path-item
-  "Put the item at the end of the path."
-  [path name]
-  (if-not (empty? path)
-    (if-not (empty? name)
-      (str path " / " name)
-      path)
-    name))
-
-(defn merge-path-item-with-dot
-  "Put the item at the end of the path."
-  [path name]
-  (if-not (empty? path)
-    (if-not (empty? name)
-      (str path "\u00A0\u2022\u00A0" name)
-      path)
-    name))
-
-(defn compact-path
-  "Separate last item of the path, and truncate the others if too long:
-    'one'                          ->  ['' 'one' false]
-    'one / two / three'            ->  ['one / two' 'three' false]
-    'one / two / three / four'     ->  ['one / two / ...' 'four' true]
-    'one-item-but-very-long / two' ->  ['...' 'two' true] "
-  [path max-length dot?]
-  (let [path-split (split-path path)
-        last-item  (last path-split)
-        merge-path (if dot?
-                     merge-path-item-with-dot
-                     merge-path-item)]
-    (loop [other-items (seq (butlast path-split))
-           other-path  ""]
-      (if-let [item (first other-items)]
-        (let [full-path (-> other-path
-                            (merge-path item)
-                            (merge-path last-item))]
-          (if (> (count full-path) max-length)
-            [(merge-path other-path "...") last-item true]
-            (recur (next other-items)
-                   (merge-path other-path item))))
-        [other-path last-item false]))))
-
-(defn butlast-path
-  "Remove the last item of the path."
-  [path]
-  (let [split (split-path path)]
-    (if (= 1 (count split))
-      ""
-      (join-path (butlast split)))))
-
-(defn butlast-path-with-dots
-  "Remove the last item of the path."
-  [path]
-  (let [split (split-path path)]
-    (if (= 1 (count split))
-      ""
-      (join-path-with-dot (butlast split)))))
-
-(defn last-path
-  "Returns the last item of the path."
-  [path]
-  (last (split-path path)))
-
-(defn compact-name
-  "Append the first item of the path and the name."
-  [path name]
-  (let [path-split (split-path path)]
-    (merge-path-item (first path-split) name)))
-
-
-(defn split-by-last-period
-  "Splits a string into two parts:
-   the text before and including the last period, 
-   and the text after the last period."
-  [s]
-  (if-let [last-period (str/last-index-of s ".")]
-    [(subs s 0 (inc last-period)) (subs s (inc last-period))]
-    [s ""]))
 
 (defn get-frame-objects
   "Retrieves a new objects map only with the objects under frame-id (with frame-id)"
